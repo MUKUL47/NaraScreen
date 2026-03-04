@@ -1,0 +1,19 @@
+{
+  "name": "narascreen",
+  "version": "1.0.0",
+  "description": "Record your screen. Add narration. Produce professional demo videos. Free, local, open source.",
+  "author": "Mukul Dutt",
+  "license": "MIT",
+  "keywords": [
+    "screen-recorder",
+    "demo-video",
+    "text-to-speech",
+    "kokoro",
+    "video-editor",
+    "narration",
+    "product-demo",
+    "electron",
+    "ffmpeg",
+    "open-source"
+  ]
+}

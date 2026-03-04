@@ -1,0 +1,43 @@
+node_modules/
+dist/
+dist-electron/
+out/
+build/
+
+# Demo session output (recordings, thumbnails, produced videos)
+demo-output/
+output/
+
+# Media files
+*.mp4
+*.wav
+*.mp3
+*.png
+!editor/public/**
+.claude
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+*.log
+npm-debug.log*
+
+# Generated
+*.local
+dist-ssr

@@ -1,0 +1,16 @@
+node_modules
+editor/node_modules
+dist
+editor/dist
+editor/dist-electron
+demo-output
+output
+sessions
+*.mp4
+*.wav
+*.mp3
+.env
+.git
+.gitignore
+README.md
+DOCKER.md

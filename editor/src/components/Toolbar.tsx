@@ -1,0 +1,325 @@
+import { useCallback, useState, useEffect, useRef } from "react";
+import { useProjectStore } from "../stores/useProjectStore";
+import { pickSessionDir } from "../lib/fileOps";
+import { OpenIcon, SaveIcon, PreviewIcon, ProduceIcon, VersionsIcon } from "./ActionIcon";
+import { Monitor, Mic, MicOff, Terminal, X } from "lucide-react";
+
+export function Toolbar() {
+  const sessionDir = useProjectStore((s) => s.sessionDir);
+  const project = useProjectStore((s) => s.project);
+  const isDirty = useProjectStore((s) => s.isDirty);
+  const isProducing = useProjectStore((s) => s.isProducing);
+  const captureMode = useProjectStore((s) => s.captureMode);
+  const openSession = useProjectStore((s) => s.openSession);
+  const save = useProjectStore((s) => s.save);
+  const startScreenCapture = useProjectStore((s) => s.startScreenCapture);
+  const produce = useProjectStore((s) => s.produce);
+  const preview = useProjectStore((s) => s.preview);
+  const appendProduceLog = useProjectStore((s) => s.appendProduceLog);
+  const produceLog = useProjectStore((s) => s.produceLog);
+
+  const [showLog, setShowLog] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
+  const [versions, setVersions] = useState<{ name: string; path: string; size: number; created: string }[]>([]);
+  const [showScreenPicker, setShowScreenPicker] = useState(false);
+  const [screens, setScreens] = useState<{ id: string; name: string; x: number; y: number; width: number; height: number }[]>([]);
+  const [kokoroStatus, setKokoroStatus] = useState<"checking" | "connected" | "disconnected">("checking");
+  const [showKokoroBanner, setShowKokoroBanner] = useState(false);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  // Check Kokoro TTS connection on mount
+  useEffect(() => {
+    const endpoint = project?.tts?.kokoroEndpoint || "http://localhost:8880/v1/audio/speech";
+    const baseUrl = endpoint.replace(/\/v1\/audio\/speech$/, "");
+    fetch(`${baseUrl}/v1/models`, { signal: AbortSignal.timeout(3000) })
+      .then((r) => {
+        if (r.ok) {
+          setKokoroStatus("connected");
+          setShowKokoroBanner(false);
+        } else {
+          setKokoroStatus("disconnected");
+          setShowKokoroBanner(true);
+        }
+      })
+      .catch(() => {
+        setKokoroStatus("disconnected");
+        setShowKokoroBanner(true);
+      });
+  }, [project?.tts?.kokoroEndpoint]);
+
+  // Listen for produce progress events
+  useEffect(() => {
+    window.electronAPI.onProduceProgress((msg: string) => {
+      appendProduceLog(msg);
+    });
+    return () => {
+      window.electronAPI.removeAllListeners("produce-progress");
+    };
+  }, [appendProduceLog]);
+
+  // Auto-scroll log to bottom
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [produceLog]);
+
+  const handleOpen = useCallback(async () => {
+    const dir = await pickSessionDir();
+    if (dir) await openSession(dir);
+  }, [openSession]);
+
+  const handleSave = useCallback(async () => {
+    await save();
+  }, [save]);
+
+  const handleProduce = useCallback(async () => {
+    setShowLog(true);
+    setShowVersions(false);
+    await produce();
+    // Refresh versions after production
+    if (sessionDir) {
+      const v = await window.electronAPI.listVersions(sessionDir);
+      setVersions(v);
+    }
+  }, [produce, sessionDir]);
+
+  const handlePreview = useCallback(async () => {
+    setShowLog(true);
+    setShowVersions(false);
+    await preview();
+  }, [preview]);
+
+  const handleRecordScreen = useCallback(async () => {
+    const sources = await window.electronAPI.getScreenSources();
+    if (sources.length === 1) {
+      await startScreenCapture(sources[0].id);
+    } else {
+      setScreens(sources);
+      setShowScreenPicker(true);
+    }
+  }, [startScreenCapture]);
+
+  const handlePickScreen = useCallback(async (displayId: string) => {
+    setShowScreenPicker(false);
+    await startScreenCapture(displayId);
+  }, [startScreenCapture]);
+
+  const handleShowVersions = useCallback(async () => {
+    if (!sessionDir) return;
+    const v = await window.electronAPI.listVersions(sessionDir);
+    setVersions(v);
+    setShowVersions((prev) => !prev);
+    setShowLog(false);
+  }, [sessionDir]);
+
+  const handleOpenVersion = useCallback((filePath: string) => {
+    window.electronAPI.openVersion(filePath);
+  }, []);
+
+  // Don't render during capture mode
+  if (captureMode) return null;
+
+  const actionCount = project?.actions.length ?? 0;
+
+  return (
+    <div className="relative shrink-0">
+      <div className="h-11 bg-slate-900 border-b border-slate-700/50 flex items-center px-4 gap-2">
+        <span className="text-sm font-bold text-slate-200 tracking-tight mr-3">
+          NaraScreen
+        </span>
+
+        <div className="w-px h-5 bg-slate-700" />
+
+        {/* Record Screen */}
+        <div className="relative ml-2">
+          <button
+            onClick={handleRecordScreen}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-medium rounded-md shadow-sm transition-colors"
+          >
+            <Monitor size={13} />
+            Record Screen
+          </button>
+          {showScreenPicker && (
+            <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-30 min-w-48">
+              <div className="px-3 py-2 text-xs text-slate-400 border-b border-slate-700 font-medium">
+                Pick a display
+              </div>
+              {screens.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => handlePickScreen(s.id)}
+                  className="block w-full px-4 py-2 text-xs text-left text-slate-200 hover:bg-slate-700 transition-colors"
+                >
+                  {s.name}
+                  <span className="text-slate-500 ml-2">({s.x},{s.y})</span>
+                </button>
+              ))}
+              <button
+                onClick={() => setShowScreenPicker(false)}
+                className="block w-full px-4 py-1.5 text-xs text-slate-500 hover:text-slate-300 border-t border-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={handleOpen}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded-md transition-colors"
+        >
+          <OpenIcon size={13} />
+          Open
+        </button>
+
+        <div className="w-px h-5 bg-slate-700" />
+
+        <button
+          onClick={handleSave}
+          disabled={!sessionDir}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-30 disabled:pointer-events-none text-white text-xs rounded-md transition-colors"
+        >
+          <SaveIcon size={13} />
+          {isDirty ? "Save *" : "Save"}
+        </button>
+
+        <button
+          onClick={handlePreview}
+          disabled={!sessionDir || actionCount === 0 || isProducing}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md transition-colors"
+        >
+          <PreviewIcon size={13} />
+          {isProducing ? "..." : "Preview"}
+        </button>
+
+        <button
+          onClick={handleProduce}
+          disabled={!sessionDir || actionCount === 0 || isProducing}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md transition-colors"
+        >
+          <ProduceIcon size={13} />
+          {isProducing ? "Producing..." : "Produce"}
+        </button>
+
+        <button
+          onClick={handleShowVersions}
+          disabled={!sessionDir}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-30 disabled:pointer-events-none text-slate-300 text-xs rounded-md transition-colors"
+        >
+          <VersionsIcon size={13} />
+          Versions{versions.length > 0 ? ` (${versions.length})` : ""}
+        </button>
+
+        <div className="flex-1" />
+
+        {sessionDir && (
+          <span
+            className="text-[10px] text-slate-600 truncate max-w-60 font-mono"
+            title={sessionDir}
+          >
+            {sessionDir.split("/").slice(-2).join("/")}
+          </span>
+        )}
+
+        {actionCount > 0 && (
+          <span className="text-[10px] text-slate-500 font-medium">
+            {actionCount} action{actionCount !== 1 ? "s" : ""}
+          </span>
+        )}
+
+        {produceLog && (
+          <button
+            onClick={() => { setShowLog(!showLog); setShowVersions(false); }}
+            className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <Terminal size={11} />
+            {showLog ? "Hide Log" : "Log"}
+          </button>
+        )}
+
+        {/* Kokoro TTS status */}
+        <span
+          className={`flex items-center gap-1 text-[10px] ${kokoroStatus === "connected" ? "text-emerald-500" : kokoroStatus === "disconnected" ? "text-amber-500" : "text-slate-600"}`}
+          title={kokoroStatus === "connected" ? "Voice Engine: Connected" : kokoroStatus === "disconnected" ? "Voice Engine: Not detected" : "Checking..."}
+        >
+          {kokoroStatus === "connected" ? <Mic size={11} /> : kokoroStatus === "disconnected" ? <MicOff size={11} /> : <Mic size={11} />}
+          {kokoroStatus === "connected" ? "Voice" : kokoroStatus === "disconnected" ? "No Voice" : "..."}
+        </span>
+      </div>
+
+      {/* Kokoro not detected banner */}
+      {showKokoroBanner && (
+        <div className="bg-amber-900/40 border-b border-amber-700/50 px-4 py-2 flex items-center gap-3">
+          <span className="text-xs text-amber-300">
+            Voice Engine not detected. Start it with:
+          </span>
+          <code className="text-[10px] text-amber-200 bg-amber-950/50 px-2 py-0.5 rounded font-mono">
+            docker run -d -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
+          </code>
+          <button
+            onClick={() => navigator.clipboard.writeText("docker run -d --name kokoro -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest")}
+            className="text-[10px] text-amber-400 hover:text-amber-300 transition-colors"
+          >
+            Copy
+          </button>
+          <button
+            onClick={() => setShowKokoroBanner(false)}
+            className="ml-auto text-amber-600 hover:text-amber-400 transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Production log — overlay, doesn't push content */}
+      {showLog && produceLog && (
+        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-black/95 border-b border-slate-700 overflow-auto p-3 font-mono text-xs text-green-400 shadow-xl">
+          <pre className="whitespace-pre-wrap">{produceLog}</pre>
+          <div ref={logEndRef} />
+        </div>
+      )}
+
+      {/* Versions — overlay, doesn't push content */}
+      {showVersions && (
+        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-slate-900/98 border-b border-slate-700 overflow-auto p-3 shadow-xl">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-slate-300">Produced Versions</span>
+            <button
+              onClick={() => setShowVersions(false)}
+              className="text-xs text-slate-500 hover:text-slate-300"
+            >
+              Close
+            </button>
+          </div>
+          {versions.length === 0 ? (
+            <p className="text-xs text-slate-500">No versions produced yet.</p>
+          ) : (
+            <div className="space-y-1">
+              {versions.map((v) => (
+                <div
+                  key={v.name}
+                  className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded hover:bg-slate-700"
+                >
+                  <div>
+                    <span className="text-xs text-slate-200 font-mono">{v.name}</span>
+                    <span className="text-[10px] text-slate-500 ml-2">
+                      {(v.size / 1024 / 1024).toFixed(1)} MB
+                    </span>
+                    <span className="text-[10px] text-slate-500 ml-2">
+                      {new Date(v.created).toLocaleString()}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleOpenVersion(v.path)}
+                    className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] rounded"
+                  >
+                    Open
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
