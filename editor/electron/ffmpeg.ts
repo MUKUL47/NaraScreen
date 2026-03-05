@@ -3,15 +3,16 @@ import * as path from "path";
 import * as fs from "fs";
 import { FFMPEG_PATH, FFPROBE_PATH } from "./bin-paths";
 
-// 200MB buffer — prevents Node from killing ffmpeg on long encodes
-const MAX_BUF = 200 * 1024 * 1024;
+// Ignore stderr to prevent Node from buffering ffmpeg's progress output
+// (which can be hundreds of MB for long videos and crash the process)
+const SPAWN_OPTS = { stdio: ["pipe", "pipe", "ignore"] as ["pipe", "pipe", "ignore"] };
 
 export function ffmpegSync(args: string[]): SpawnSyncReturns<Buffer> {
-  return spawnSync(FFMPEG_PATH, args, { maxBuffer: MAX_BUF });
+  return spawnSync(FFMPEG_PATH, args, SPAWN_OPTS);
 }
 
 export function ffprobeSync(args: string[]): SpawnSyncReturns<Buffer> {
-  return spawnSync(FFPROBE_PATH, args, { maxBuffer: MAX_BUF });
+  return spawnSync(FFPROBE_PATH, args, SPAWN_OPTS);
 }
 
 /** Get video resolution via ffprobe */
@@ -98,10 +99,11 @@ export function cutClip(
 ): void {
   const hasAudio = hasAudioStream(inputPath);
   const args = [
-    "-y", "-i", inputPath,
-    "-ss", startTime.toFixed(3),
-    "-to", endTime.toFixed(3),
-    "-c:v", "libx264", "-preset", "fast", "-crf", "0",
+    "-y",
+    "-ss", startTime.toFixed(3),   // before -i for fast seek
+    "-i", inputPath,
+    "-to", (endTime - startTime).toFixed(3),  // relative to seek point
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
     "-pix_fmt", "yuv420p",
   ];
   if (hasAudio) {
@@ -121,10 +123,11 @@ export function cutClipMuted(
   outputPath: string,
 ): void {
   ffmpegSync([
-    "-y", "-i", inputPath,
+    "-y",
     "-ss", startTime.toFixed(3),
-    "-to", endTime.toFixed(3),
-    "-c:v", "libx264", "-preset", "fast", "-crf", "0",
+    "-i", inputPath,
+    "-to", (endTime - startTime).toFixed(3),
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
     "-pix_fmt", "yuv420p",
     "-an",
     outputPath,

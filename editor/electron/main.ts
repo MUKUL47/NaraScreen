@@ -186,11 +186,11 @@ ipcMain.handle("video:getDuration", async (_event, videoPath: string) => {
 });
 
 /** Run produceTimelineVideo in a worker thread to avoid blocking the main process */
-function runProduceWorker(sessionDir: string, version?: string): Promise<string> {
+function runProduceWorker(sessionDir: string, version?: string, selectedActionIds?: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const workerPath = path.join(__dirname, "produce-worker.js");
     const worker = new Worker(workerPath, {
-      workerData: { sessionDir, version },
+      workerData: { sessionDir, version, selectedActionIds },
     });
 
     worker.on("message", (msg: { type: string; msg?: string; finalPath?: string; message?: string }) => {
@@ -210,12 +210,12 @@ function runProduceWorker(sessionDir: string, version?: string): Promise<string>
   });
 }
 
-ipcMain.handle("video:produce", async (_event, sessionDir: string, version?: string) => {
-  return runProduceWorker(sessionDir, version);
+ipcMain.handle("video:produce", async (_event, sessionDir: string, version?: string, selectedActionIds?: string[]) => {
+  return runProduceWorker(sessionDir, version, selectedActionIds);
 });
 
-ipcMain.handle("video:preview", async (_event, sessionDir: string) => {
-  const finalPath = await runProduceWorker(sessionDir, "preview");
+ipcMain.handle("video:preview", async (_event, sessionDir: string, selectedActionIds?: string[]) => {
+  const finalPath = await runProduceWorker(sessionDir, "preview", selectedActionIds);
   shell.openPath(finalPath);
   return finalPath;
 });

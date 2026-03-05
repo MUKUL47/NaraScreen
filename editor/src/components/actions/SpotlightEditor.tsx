@@ -12,11 +12,14 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
   const setDrawingZoom = useProjectStore((s) => s.setDrawingZoom);
   const duration = useProjectStore((s) => s.project?.recordingDuration ?? 999);
 
+  // Merge legacy single rect into multi-rect array for display
+  const rects = action.spotlightRects ?? (action.spotlightRect ? [action.spotlightRect] : []);
+
   return (
     <>
       <div>
         <label className="block text-xs text-zinc-400 font-medium mb-1">
-          Spotlight Region
+          Spotlight Regions ({rects.length})
         </label>
         <button
           onClick={() => setDrawingZoom(!drawingZoom)}
@@ -28,21 +31,36 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
         >
           {drawingZoom
             ? "Drawing... (click & drag on video)"
-            : action.spotlightRect
-              ? "Redraw Region"
+            : rects.length > 0
+              ? "Add Another Region"
               : "Draw Spotlight Region"}
         </button>
-        {action.spotlightRect && (
-          <div className="mt-1 flex items-center justify-between">
-            <span className="text-[10px] text-zinc-500">
-              {action.spotlightRect[0]},{action.spotlightRect[1]} {action.spotlightRect[2]}x
-              {action.spotlightRect[3]}
-            </span>
+        {rects.length > 0 && (
+          <div className="mt-1.5 space-y-1">
+            {rects.map((r, i) => (
+              <div key={i} className="flex items-center justify-between bg-zinc-900 rounded px-2 py-1">
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  #{i + 1}: {r[0]},{r[1]} {r[2]}x{r[3]}
+                </span>
+                <button
+                  onClick={() => {
+                    const updated = rects.filter((_, idx) => idx !== i);
+                    onUpdate({
+                      spotlightRects: updated.length > 0 ? updated : undefined,
+                      spotlightRect: undefined,
+                    });
+                  }}
+                  className="text-[10px] text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
             <button
-              onClick={() => onUpdate({ spotlightRect: undefined })}
+              onClick={() => onUpdate({ spotlightRects: undefined, spotlightRect: undefined })}
               className="text-[10px] text-red-400 hover:text-red-300"
             >
-              Clear
+              Clear All
             </button>
           </div>
         )}
@@ -99,7 +117,7 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
       </label>
 
       <div className="text-[10px] text-zinc-600 border-t border-zinc-800/50 pt-2">
-        Highlights the selected region while dimming the rest of the screen.
+        Highlights selected regions while dimming the rest of the screen. Draw multiple regions to spotlight several areas at once.
       </div>
     </>
   );

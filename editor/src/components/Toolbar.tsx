@@ -3,6 +3,7 @@ import { useProjectStore } from "../stores/useProjectStore";
 import { pickSessionDir } from "../lib/fileOps";
 import { OpenIcon, SaveIcon, PreviewIcon, ProduceIcon, VersionsIcon } from "./ActionIcon";
 import { Monitor, Mic, MicOff, Terminal, X, FileVideo, Undo2, Redo2 } from "lucide-react";
+import { ProduceDialog } from "./ProduceDialog";
 
 export function Toolbar() {
   const sessionDir = useProjectStore((s) => s.sessionDir);
@@ -26,6 +27,7 @@ export function Toolbar() {
 
   const [showLog, setShowLog] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
+  const [produceDialogMode, setProduceDialogMode] = useState<"produce" | "preview" | null>(null);
   const [versions, setVersions] = useState<{ name: string; path: string; size: number; created: string }[]>([]);
   const [showScreenPicker, setShowScreenPicker] = useState(false);
   const [screens, setScreens] = useState<{ id: string; name: string; x: number; y: number; width: number; height: number }[]>([]);
@@ -77,22 +79,29 @@ export function Toolbar() {
     await save();
   }, [save]);
 
-  const handleProduce = useCallback(async () => {
-    setShowLog(true);
-    setShowVersions(false);
-    await produce();
-    // Refresh versions after production
-    if (sessionDir) {
-      const v = await window.electronAPI.listVersions(sessionDir);
-      setVersions(v);
-    }
-  }, [produce, sessionDir]);
+  const handleProduce = useCallback(() => {
+    setProduceDialogMode("produce");
+  }, []);
 
-  const handlePreview = useCallback(async () => {
+  const handlePreview = useCallback(() => {
+    setProduceDialogMode("preview");
+  }, []);
+
+  const handleProduceConfirm = useCallback(async (selectedIds: string[]) => {
+    const mode = produceDialogMode;
+    setProduceDialogMode(null);
     setShowLog(true);
     setShowVersions(false);
-    await preview();
-  }, [preview]);
+    if (mode === "produce") {
+      await produce(selectedIds);
+      if (sessionDir) {
+        const v = await window.electronAPI.listVersions(sessionDir);
+        setVersions(v);
+      }
+    } else {
+      await preview(selectedIds);
+    }
+  }, [produceDialogMode, produce, preview, sessionDir]);
 
   const handleRecordScreen = useCallback(async () => {
     const sources = await window.electronAPI.getScreenSources();
@@ -316,6 +325,15 @@ export function Toolbar() {
           <pre className="whitespace-pre-wrap">{produceLog}</pre>
           <div ref={logEndRef} />
         </div>
+      )}
+
+      {/* Produce/Preview dialog */}
+      {produceDialogMode && (
+        <ProduceDialog
+          mode={produceDialogMode}
+          onConfirm={handleProduceConfirm}
+          onCancel={() => setProduceDialogMode(null)}
+        />
       )}
 
       {/* Versions — overlay, doesn't push content */}

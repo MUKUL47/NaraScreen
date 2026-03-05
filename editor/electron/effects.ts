@@ -13,6 +13,7 @@ import {
 export interface Action {
   type: string;
   timestamp: number;
+  name?: string;
   resumeAfter?: string | number;
   narration?: string;
   narration_hi?: string;
@@ -24,6 +25,7 @@ export interface Action {
   zoomDuration?: number;
   zoomHold?: number;
   spotlightRect?: [number, number, number, number];
+  spotlightRects?: [number, number, number, number][];
   dimOpacity?: number;
   spotlightDuration?: number;
   speedFactor?: number;
@@ -34,6 +36,7 @@ export interface Action {
   calloutStyle?: string;
   calloutStep?: number;
   calloutDuration?: number;
+  calloutPanels?: { text: string; rect: [number, number, number, number]; fontSize: number }[];
   musicPath?: string;
   musicVolume?: number;
   musicDuckTo?: number;
@@ -101,7 +104,7 @@ function buildPlainFreeze(
   const args = ["-y", "-loop", "1", "-framerate", "30", "-i", framePath];
   if (narration) args.push("-i", narration.audioPath);
   args.push("-t", effectDuration.toFixed(3), "-r", "30", "-vf", vf);
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
+  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
   if (narration) args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(freezePath);
   ffmpegSync(args);
@@ -150,7 +153,7 @@ function buildZoomEffect(
     `x='${xExpr}'`, `y='${yExpr}'`,
     `d=${inFrames}`, `s=${outW}x${outH}`, `fps=30`,
   ].join(":");
-  ffmpegSync(["-y", "-i", framePath, "-vf", zpIn, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p", zoomInPath]);
+  ffmpegSync(["-y", "-i", framePath, "-vf", zpIn, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", zoomInPath]);
   paths.push(zoomInPath);
   state.segIdx++;
 
@@ -159,7 +162,7 @@ function buildZoomEffect(
   const zpHold = [`zoompan=z='${maxZ.toFixed(4)}'`, `x='${xExpr}'`, `y='${yExpr}'`, `d=${holdFrames}`, `s=${outW}x${outH}`, `fps=30`].join(":");
   const holdArgs = ["-y", "-i", framePath];
   if (narration) holdArgs.push("-i", narration.audioPath);
-  holdArgs.push("-vf", zpHold, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
+  holdArgs.push("-vf", zpHold, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
   if (narration) holdArgs.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   holdArgs.push(holdPath);
   ffmpegSync(holdArgs);
@@ -169,7 +172,7 @@ function buildZoomEffect(
   // Zoom-out
   const zoomOutPath = path.join(ctx.tempDir, `zoomout_${String(state.segIdx).padStart(3, "0")}.mp4`);
   const zpOut = [`zoompan=z='1+(${maxZ.toFixed(4)}-1)*${ssReverse}'`, `x='${xExpr}'`, `y='${yExpr}'`, `d=${inFrames}`, `s=${outW}x${outH}`, `fps=30`].join(":");
-  ffmpegSync(["-y", "-i", framePath, "-vf", zpOut, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p", zoomOutPath]);
+  ffmpegSync(["-y", "-i", framePath, "-vf", zpOut, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", zoomOutPath]);
   paths.push(zoomOutPath);
   state.segIdx++;
 
@@ -206,7 +209,7 @@ function buildFreezeSpotlight(
   args.push("-filter_complex", complexFilter, "-map", "[out]");
   if (narration) args.push("-map", "1:a");
   args.push("-t", spotDur.toFixed(3), "-r", "30");
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
+  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
   if (narration) args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(spotPath);
   ffmpegSync(args);
@@ -239,9 +242,12 @@ function buildMovingSpotlight(
   ].join(";");
 
   const spotPath = path.join(ctx.tempDir, `spot_${String(state.segIdx).padStart(3, "0")}.mp4`);
+  const clipDur = Math.min(spotDur, ctx.duration - effectStart);
   const args = [
-    "-y", "-i", ctx.recordingPath,
-    "-ss", effectStart.toFixed(3), "-to", Math.min(effectStart + spotDur, ctx.duration).toFixed(3),
+    "-y",
+    "-ss", effectStart.toFixed(3),
+    "-i", ctx.recordingPath,
+    "-t", clipDur.toFixed(3),
   ];
   if (narration) args.push("-i", narration.audioPath);
   args.push("-filter_complex", complexFilter, "-map", "[out]");
@@ -250,7 +256,7 @@ function buildMovingSpotlight(
   } else if (hasAudioStream(ctx.recordingPath)) {
     args.push("-map", "0:a");
   }
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
+  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
   if (narration) {
     args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   } else if (hasAudioStream(ctx.recordingPath)) {
@@ -319,7 +325,7 @@ function buildFreezeCallout(
     "-y", "-loop", "1", "-framerate", "30", "-i", framePath,
     "-t", callDur.toFixed(3), "-r", "30",
     "-vf", vf,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
     callPath,
   ]);
 
@@ -349,11 +355,14 @@ function buildMovingCallout(
   );
 
   const callPath = path.join(ctx.tempDir, `call_${String(state.segIdx).padStart(3, "0")}.mp4`);
+  const clipDur = Math.min(callDur, ctx.duration - effectStart);
   const callArgs = [
-    "-y", "-i", ctx.recordingPath,
-    "-ss", effectStart.toFixed(3), "-to", Math.min(effectStart + callDur, ctx.duration).toFixed(3),
+    "-y",
+    "-ss", effectStart.toFixed(3),
+    "-i", ctx.recordingPath,
+    "-t", clipDur.toFixed(3),
     "-vf", drawtext,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
   ];
   if (hasAudioStream(ctx.recordingPath)) {
     callArgs.push("-c:a", "aac", "-b:a", "192k");
@@ -496,7 +505,7 @@ function burnSubtitles(videoPath: string, subtitlePath: string, outputPath: stri
   const result = ffmpegSync([
     "-y", "-i", videoPath,
     "-vf", `ass=${subtitlePath}`,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "0",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
     "-pix_fmt", "yuv420p",
     "-c:a", "copy",
     outputPath,
@@ -566,7 +575,7 @@ function buildFreezeBlur(
   args.push("-map", "[vout]");
   if (narration) args.push("-map", "1:a");
   args.push("-t", blurDur.toFixed(3), "-r", "30");
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
+  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
   if (narration) args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(blurPath);
   ffmpegSync(args);
@@ -597,10 +606,12 @@ function buildMovingBlur(
 
   const idx = String(state.segIdx).padStart(3, "0");
   const blurPath = path.join(ctx.tempDir, `blur_${idx}.mp4`);
+  const clipDur = Math.min(blurDur, ctx.duration - effectStart);
   const args = [
-    "-y", "-i", ctx.recordingPath,
+    "-y",
     "-ss", effectStart.toFixed(3),
-    "-to", Math.min(effectStart + blurDur, ctx.duration).toFixed(3),
+    "-i", ctx.recordingPath,
+    "-t", clipDur.toFixed(3),
   ];
   if (narration) args.push("-i", narration.audioPath);
   args.push("-filter_complex", filter + `;[${lastLabel}]null[vout]`);
@@ -610,7 +621,7 @@ function buildMovingBlur(
   } else if (hasAudioStream(ctx.recordingPath)) {
     args.push("-map", "0:a");
   }
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
+  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
   if (narration) {
     args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   } else if (hasAudioStream(ctx.recordingPath)) {
@@ -734,11 +745,12 @@ export function cutSpeedClip(
 
   const hasAudio = hasAudioStream(inputPath);
   const args = [
-    "-y", "-i", inputPath,
+    "-y",
     "-ss", startTime.toFixed(3),
-    "-to", endTime.toFixed(3),
+    "-i", inputPath,
+    "-t", (endTime - startTime).toFixed(3),
     "-vf", `setpts=${pts}*PTS`,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "0",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
     "-pix_fmt", "yuv420p",
   ];
   if (hasAudio) {

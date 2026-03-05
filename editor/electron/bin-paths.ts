@@ -13,6 +13,16 @@ import * as fs from "fs";
 
 const IS_PACKAGED = !process.defaultApp && !process.execPath.includes("node_modules");
 
+function systemBinaryExists(name: string): boolean {
+  try {
+    const { execSync } = require("child_process");
+    execSync(`which ${name}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function findBinary(name: "ffmpeg" | "ffprobe"): string {
   // 1. Packaged app — binaries in resources/bin/
   if (IS_PACKAGED && process.resourcesPath) {
@@ -21,7 +31,13 @@ function findBinary(name: "ffmpeg" | "ffprobe"): string {
     if (fs.existsSync(p)) return p;
   }
 
-  // 2. Dev mode — npm static packages
+  // 2. System PATH — preferred in dev mode because ffmpeg-static lacks
+  //    drawtext/libfreetype and other filters needed for callout effects
+  if (systemBinaryExists(name)) {
+    return name;
+  }
+
+  // 3. Dev mode fallback — npm static packages (limited filter support)
   try {
     if (name === "ffmpeg") {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -37,7 +53,7 @@ function findBinary(name: "ffmpeg" | "ffprobe"): string {
     // npm packages not available
   }
 
-  // 3. Fallback: system PATH
+  // 4. Last resort
   return name;
 }
 

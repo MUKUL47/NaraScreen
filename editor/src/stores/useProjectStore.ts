@@ -63,8 +63,8 @@ interface ProjectState {
   importVideo: () => Promise<void>;
 
   // Production
-  produce: () => Promise<void>;
-  preview: () => Promise<void>;
+  produce: (selectedActionIds?: string[]) => Promise<void>;
+  preview: (selectedActionIds?: string[]) => Promise<void>;
   appendProduceLog: (line: string) => void;
   setIsProducing: (v: boolean) => void;
 }
@@ -510,7 +510,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // ---- Production ----
 
-  produce: async () => {
+  produce: async (selectedActionIds?: string[]) => {
     const { sessionDir, project } = get();
     if (!sessionDir || !project) return;
 
@@ -520,7 +520,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isProducing: true, isLoading: true, loadingMessage: "Producing video...", produceLog: "Starting production...\n" });
 
     try {
-      const finalPath = await api.produceTimelineVideo(sessionDir);
+      const finalPath = await api.produceTimelineVideo(sessionDir, undefined, selectedActionIds);
 
       set((s) => ({
         produceLog: s.produceLog + `\nDone! Output: ${finalPath}\n`,
@@ -538,7 +538,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  preview: async () => {
+  preview: async (selectedActionIds?: string[]) => {
     const { sessionDir, project } = get();
     if (!sessionDir || !project) return;
 
@@ -548,7 +548,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isProducing: true, isLoading: true, loadingMessage: "Generating preview...", produceLog: "Starting preview...\n" });
 
     try {
-      const finalPath = await api.previewVideo(sessionDir);
+      const finalPath = await api.previewVideo(sessionDir, selectedActionIds);
       set((s) => ({
         produceLog: s.produceLog + `\nPreview opened: ${finalPath}\n`,
         isProducing: false,

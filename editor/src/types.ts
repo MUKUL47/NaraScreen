@@ -25,6 +25,8 @@ export interface TimelineAction {
   id: string;
   timestamp: number; // seconds into recording where this action triggers
   type: ActionType;
+  /** Optional display name for this action */
+  name?: string;
 
   // Pause: freeze the video frame at this timestamp
   resumeAfter?: "narration" | "zoom" | number;
@@ -51,8 +53,9 @@ export interface TimelineAction {
   /** Freeze video during this action instead of keeping it playing (default: false) */
   freeze?: boolean;
 
-  // Spotlight/Dim: highlight a region while dimming the rest
-  spotlightRect?: [number, number, number, number]; // [x, y, w, h] in video coords
+  // Spotlight/Dim: highlight region(s) while dimming the rest
+  spotlightRect?: [number, number, number, number]; // [x, y, w, h] legacy single rect
+  spotlightRects?: [number, number, number, number][]; // array of [x, y, w, h] for multi-spotlight
   dimOpacity?: number; // 0.0-1.0, default 0.7
   spotlightDuration?: number; // how long to show (seconds)
 

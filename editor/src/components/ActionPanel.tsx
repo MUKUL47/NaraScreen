@@ -65,6 +65,20 @@ export function ActionPanel() {
           </button>
         </div>
 
+        {/* Name */}
+        <div>
+          <label className="block text-[10px] text-zinc-500 font-medium mb-1 uppercase tracking-wider">
+            Name
+          </label>
+          <input
+            type="text"
+            value={action.name ?? ""}
+            onChange={(e) => handleUpdate({ name: e.target.value || undefined })}
+            placeholder={`${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${action.timestamp.toFixed(1)}s`}
+            className="w-full bg-zinc-900 border border-zinc-700/40 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20"
+          />
+        </div>
+
         {/* Timestamp */}
         <div>
           <label className="block text-[10px] text-zinc-500 font-medium mb-1 uppercase tracking-wider">

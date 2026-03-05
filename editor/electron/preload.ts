@@ -35,10 +35,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("video:generateFilmstrip", sessionDir),
   getVideoDuration: (videoPath: string) =>
     ipcRenderer.invoke("video:getDuration", videoPath),
-  produceTimelineVideo: (sessionDir: string, version?: string) =>
-    ipcRenderer.invoke("video:produce", sessionDir, version),
-  previewVideo: (sessionDir: string) =>
-    ipcRenderer.invoke("video:preview", sessionDir),
+  produceTimelineVideo: (sessionDir: string, version?: string, selectedActionIds?: string[]) =>
+    ipcRenderer.invoke("video:produce", sessionDir, version, selectedActionIds),
+  previewVideo: (sessionDir: string, selectedActionIds?: string[]) =>
+    ipcRenderer.invoke("video:preview", sessionDir, selectedActionIds),
 
   // TTS
   generateTTS: (sessionDir: string, actionId: string, text: string, lang: string, voice?: string, langCode?: string) =>

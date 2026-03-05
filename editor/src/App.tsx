@@ -50,17 +50,17 @@ function App() {
   const zoomRect =
     selectedAction?.type === "zoom"
       ? selectedAction.zoomRect ?? null
-      : selectedAction?.type === "spotlight"
-        ? selectedAction.spotlightRect ?? null
-        : null;
+      : null;
 
-  // All blur rects for the selected blur action
+  // All overlay rects for the selected action (blur, callout panels, spotlight regions)
   const overlayRects =
     selectedAction?.type === "blur" && selectedAction.blurRects?.length
       ? selectedAction.blurRects
       : selectedAction?.type === "callout" && selectedAction.calloutPanels?.length
         ? selectedAction.calloutPanels.map((p) => p.rect)
-        : undefined;
+        : selectedAction?.type === "spotlight"
+          ? (selectedAction.spotlightRects ?? (selectedAction.spotlightRect ? [selectedAction.spotlightRect] : undefined))
+          : undefined;
 
   // Callout panels for text preview overlay
   const calloutPanels =
@@ -74,7 +74,14 @@ function App() {
       if (selectedAction.type === "zoom") {
         updateAction(selectedActionId, { zoomRect: rect });
       } else if (selectedAction.type === "spotlight") {
-        updateAction(selectedActionId, { spotlightRect: rect });
+        // Append new rect to existing spotlight rects
+        const existing = selectedAction.spotlightRects ?? (selectedAction.spotlightRect ? [selectedAction.spotlightRect] : []);
+        updateAction(selectedActionId, {
+          spotlightRects: [...existing, rect],
+          spotlightRect: undefined,
+        });
+        // Stay in drawing mode so user can add more rects
+        return;
       } else if (selectedAction.type === "blur") {
         // Append new rect to existing blur rects
         const existing = selectedAction.blurRects ?? [];
