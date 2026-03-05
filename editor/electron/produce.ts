@@ -628,6 +628,59 @@ function buildSingleZoom(
   return paths;
 }
 
+/** Find narration from a zoom target's own narration fields */
+function findZoomTargetNarration(
+  target: { narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string },
+): { text: string; lang: string; audioPath?: string } | null {
+  if (target.customAudioPath && fs.existsSync(target.customAudioPath)) {
+    return { text: "", lang: "custom", audioPath: target.customAudioPath };
+  }
+  if (target.audioPath) {
+    for (const [lang, ap] of Object.entries(target.audioPath)) {
+      if (ap && fs.existsSync(ap)) {
+        const text = target.narrations?.[lang] || "";
+        return { text, lang, audioPath: ap };
+      }
+    }
+  }
+  if (target.narrations) {
+    for (const [lang, text] of Object.entries(target.narrations)) {
+      if (text?.trim()) return { text, lang };
+    }
+  }
+  return null;
+}
+
+/** Prepare TTS audio for a zoom target's narration */
+function prepareZoomTargetAudio(
+  target: { narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string },
+  audioOutputPath: string,
+  project: Record<string, unknown>,
+  emit: (msg: string) => void,
+  label: string,
+): NarrationResult | undefined {
+  const narr = findZoomTargetNarration(target);
+  if (!narr) return undefined;
+
+  if (narr.audioPath) {
+    emit(`    Using pre-generated ${narr.lang} audio for ${label}`);
+    fs.copyFileSync(narr.audioPath, audioOutputPath);
+  } else {
+    emit(`    Generating ${narr.lang} TTS for ${label}`);
+    const tts = project.tts as { voiceEn?: string; voiceHi?: string; speed?: number; kokoroEndpoint?: string; voices?: Record<string, string[]> } | undefined;
+    const voice = tts?.voices?.[narr.lang]?.[0] || (narr.lang === "hi" ? tts?.voiceHi || "hf_alpha" : tts?.voiceEn || "af_heart");
+    const speed = tts?.speed || 1;
+    const langCode = LANG_CODES[narr.lang] || "a";
+    generateTTS(narr.text, voice, speed, langCode, audioOutputPath, tts?.kokoroEndpoint);
+  }
+
+  if (fs.existsSync(audioOutputPath) && fs.statSync(audioOutputPath).size > 100) {
+    const dur = probeDuration(audioOutputPath);
+    if (dur > 0) return { audioPath: audioOutputPath, audioDuration: dur, text: narr.text, lang: narr.lang };
+  }
+  return undefined;
+}
+
 function buildZoomInsert(
   action: Action,
   recordingPath: string,
@@ -635,11 +688,21 @@ function buildZoomInsert(
   segIdx: number,
   res: { width: number; height: number },
   narration: NarrationResult | undefined,
+  project: Record<string, unknown>,
   emit: (msg: string) => void,
 ): string[] {
-  // Merge legacy single rect + multi-rect
-  const rects = action.zoomRects ?? (action.zoomRect ? [action.zoomRect] : []);
-  if (rects.length === 0) return [];
+  // Merge legacy formats into zoom targets
+  type ZoomTarget = { rect: [number, number, number, number]; narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string };
+  let targets: ZoomTarget[];
+  if (action.zoomTargets?.length) {
+    targets = action.zoomTargets as ZoomTarget[];
+  } else if (action.zoomRects?.length) {
+    targets = action.zoomRects.map((r) => ({ rect: r as [number, number, number, number] }));
+  } else if (action.zoomRect) {
+    targets = [{ rect: action.zoomRect }];
+  } else {
+    return [];
+  }
 
   const zoomDuration = action.zoomDuration ?? 1;
   const holdDuration = action.zoomHold ?? 2;
@@ -647,19 +710,32 @@ function buildZoomInsert(
   const framePath = path.join(tempDir, `frame_${String(segIdx).padStart(3, "0")}.png`);
   extractFrame(recordingPath, action.timestamp, framePath);
 
-  emit(`  Zoom at ${action.timestamp.toFixed(1)}s (${rects.length} target${rects.length > 1 ? "s" : ""})`);
+  emit(`  Zoom at ${action.timestamp.toFixed(1)}s (${targets.length} target${targets.length > 1 ? "s" : ""})`);
 
   const allPaths: string[] = [];
 
-  for (let i = 0; i < rects.length; i++) {
-    // Narration plays only during the first zoom's hold
-    const narrForThis = i === 0 ? narration : undefined;
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i];
+
+    // Resolve narration: per-target narration takes priority, then fall back to action-level (only for first target in legacy mode)
+    let narrForThis: NarrationResult | undefined;
+    const hasTargetNarration = findZoomTargetNarration(target) !== null;
+
+    if (hasTargetNarration) {
+      // Per-target narration — generate TTS for this target
+      const audioPath = path.join(tempDir, `zoomnarr_${String(segIdx).padStart(3, "0")}_z${i}.wav`);
+      narrForThis = prepareZoomTargetAudio(target, audioPath, project, emit, `zoom target ${i + 1}`);
+    } else if (i === 0 && narration) {
+      // Legacy: action-level narration on first zoom only
+      narrForThis = narration;
+    }
+
     const thisHold = narrForThis ? narrForThis.audioDuration + 0.5 : holdDuration;
 
-    emit(`    Target ${i + 1}: ${rects[i][2]}x${rects[i][3]} hold=${thisHold.toFixed(1)}s`);
+    emit(`    Target ${i + 1}: ${target.rect[2]}x${target.rect[3]} hold=${thisHold.toFixed(1)}s${narrForThis ? " (with narration)" : ""}`);
 
     const paths = buildSingleZoom(
-      rects[i] as [number, number, number, number],
+      target.rect,
       framePath,
       tempDir,
       segIdx,
@@ -829,8 +905,8 @@ function executeSegmentPass(
     const narration = narrations.get(i);
     let insertPaths: string[];
 
-    if (plan.insertType === "zoom" && (plan.action.zoomRect || (plan.action.zoomRects && plan.action.zoomRects.length > 0))) {
-      insertPaths = buildZoomInsert(plan.action, inputPath, tempDir, segIdx, res, narration, emit);
+    if (plan.insertType === "zoom" && (plan.action.zoomRect || (plan.action.zoomRects && plan.action.zoomRects.length > 0) || (plan.action.zoomTargets && plan.action.zoomTargets.length > 0))) {
+      insertPaths = buildZoomInsert(plan.action, inputPath, tempDir, segIdx, res, narration, project, emit);
     } else if (plan.insertType === "pause") {
       insertPaths = buildPauseInsert(plan.action, inputPath, tempDir, segIdx, res, narration, emit);
     } else {
@@ -948,7 +1024,7 @@ export async function produceTimelineVideo(
   const blurActions = allActions.filter((a) => a.type === "blur" && a.blurRects && a.blurRects.length > 0);
   const spotlightActions = allActions.filter((a) => a.type === "spotlight" && (a.spotlightRect || (a.spotlightRects && a.spotlightRects.length > 0)));
   const calloutActions = allActions.filter((a) => a.type === "callout" && (a.calloutText || (a.calloutPanels && a.calloutPanels.length > 0)));
-  const zoomActions = allActions.filter((a) => a.type === "zoom" && (a.zoomRect || (a.zoomRects && a.zoomRects.length > 0)));
+  const zoomActions = allActions.filter((a) => a.type === "zoom" && (a.zoomRect || (a.zoomRects && a.zoomRects.length > 0) || (a.zoomTargets && a.zoomTargets.length > 0)));
   const pauseActions = allActions.filter((a) => a.type === "pause");
   const narrateActions = allActions.filter((a) => a.type === "narrate");
   const speedActions = allActions.filter((a) => a.type === "speed" && a.speedEndTimestamp && a.speedFactor);

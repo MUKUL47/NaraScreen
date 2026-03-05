@@ -51,40 +51,68 @@ function App() {
   );
   const zoomRect = null; // no longer used — all rects shown via labeledOverlays
 
-  // Build labeled overlays from ALL rect-based actions (zoom, spotlight, blur, callout)
+  // Build labeled overlays: selected action's rects + any overlapping actions' rects
+  // "Overlapping" = their time range intersects the selected action's time range
   const labeledOverlays = useMemo<LabeledOverlay[]>(() => {
-    if (!project) return [];
+    if (!project || !selectedAction) return [];
+
+    // Compute time range of the selected action
+    const getTimeRange = (a: typeof selectedAction): [number, number] => {
+      const start = a.timestamp;
+      let end = start;
+      switch (a.type) {
+        case "zoom": end = start + (a.zoomDuration ?? 1) * 2 + (a.zoomHold ?? 2); break;
+        case "spotlight": end = start + (a.spotlightDuration ?? 3); break;
+        case "blur": end = start + (a.blurDuration ?? 3); break;
+        case "callout": end = start + (a.calloutDuration ?? 3); break;
+        case "mute": end = a.muteEndTimestamp ?? start + 3; break;
+        case "speed": end = a.speedEndTimestamp ?? start + 5; break;
+        case "skip": end = a.skipEndTimestamp ?? start + 3; break;
+        default: end = start + 3;
+      }
+      return [start, end];
+    };
+
+    const [selStart, selEnd] = getTimeRange(selectedAction);
+
+    const getRects = (a: typeof selectedAction): [number, number, number, number][] => {
+      switch (a.type) {
+        case "zoom":
+          if (a.zoomTargets?.length) return a.zoomTargets.map((t) => t.rect);
+          return a.zoomRects ?? (a.zoomRect ? [a.zoomRect] : []);
+        case "spotlight": return a.spotlightRects ?? (a.spotlightRect ? [a.spotlightRect] : []);
+        case "blur": return a.blurRects ?? [];
+        case "callout": return a.calloutPanels?.map((p) => p.rect) ?? [];
+        default: return [];
+      }
+    };
+
     const overlays: LabeledOverlay[] = [];
 
     for (const action of project.actions) {
-      const isSelected = action.id === selectedActionId;
       const color = ACTION_OVERLAY_COLORS[action.type];
       if (!color) continue;
 
+      const rects = getRects(action);
+      if (rects.length === 0) continue;
+
+      const isSelected = action.id === selectedActionId;
+
+      // Skip non-selected actions that don't overlap the selected action's time range
+      if (!isSelected) {
+        const [aStart, aEnd] = getTimeRange(action);
+        if (aEnd <= selStart || aStart >= selEnd) continue;
+      }
+
       const label = action.name || `${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${action.timestamp.toFixed(1)}s`;
 
-      const getRects = (): [number, number, number, number][] => {
-        switch (action.type) {
-          case "zoom":
-            return action.zoomRects ?? (action.zoomRect ? [action.zoomRect] : []);
-          case "spotlight":
-            return action.spotlightRects ?? (action.spotlightRect ? [action.spotlightRect] : []);
-          case "blur":
-            return action.blurRects ?? [];
-          case "callout":
-            return action.calloutPanels?.map((p) => p.rect) ?? [];
-          default:
-            return [];
-        }
-      };
-
-      for (const rect of getRects()) {
+      for (const rect of rects) {
         overlays.push({ rect, label, color, selected: isSelected, actionId: action.id });
       }
     }
 
     return overlays;
-  }, [project, selectedActionId]);
+  }, [project, selectedAction, selectedActionId]);
 
   // Callout panels for text preview overlay (only for selected callout action)
   const calloutPanels =
@@ -96,11 +124,15 @@ function App() {
     (rect: [number, number, number, number]) => {
       if (!selectedActionId || !selectedAction) return;
       if (selectedAction.type === "zoom") {
-        // Append new rect to existing zoom rects
-        const existing = selectedAction.zoomRects ?? (selectedAction.zoomRect ? [selectedAction.zoomRect] : []);
+        // Append new zoom target (with empty narration) to zoomTargets
+        const existingTargets = selectedAction.zoomTargets?.length
+          ? selectedAction.zoomTargets
+          : (selectedAction.zoomRects ?? (selectedAction.zoomRect ? [selectedAction.zoomRect] : []))
+              .map((r) => ({ rect: r }));
         updateAction(selectedActionId, {
-          zoomRects: [...existing, rect],
+          zoomTargets: [...existingTargets, { rect }],
           zoomRect: undefined,
+          zoomRects: undefined,
         });
         // Stay in drawing mode so user can add more zoom targets
         return;

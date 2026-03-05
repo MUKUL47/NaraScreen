@@ -23,6 +23,7 @@ export interface Action {
   customAudioPath?: string;
   zoomRect?: [number, number, number, number];
   zoomRects?: [number, number, number, number][];
+  zoomTargets?: { rect: [number, number, number, number]; narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string }[];
   zoomDuration?: number;
   zoomHold?: number;
   spotlightRect?: [number, number, number, number];

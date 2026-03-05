@@ -13,6 +13,14 @@ export type ActionType =
   | "blur"
   | "mute";
 
+/** A zoom target with its own rect and optional narration */
+export interface ZoomTarget {
+  rect: [number, number, number, number]; // [x, y, w, h] in video coords
+  narrations?: Record<string, string>; // per-language narration text
+  audioPath?: Record<string, string>; // pre-generated audio paths keyed by lang
+  customAudioPath?: string; // custom recorded audio
+}
+
 /** A text panel with position, text, and styling */
 export interface CalloutPanel {
   text: string;
@@ -33,7 +41,8 @@ export interface TimelineAction {
 
   // Zoom: smooth animated zoom to a region (single or multi-zoom sequence)
   zoomRect?: [number, number, number, number]; // [x, y, w, h] legacy single rect
-  zoomRects?: [number, number, number, number][]; // array of [x, y, w, h] for multi-zoom sequence
+  zoomRects?: [number, number, number, number][]; // legacy multi-rect (no per-target narration)
+  zoomTargets?: ZoomTarget[]; // modern: per-target rect + narration
   zoomDuration?: number; // animation duration in seconds (default 1)
   zoomHold?: number; // hold zoomed view for N seconds
 
