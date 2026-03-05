@@ -31,8 +31,9 @@ export interface TimelineAction {
   // Pause: freeze the video frame at this timestamp
   resumeAfter?: "narration" | "zoom" | number;
 
-  // Zoom: smooth animated zoom to a region
-  zoomRect?: [number, number, number, number]; // [x, y, w, h] in video coords
+  // Zoom: smooth animated zoom to a region (single or multi-zoom sequence)
+  zoomRect?: [number, number, number, number]; // [x, y, w, h] legacy single rect
+  zoomRects?: [number, number, number, number][]; // array of [x, y, w, h] for multi-zoom sequence
   zoomDuration?: number; // animation duration in seconds (default 1)
   zoomHold?: number; // hold zoomed view for N seconds
 
@@ -88,6 +89,15 @@ export interface TimelineAction {
   musicVolume?: number; // 0.0-1.0, default 0.5
   musicDuckTo?: number; // volume during narration (default 0.2)
   musicEndTimestamp?: number; // when music stops
+}
+
+/** A labeled overlay rect for showing reference points on the video player */
+export interface LabeledOverlay {
+  rect: [number, number, number, number]; // [x, y, w, h] in video coords
+  label: string; // display label (name or type@timestamp)
+  color: string; // CSS border/bg color (e.g. "blue", "purple")
+  selected: boolean; // whether this belongs to the currently selected action
+  actionId: string; // ID of the owning action
 }
 
 /** Project file saved as demo-project.json */

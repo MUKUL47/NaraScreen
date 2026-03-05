@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { assetUrl } from "../lib/fileOps";
 import { formatTime } from "../lib/formatTime";
-import type { CalloutPanel } from "../types";
+import type { CalloutPanel, LabeledOverlay } from "../types";
 
 interface VideoPlayerProps {
   videoPath: string | null;
@@ -11,12 +11,12 @@ interface VideoPlayerProps {
   /** If true, overlay allows drawing zoom rectangle */
   drawingZoom?: boolean;
   onZoomDrawn?: (rect: [number, number, number, number]) => void;
-  /** Show zoom rect overlay */
-  zoomRect?: [number, number, number, number] | null;
-  /** Show multiple overlay rects (e.g. blur regions, callout panels) */
-  overlayRects?: [number, number, number, number][];
+  /** Labeled overlay rects from all rect-based actions */
+  labeledOverlays?: LabeledOverlay[];
   /** Callout text panels to preview on video */
   calloutPanels?: CalloutPanel[];
+  /** Click an overlay to select its action */
+  onSelectAction?: (actionId: string) => void;
 }
 
 export function VideoPlayer({
@@ -26,9 +26,9 @@ export function VideoPlayer({
   onDurationChange,
   drawingZoom,
   onZoomDrawn,
-  zoomRect,
-  overlayRects,
+  labeledOverlays,
   calloutPanels,
+  onSelectAction,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -230,32 +230,46 @@ export function VideoPlayer({
           </div>
         )}
 
-        {/* Zoom rect overlay */}
-        {zoomRect && videoRef.current && (
-          <div
-            className="absolute border-2 border-blue-400 bg-blue-400/10 pointer-events-none"
-            style={{
-              left: `${(zoomRect[0] / (videoRef.current.videoWidth || 1920)) * 100}%`,
-              top: `${(zoomRect[1] / (videoRef.current.videoHeight || 1080)) * 100}%`,
-              width: `${(zoomRect[2] / (videoRef.current.videoWidth || 1920)) * 100}%`,
-              height: `${(zoomRect[3] / (videoRef.current.videoHeight || 1080)) * 100}%`,
-            }}
-          />
-        )}
-
-        {/* Multiple overlay rects (blur regions) */}
-        {overlayRects && videoRef.current && overlayRects.map((r, i) => (
-          <div
-            key={i}
-            className="absolute border-2 border-indigo-400 bg-indigo-400/15 pointer-events-none"
-            style={{
-              left: `${(r[0] / (videoRef.current!.videoWidth || 1920)) * 100}%`,
-              top: `${(r[1] / (videoRef.current!.videoHeight || 1080)) * 100}%`,
-              width: `${(r[2] / (videoRef.current!.videoWidth || 1920)) * 100}%`,
-              height: `${(r[3] / (videoRef.current!.videoHeight || 1080)) * 100}%`,
-            }}
-          />
-        ))}
+        {/* Labeled overlay rects from all rect-based actions */}
+        {labeledOverlays && videoRef.current && labeledOverlays.map((overlay, i) => {
+          const vw = videoRef.current!.videoWidth || 1920;
+          const vh = videoRef.current!.videoHeight || 1080;
+          const opacity = overlay.selected ? 1 : 0.4;
+          return (
+            <div
+              key={`${overlay.actionId}-${i}`}
+              className="absolute cursor-pointer"
+              style={{
+                left: `${(overlay.rect[0] / vw) * 100}%`,
+                top: `${(overlay.rect[1] / vh) * 100}%`,
+                width: `${(overlay.rect[2] / vw) * 100}%`,
+                height: `${(overlay.rect[3] / vh) * 100}%`,
+                border: `2px solid ${overlay.color}`,
+                backgroundColor: `${overlay.color}${overlay.selected ? "1a" : "0d"}`,
+                opacity,
+                borderRadius: "3px",
+                pointerEvents: drawingZoom ? "none" : "auto",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectAction?.(overlay.actionId);
+              }}
+            >
+              {/* Label badge */}
+              <div
+                className="absolute -top-5 left-0 max-w-full truncate px-1 py-0.5 rounded text-white font-medium whitespace-nowrap"
+                style={{
+                  fontSize: "9px",
+                  lineHeight: "12px",
+                  backgroundColor: `${overlay.color}cc`,
+                  pointerEvents: "none",
+                }}
+              >
+                {overlay.label}
+              </div>
+            </div>
+          );
+        })}
 
         {/* Callout text panel previews */}
         {calloutPanels && videoRef.current && calloutPanels.map((panel, i) => {

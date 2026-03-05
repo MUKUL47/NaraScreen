@@ -12,16 +12,14 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
   const setDrawingZoom = useProjectStore((s) => s.setDrawingZoom);
   const viewport = useProjectStore((s) => s.project?.viewport);
 
-  // Calculate zoom scale
-  const zoomScale = action.zoomRect && viewport
-    ? Math.min(viewport.width / action.zoomRect[2], viewport.height / action.zoomRect[3]).toFixed(1)
-    : null;
+  // Merge legacy single rect into multi-rect array for display
+  const rects = action.zoomRects ?? (action.zoomRect ? [action.zoomRect] : []);
 
   return (
     <>
       <div>
         <label className="block text-xs text-zinc-400 font-medium mb-1">
-          Zoom Region
+          Zoom Regions ({rects.length}) — played in sequence
         </label>
         <button
           onClick={() => setDrawingZoom(!drawingZoom)}
@@ -33,24 +31,42 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
         >
           {drawingZoom
             ? "Drawing... (click & drag on video)"
-            : action.zoomRect
-              ? "Redraw Region"
+            : rects.length > 0
+              ? "Add Another Zoom"
               : "Draw Zoom Region"}
         </button>
-        {action.zoomRect && (
-          <div className="mt-1 flex items-center justify-between">
-            <span className="text-[10px] text-zinc-500">
-              {action.zoomRect[0]},{action.zoomRect[1]} {action.zoomRect[2]}x
-              {action.zoomRect[3]}
-              {zoomScale && (
-                <span className="text-violet-400 ml-1.5">{zoomScale}x zoom</span>
-              )}
-            </span>
+        {rects.length > 0 && (
+          <div className="mt-1.5 space-y-1">
+            {rects.map((r, i) => {
+              const zoomScale = viewport
+                ? Math.min(viewport.width / r[2], viewport.height / r[3]).toFixed(1)
+                : null;
+              return (
+                <div key={i} className="flex items-center justify-between bg-zinc-900 rounded px-2 py-1">
+                  <span className="text-[10px] text-zinc-400 font-mono">
+                    #{i + 1}: {r[0]},{r[1]} {r[2]}x{r[3]}
+                    {zoomScale && <span className="text-violet-400 ml-1">{zoomScale}x</span>}
+                  </span>
+                  <button
+                    onClick={() => {
+                      const updated = rects.filter((_, idx) => idx !== i);
+                      onUpdate({
+                        zoomRects: updated.length > 0 ? updated : undefined,
+                        zoomRect: undefined,
+                      });
+                    }}
+                    className="text-[10px] text-red-400 hover:text-red-300"
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
             <button
-              onClick={() => onUpdate({ zoomRect: undefined })}
+              onClick={() => onUpdate({ zoomRects: undefined, zoomRect: undefined })}
               className="text-[10px] text-red-400 hover:text-red-300"
             >
-              Clear
+              Clear All
             </button>
           </div>
         )}
@@ -75,7 +91,7 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
 
       <div>
         <label className="block text-xs text-zinc-400 font-medium mb-1">
-          Hold Duration (seconds)
+          Hold Duration per zoom (seconds)
         </label>
         <input
           type="number"
@@ -94,11 +110,13 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
 
       <LanguageAudioSection
         action={action}
-        label="Narration (plays while zoomed)"
+        label="Narration (plays during first zoom hold)"
       />
 
       <div className="text-[10px] text-zinc-600 border-t border-zinc-800/50 pt-2">
-        Flow: Zoom In ({action.zoomDuration ?? 1}s) → Hold (frozen) → Zoom Out ({action.zoomDuration ?? 1}s)
+        {rects.length <= 1
+          ? `Flow: Zoom In (${action.zoomDuration ?? 1}s) → Hold (frozen) → Zoom Out (${action.zoomDuration ?? 1}s)`
+          : `Flow: ${rects.map((_, i) => `Zoom ${i + 1}`).join(" → ")} — each: In → Hold → Out (frozen frame)`}
       </div>
     </>
   );

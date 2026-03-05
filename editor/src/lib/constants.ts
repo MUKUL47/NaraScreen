@@ -68,6 +68,14 @@ export const ACTION_BORDER_COLORS: Record<string, string> = {
   mute: "border-rose-400",
 };
 
+/** Action type → CSS color for video overlay rects */
+export const ACTION_OVERLAY_COLORS: Record<string, string> = {
+  zoom: "#3b82f6",      // blue-500
+  spotlight: "#a855f7",  // purple-500
+  callout: "#06b6d4",    // cyan-500
+  blur: "#6366f1",       // indigo-500
+};
+
 /** Action type → display name */
 export const ACTION_DISPLAY_NAMES: Record<string, string> = {
   pause: "Pause",

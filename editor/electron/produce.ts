@@ -435,7 +435,11 @@ function estimateInsertDuration(action: Action, narration?: NarrationResult): nu
   let dur = 3;
   if (narration && narration.audioDuration > 0) dur = narration.audioDuration + 0.5;
   if (typeof action.resumeAfter === "number") return action.resumeAfter;
-  if (action.type === "zoom") dur = Math.max(dur, (action.zoomDuration ?? 1) * 2 + (action.zoomHold ?? 2));
+  if (action.type === "zoom") {
+    const rectCount = Math.max(1, (action.zoomRects ?? (action.zoomRect ? [action.zoomRect] : [])).length);
+    const perZoom = (action.zoomDuration ?? 1) * 2 + (action.zoomHold ?? 2);
+    dur = Math.max(dur, perZoom * rectCount);
+  }
   if (action.type === "pause" && typeof action.resumeAfter === "number") dur = action.resumeAfter;
   return dur;
 }
@@ -565,23 +569,18 @@ function burnSubtitles(videoPath: string, subtitlePath: string, outputPath: stri
 
 // ─── Insert Segment Builders ─────────────────────────────────
 
-function buildZoomInsert(
-  action: Action,
-  recordingPath: string,
+function buildSingleZoom(
+  zoomRect: [number, number, number, number],
+  framePath: string,
   tempDir: string,
   segIdx: number,
+  zoomIdx: number,
   res: { width: number; height: number },
+  zoomDuration: number,
+  holdDuration: number,
   narration: NarrationResult | undefined,
   emit: (msg: string) => void,
 ): string[] {
-  const zoomRect = action.zoomRect!;
-  const zoomDuration = action.zoomDuration ?? 1;
-  const holdDuration = narration ? narration.audioDuration + 0.5 : (action.zoomHold ?? 2);
-
-  const framePath = path.join(tempDir, `frame_${String(segIdx).padStart(3, "0")}.png`);
-  extractFrame(recordingPath, action.timestamp, framePath);
-  emit(`  Zoom at ${action.timestamp.toFixed(1)}s hold=${holdDuration.toFixed(1)}s`);
-
   const [zx, zy, zw, zh] = zoomRect;
   const { width: outW, height: outH } = res;
   const cx = Math.round(zx + zw / 2);
@@ -596,10 +595,11 @@ function buildZoomInsert(
   const xExpr = `${cx}-iw/zoom/2`;
   const yExpr = `${cy}-ih/zoom/2`;
 
+  const tag = `${String(segIdx).padStart(3, "0")}_z${zoomIdx}`;
   const paths: string[] = [];
 
   // Zoom-in
-  const zoomInPath = path.join(tempDir, `zoomin_${String(segIdx).padStart(3, "0")}.mp4`);
+  const zoomInPath = path.join(tempDir, `zoomin_${tag}.mp4`);
   const zpIn = [
     `zoompan=z='1+(${maxZ.toFixed(4)}-1)*${ssForward}'`,
     `x='${xExpr}'`, `y='${yExpr}'`,
@@ -608,8 +608,8 @@ function buildZoomInsert(
   ffmpegSync(["-y", "-i", framePath, "-vf", zpIn, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", zoomInPath]);
   paths.push(zoomInPath);
 
-  // Hold (with narration audio if available)
-  const holdPath = path.join(tempDir, `zoomhold_${String(segIdx + 1).padStart(3, "0")}.mp4`);
+  // Hold (with narration audio if provided)
+  const holdPath = path.join(tempDir, `zoomhold_${tag}.mp4`);
   const zpHold = [`zoompan=z='${maxZ.toFixed(4)}'`, `x='${xExpr}'`, `y='${yExpr}'`, `d=${holdFrames}`, `s=${outW}x${outH}`, `fps=30`].join(":");
   const holdArgs = ["-y", "-i", framePath];
   if (narration) holdArgs.push("-i", narration.audioPath);
@@ -620,12 +620,60 @@ function buildZoomInsert(
   paths.push(holdPath);
 
   // Zoom-out
-  const zoomOutPath = path.join(tempDir, `zoomout_${String(segIdx + 2).padStart(3, "0")}.mp4`);
+  const zoomOutPath = path.join(tempDir, `zoomout_${tag}.mp4`);
   const zpOut = [`zoompan=z='1+(${maxZ.toFixed(4)}-1)*${ssReverse}'`, `x='${xExpr}'`, `y='${yExpr}'`, `d=${inFrames}`, `s=${outW}x${outH}`, `fps=30`].join(":");
   ffmpegSync(["-y", "-i", framePath, "-vf", zpOut, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", zoomOutPath]);
   paths.push(zoomOutPath);
 
   return paths;
+}
+
+function buildZoomInsert(
+  action: Action,
+  recordingPath: string,
+  tempDir: string,
+  segIdx: number,
+  res: { width: number; height: number },
+  narration: NarrationResult | undefined,
+  emit: (msg: string) => void,
+): string[] {
+  // Merge legacy single rect + multi-rect
+  const rects = action.zoomRects ?? (action.zoomRect ? [action.zoomRect] : []);
+  if (rects.length === 0) return [];
+
+  const zoomDuration = action.zoomDuration ?? 1;
+  const holdDuration = action.zoomHold ?? 2;
+
+  const framePath = path.join(tempDir, `frame_${String(segIdx).padStart(3, "0")}.png`);
+  extractFrame(recordingPath, action.timestamp, framePath);
+
+  emit(`  Zoom at ${action.timestamp.toFixed(1)}s (${rects.length} target${rects.length > 1 ? "s" : ""})`);
+
+  const allPaths: string[] = [];
+
+  for (let i = 0; i < rects.length; i++) {
+    // Narration plays only during the first zoom's hold
+    const narrForThis = i === 0 ? narration : undefined;
+    const thisHold = narrForThis ? narrForThis.audioDuration + 0.5 : holdDuration;
+
+    emit(`    Target ${i + 1}: ${rects[i][2]}x${rects[i][3]} hold=${thisHold.toFixed(1)}s`);
+
+    const paths = buildSingleZoom(
+      rects[i] as [number, number, number, number],
+      framePath,
+      tempDir,
+      segIdx,
+      i,
+      res,
+      zoomDuration,
+      thisHold,
+      narrForThis,
+      emit,
+    );
+    allPaths.push(...paths);
+  }
+
+  return allPaths;
 }
 
 function buildPauseInsert(
@@ -781,7 +829,7 @@ function executeSegmentPass(
     const narration = narrations.get(i);
     let insertPaths: string[];
 
-    if (plan.insertType === "zoom" && plan.action.zoomRect) {
+    if (plan.insertType === "zoom" && (plan.action.zoomRect || (plan.action.zoomRects && plan.action.zoomRects.length > 0))) {
       insertPaths = buildZoomInsert(plan.action, inputPath, tempDir, segIdx, res, narration, emit);
     } else if (plan.insertType === "pause") {
       insertPaths = buildPauseInsert(plan.action, inputPath, tempDir, segIdx, res, narration, emit);
@@ -900,7 +948,7 @@ export async function produceTimelineVideo(
   const blurActions = allActions.filter((a) => a.type === "blur" && a.blurRects && a.blurRects.length > 0);
   const spotlightActions = allActions.filter((a) => a.type === "spotlight" && (a.spotlightRect || (a.spotlightRects && a.spotlightRects.length > 0)));
   const calloutActions = allActions.filter((a) => a.type === "callout" && (a.calloutText || (a.calloutPanels && a.calloutPanels.length > 0)));
-  const zoomActions = allActions.filter((a) => a.type === "zoom" && a.zoomRect);
+  const zoomActions = allActions.filter((a) => a.type === "zoom" && (a.zoomRect || (a.zoomRects && a.zoomRects.length > 0)));
   const pauseActions = allActions.filter((a) => a.type === "pause");
   const narrateActions = allActions.filter((a) => a.type === "narrate");
   const speedActions = allActions.filter((a) => a.type === "speed" && a.speedEndTimestamp && a.speedFactor);

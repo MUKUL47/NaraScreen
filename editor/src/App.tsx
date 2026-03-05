@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Toolbar } from "./components/Toolbar";
 import { CaptureToolbar } from "./components/CaptureToolbar";
 import { VideoPlayer } from "./components/VideoPlayer";
@@ -7,6 +7,8 @@ import { Monitor } from "lucide-react";
 import { ActionPanel } from "./components/ActionPanel";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { ACTION_DISPLAY_NAMES, ACTION_OVERLAY_COLORS } from "./lib/constants";
+import type { LabeledOverlay } from "./types";
 
 function App() {
   useKeyboardShortcuts();
@@ -47,22 +49,44 @@ function App() {
   const selectedAction = project?.actions.find(
     (a) => a.id === selectedActionId,
   );
-  const zoomRect =
-    selectedAction?.type === "zoom"
-      ? selectedAction.zoomRect ?? null
-      : null;
+  const zoomRect = null; // no longer used — all rects shown via labeledOverlays
 
-  // All overlay rects for the selected action (blur, callout panels, spotlight regions)
-  const overlayRects =
-    selectedAction?.type === "blur" && selectedAction.blurRects?.length
-      ? selectedAction.blurRects
-      : selectedAction?.type === "callout" && selectedAction.calloutPanels?.length
-        ? selectedAction.calloutPanels.map((p) => p.rect)
-        : selectedAction?.type === "spotlight"
-          ? (selectedAction.spotlightRects ?? (selectedAction.spotlightRect ? [selectedAction.spotlightRect] : undefined))
-          : undefined;
+  // Build labeled overlays from ALL rect-based actions (zoom, spotlight, blur, callout)
+  const labeledOverlays = useMemo<LabeledOverlay[]>(() => {
+    if (!project) return [];
+    const overlays: LabeledOverlay[] = [];
 
-  // Callout panels for text preview overlay
+    for (const action of project.actions) {
+      const isSelected = action.id === selectedActionId;
+      const color = ACTION_OVERLAY_COLORS[action.type];
+      if (!color) continue;
+
+      const label = action.name || `${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${action.timestamp.toFixed(1)}s`;
+
+      const getRects = (): [number, number, number, number][] => {
+        switch (action.type) {
+          case "zoom":
+            return action.zoomRects ?? (action.zoomRect ? [action.zoomRect] : []);
+          case "spotlight":
+            return action.spotlightRects ?? (action.spotlightRect ? [action.spotlightRect] : []);
+          case "blur":
+            return action.blurRects ?? [];
+          case "callout":
+            return action.calloutPanels?.map((p) => p.rect) ?? [];
+          default:
+            return [];
+        }
+      };
+
+      for (const rect of getRects()) {
+        overlays.push({ rect, label, color, selected: isSelected, actionId: action.id });
+      }
+    }
+
+    return overlays;
+  }, [project, selectedActionId]);
+
+  // Callout panels for text preview overlay (only for selected callout action)
   const calloutPanels =
     selectedAction?.type === "callout" && selectedAction.calloutPanels?.length
       ? selectedAction.calloutPanels
@@ -72,7 +96,14 @@ function App() {
     (rect: [number, number, number, number]) => {
       if (!selectedActionId || !selectedAction) return;
       if (selectedAction.type === "zoom") {
-        updateAction(selectedActionId, { zoomRect: rect });
+        // Append new rect to existing zoom rects
+        const existing = selectedAction.zoomRects ?? (selectedAction.zoomRect ? [selectedAction.zoomRect] : []);
+        updateAction(selectedActionId, {
+          zoomRects: [...existing, rect],
+          zoomRect: undefined,
+        });
+        // Stay in drawing mode so user can add more zoom targets
+        return;
       } else if (selectedAction.type === "spotlight") {
         // Append new rect to existing spotlight rects
         const existing = selectedAction.spotlightRects ?? (selectedAction.spotlightRect ? [selectedAction.spotlightRect] : []);
@@ -148,9 +179,9 @@ function App() {
                   onDurationChange={handleDurationChange}
                   drawingZoom={drawingZoom}
                   onZoomDrawn={handleZoomDrawn}
-                  zoomRect={zoomRect}
-                  overlayRects={overlayRects}
+                  labeledOverlays={labeledOverlays}
                   calloutPanels={calloutPanels}
+                  onSelectAction={useProjectStore.getState().setSelectedAction}
                 />
               </div>
 
