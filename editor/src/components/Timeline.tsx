@@ -146,10 +146,11 @@ export function Timeline() {
     [clientXToTime],
   );
 
-  // Mouse move — extend drag
-  const handleMouseMove = useCallback(
-    (e: React.MouseEvent) => {
-      if (dragStart === null) return;
+  // Use document-level listeners for drag so it continues over the scrollbar
+  useEffect(() => {
+    if (dragStart === null) return;
+
+    const onMouseMove = (e: MouseEvent) => {
       const time = clientXToTime(e.clientX);
       if (!isDragging.current && Math.abs(time - dragStart) > 0.3) {
         isDragging.current = true;
@@ -157,18 +158,12 @@ export function Timeline() {
       if (isDragging.current) {
         setDragEnd(time);
       }
-    },
-    [dragStart, clientXToTime],
-  );
+    };
 
-  // Mouse up — finish drag or simple click
-  const handleMouseUp = useCallback(
-    (e: React.MouseEvent) => {
-      if (dragStart === null) return;
+    const onMouseUp = (e: MouseEvent) => {
       const time = clientXToTime(e.clientX);
 
       if (isDragging.current && dragEnd !== null) {
-        // Drag completed — show range action menu at mouse position relative to outer container
         const containerRect = containerRef.current?.getBoundingClientRect();
         if (containerRect) {
           setMenuPos({
@@ -185,9 +180,15 @@ export function Timeline() {
         setDragEnd(null);
       }
       isDragging.current = false;
-    },
-    [dragStart, dragEnd, clientXToTime, setPlayhead, setSelectedAction],
-  );
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [dragStart, dragEnd, clientXToTime, setPlayhead, setSelectedAction]);
 
   // Add range-based action from drag selection
   const handleAddRangeAction = useCallback(
@@ -372,14 +373,6 @@ export function Timeline() {
           className="relative"
           style={{ width: totalWidth, minWidth: "100%" }}
           onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={() => {
-            if (isDragging.current) {
-              isDragging.current = false;
-              if (dragEnd !== null) setShowRangeMenu(true);
-            }
-          }}
         >
           {/* Time ruler */}
           <div className="h-5 relative border-b border-zinc-800/50">
