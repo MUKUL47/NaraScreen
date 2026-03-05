@@ -106,12 +106,23 @@ jobs:
 - FFprobe binary (~62 MB) — via `ffprobe-static`
 - React app + Electron main process code
 
-### Kokoro TTS in Packaged App
+### Bundling Kokoro TTS (Optional)
 
-Kokoro is **not bundled** (it would add ~500 MB+ of Python). Users have two options:
+By default, Kokoro is **not included** in the binary — the app uses the HTTP API fallback.
 
-1. **HTTP API** (default) — run the Docker container, app connects to `localhost:8880`
-2. **Bundled venv** (optional) — place a Python venv with kokoro at `resources/kokoro-venv/` before building. The app auto-detects it.
+To bundle Kokoro into the binary (adds ~500 MB):
+
+```bash
+# 1. Create the venv with kokoro + CPU-only PyTorch
+bash scripts/setup-kokoro-venv.sh
+
+# 2. Build — the script auto-detects kokoro-venv/ and includes it
+npm run dist
+```
+
+If `kokoro-venv/` doesn't exist, the build skips it and the app falls back to:
+1. System Python with `pip install kokoro` (if available)
+2. HTTP API at `localhost:8880` (Docker container)
 
 ### App Icon
 

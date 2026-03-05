@@ -42,3 +42,4 @@ npm-debug.log*
 *.local
 dist-ssr
 release
+kokoro-venv

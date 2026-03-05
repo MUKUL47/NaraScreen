@@ -13,10 +13,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "dist": "npm run build && electron-builder",
-    "dist:linux": "npm run build && electron-builder --linux",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win"
+    "dist": "npm run build && node scripts/build-dist.js",
+    "dist:linux": "npm run build && node scripts/build-dist.js --linux",
+    "dist:mac": "npm run build && node scripts/build-dist.js --mac",
+    "dist:win": "npm run build && node scripts/build-dist.js --win"
   },
   "build": {
     "appId": "com.narascreen.editor",
