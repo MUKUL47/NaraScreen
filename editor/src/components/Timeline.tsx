@@ -268,162 +268,159 @@ export function Timeline() {
       </div>
 
       {/* Main timeline area: sidebar + scrollable content */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-auto timeline-scroll">
-        <div className="flex">
-          {/* Track label sidebar — sticky left */}
-          <div className="sticky left-0 z-20 shrink-0 border-r border-zinc-800/50 bg-zinc-950 flex flex-col" style={{ width: SIDEBAR_W }}>
-            {/* Ruler spacer — sticky top */}
-            <div className="sticky top-0 bg-zinc-950 z-20 border-b border-zinc-800/30 flex items-center justify-center shrink-0" style={{ height: RULER_H }}>
-              <span className="text-[8px] text-zinc-600 uppercase tracking-wider font-semibold">Time</span>
+      <div ref={scrollContainerRef} className="flex-1 flex overflow-auto timeline-scroll">
+        {/* Track label sidebar — fixed left */}
+        <div className="shrink-0 border-r border-zinc-800/50 bg-zinc-950" style={{ width: SIDEBAR_W }}>
+          {/* Ruler spacer */}
+          <div className="border-b border-zinc-800/30 flex items-center justify-center" style={{ height: RULER_H }}>
+            <span className="text-[8px] text-zinc-600 uppercase tracking-wider font-semibold">Time</span>
+          </div>
+          {/* Video track label */}
+          <div className="border-b border-zinc-800/30 flex items-center justify-center" style={{ height: FILMSTRIP_H }}>
+            <Video size={13} className="text-zinc-500" />
+          </div>
+          {/* Action lane labels */}
+          {activeLanes.map((type) => (
+            <div
+              key={type}
+              className="border-b border-zinc-800/30 flex items-center justify-center"
+              style={{ height: LANE_H }}
+              title={ACTION_DISPLAY_NAMES[type] || type}
+            >
+              <ActionIcon type={type} size={13} className={ACTION_TEXT_COLORS[type] || "text-zinc-500"} />
             </div>
-            {/* Video track label — sticky below ruler */}
-            <div className="sticky bg-zinc-950 z-10 border-b border-zinc-800/30 flex items-center justify-center shrink-0" style={{ height: FILMSTRIP_H, top: RULER_H }}>
-              <Video size={13} className="text-zinc-500" />
-            </div>
-            {/* Action lane labels */}
-            {activeLanes.map((type) => (
-              <div
-                key={type}
-                className="border-b border-zinc-800/30 flex items-center justify-center shrink-0"
-                style={{ height: LANE_H }}
-                title={ACTION_DISPLAY_NAMES[type] || type}
-              >
-                <ActionIcon type={type} size={13} className={ACTION_TEXT_COLORS[type] || "text-zinc-500"} />
-              </div>
+          ))}
+        </div>
+
+        {/* Timeline content */}
+        <div
+          ref={timelineInnerRef}
+          className="relative flex-1"
+          style={{ height: totalContentHeight, minWidth: containerWidth }}
+          onMouseDown={handleMouseDown}
+        >
+          {/* ─── Time ruler ─── */}
+          <div className="absolute top-0 left-0 right-0 border-b border-zinc-800/30" style={{ height: RULER_H }}>
+            {Array.from({ length: Math.ceil(duration / tickInterval) + 1 }, (_, i) => {
+              const t = i * tickInterval;
+              if (t > duration) return null;
+              const isMajor = t % majorTickInterval === 0;
+              return (
+                <div
+                  key={t}
+                  className="absolute top-0"
+                  style={{ left: t * pxPerSec }}
+                >
+                  <div
+                    className={isMajor ? "border-l border-zinc-600/50" : "border-l border-zinc-800/60"}
+                    style={{ height: isMajor ? RULER_H : RULER_H * 0.5, marginTop: isMajor ? 0 : RULER_H * 0.5 }}
+                  />
+                  {isMajor && (
+                    <span className="absolute top-0.5 left-1 text-[9px] text-zinc-500 whitespace-nowrap">
+                      {formatTime(t)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ─── Filmstrip track ─── */}
+          <div
+            className="absolute left-0 right-0 border-b border-zinc-800/30"
+            style={{ top: RULER_H, height: FILMSTRIP_H }}
+          >
+            {thumbPositions.map(({ path, left, width }, i) => (
+              <img
+                key={i}
+                src={assetUrl(path)}
+                alt=""
+                className="absolute top-0 h-full object-cover opacity-80 rounded-sm"
+                style={{ left, width }}
+                draggable={false}
+              />
             ))}
           </div>
 
-          {/* Timeline content */}
-          <div
-            ref={timelineInnerRef}
-            className="relative flex-1 flex flex-col"
-            style={{ width: Math.max(totalWidth, containerWidth) }}
-            onMouseDown={handleMouseDown}
-          >
-            {/* ─── Time ruler (sticky top) ─── */}
-            <div className="sticky top-0 border-b border-zinc-800/30 bg-zinc-950 z-20 shrink-0" style={{ height: RULER_H }}>
-              {Array.from({ length: Math.ceil(duration / tickInterval) + 1 }, (_, i) => {
-                const t = i * tickInterval;
-                if (t > duration) return null;
-                const isMajor = t % majorTickInterval === 0;
-                return (
-                  <div
-                    key={t}
-                    className="absolute top-0"
-                    style={{ left: t * pxPerSec }}
-                  >
-                    <div
-                      className={isMajor ? "border-l border-zinc-600/50" : "border-l border-zinc-800/60"}
-                      style={{ height: isMajor ? RULER_H : RULER_H * 0.5, marginTop: isMajor ? 0 : RULER_H * 0.5 }}
-                    />
-                    {isMajor && (
-                      <span className="absolute top-0.5 left-1 text-[9px] text-zinc-500 whitespace-nowrap">
-                        {formatTime(t)}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+          {/* ─── Action lanes ─── */}
+          {activeLanes.map((laneType, laneIdx) => {
+            const laneTop = RULER_H + FILMSTRIP_H + laneIdx * LANE_H;
+            const laneActions = actions.filter((a) => a.type === laneType);
 
-            {/* ─── Filmstrip track (sticky below ruler) ─── */}
-            <div
-              className="sticky border-b border-zinc-800/30 bg-zinc-950 z-10 shrink-0 overflow-hidden"
-              style={{ top: RULER_H, height: FILMSTRIP_H }}
-            >
-              {thumbPositions.map(({ path, left, width }, i) => (
-                <img
-                  key={i}
-                  src={assetUrl(path)}
-                  alt=""
-                  className="absolute top-0 h-full object-cover opacity-80 rounded-sm"
-                  style={{ left, width }}
-                  draggable={false}
-                />
-              ))}
-            </div>
-
-            {/* ─── Action lanes (flow layout) ─── */}
-            <div className="relative flex-1">
-              {activeLanes.map((laneType, laneIdx) => {
-                const laneActions = actions.filter((a) => a.type === laneType);
-
-                return (
-                  <div
-                    key={laneType}
-                    className="relative border-b border-zinc-800/30"
-                    style={{ height: LANE_H }}
-                  >
-                    {laneActions.map((action) => {
-                      const left = action.timestamp * pxPerSec;
-                      const endTime = getActionEndTime(action);
-                      const width = Math.max((endTime - action.timestamp) * pxPerSec, 22);
-                      const isSelected = action.id === selectedActionId;
-
-                      return (
-                        <button
-                          key={action.id}
-                          className={`absolute flex items-center gap-1 px-1.5 rounded-md cursor-pointer transition-all overflow-hidden
-                            ${ACTION_BG_COLORS[laneType] || "bg-zinc-500/20"}
-                            ${isSelected
-                              ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-sm`
-                              : "border border-transparent hover:brightness-110"
-                            }`}
-                          style={{ left, width, top: 3, height: LANE_H - 6 }}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedAction(action.id);
-                            setPlayhead(action.timestamp);
-                          }}
-                          title={`${ACTION_DISPLAY_NAMES[laneType] || laneType} @ ${formatTime(action.timestamp)}`}
-                        >
-                          <ActionIcon
-                            type={laneType}
-                            size={10}
-                            className={`shrink-0 ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}
-                          />
-                          {width > 50 && (
-                            <span className={`text-[9px] font-medium truncate ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}>
-                              {ACTION_DISPLAY_NAMES[laneType]}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-
-              {/* ─── Drag selection highlight ─── */}
-              {selectionRange && (
-                <div
-                  className="absolute top-0 bg-violet-500/15 border-l border-r border-violet-400/40 pointer-events-none"
-                  style={{ left: selectionRange.left, width: selectionRange.width, height: activeLanes.length * LANE_H }}
-                />
-              )}
-            </div>
-
-            {/* ─── Playhead (spans full height) ─── */}
-            <div
-              className="absolute top-0 pointer-events-none z-30"
-              style={{ left: playheadTime * pxPerSec, height: RULER_H + FILMSTRIP_H + activeLanes.length * LANE_H }}
-            >
-              {/* Triangle handle */}
+            return (
               <div
-                className="absolute -translate-x-1.25"
-                style={{ top: RULER_H - 8 }}
+                key={laneType}
+                className="absolute left-0 right-0 border-b border-zinc-800/30"
+                style={{ top: laneTop, height: LANE_H }}
               >
-                <svg width="10" height="8" viewBox="0 0 10 8">
-                  <polygon points="0,0 10,0 5,8" fill="#ef4444" />
-                </svg>
+                {laneActions.map((action) => {
+                  const left = action.timestamp * pxPerSec;
+                  const endTime = getActionEndTime(action);
+                  const width = Math.max((endTime - action.timestamp) * pxPerSec, 22);
+                  const isSelected = action.id === selectedActionId;
+
+                  return (
+                    <button
+                      key={action.id}
+                      className={`absolute flex items-center gap-1 px-1.5 rounded-md cursor-pointer transition-all overflow-hidden
+                        ${ACTION_BG_COLORS[laneType] || "bg-zinc-500/20"}
+                        ${isSelected
+                          ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-sm`
+                          : "border border-transparent hover:brightness-110"
+                        }`}
+                      style={{ left, width, top: 3, height: LANE_H - 6 }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedAction(action.id);
+                        setPlayhead(action.timestamp);
+                      }}
+                      title={`${ACTION_DISPLAY_NAMES[laneType] || laneType} @ ${formatTime(action.timestamp)}`}
+                    >
+                      <ActionIcon
+                        type={laneType}
+                        size={10}
+                        className={`shrink-0 ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}
+                      />
+                      {width > 50 && (
+                        <span className={`text-[9px] font-medium truncate ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}>
+                          {ACTION_DISPLAY_NAMES[laneType]}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-              {/* Vertical line */}
-              <div
-                className="absolute top-0 w-px bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]"
-                style={{ left: 0, height: RULER_H + FILMSTRIP_H + activeLanes.length * LANE_H }}
-              />
+            );
+          })}
+
+          {/* ─── Drag selection highlight ─── */}
+          {selectionRange && (
+            <div
+              className="absolute bg-violet-500/15 border-l border-r border-violet-400/40 pointer-events-none"
+              style={{ left: selectionRange.left, width: selectionRange.width, top: RULER_H + FILMSTRIP_H, height: activeLanes.length * LANE_H }}
+            />
+          )}
+
+          {/* ─── Playhead ─── */}
+          <div
+            className="absolute top-0 pointer-events-none z-30"
+            style={{ left: playheadTime * pxPerSec, height: totalContentHeight }}
+          >
+            {/* Triangle handle */}
+            <div
+              className="absolute -translate-x-1.25"
+              style={{ top: RULER_H - 8 }}
+            >
+              <svg width="10" height="8" viewBox="0 0 10 8">
+                <polygon points="0,0 10,0 5,8" fill="#ef4444" />
+              </svg>
             </div>
+            {/* Vertical line */}
+            <div
+              className="absolute top-0 w-px bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]"
+              style={{ left: 0, height: totalContentHeight }}
+            />
           </div>
         </div>
       </div>
