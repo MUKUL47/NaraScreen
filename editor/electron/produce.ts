@@ -1,4 +1,3 @@
-import type { BrowserWindow } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import {
@@ -400,7 +399,7 @@ function computeVersionLabel(videoDir: string): string {
 
 export async function produceTimelineVideo(
   sessionDir: string,
-  win: BrowserWindow | null,
+  emit: (msg: string) => void,
   version?: string,
 ): Promise<string> {
   // ─── Setup ───
@@ -411,8 +410,6 @@ export async function produceTimelineVideo(
   const tempDir = path.join(videoDir, "temp");
   fs.mkdirSync(videoDir, { recursive: true });
   fs.mkdirSync(tempDir, { recursive: true });
-
-  const emit = (msg: string) => win?.webContents.send("produce-progress", msg);
   const totalDuration = probeDuration(recordingPath);
   const res = probeResolution(recordingPath);
   emit(`Recording: ${res.width}x${res.height}, ${totalDuration.toFixed(1)}s`);

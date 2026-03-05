@@ -194,7 +194,62 @@ export function getScreenSources(): { id: string; name: string; x: number; y: nu
   }));
 }
 
-/** Start recording the screen using ffmpeg x11grab */
+/** Build platform-specific ffmpeg input args for screen capture */
+function buildScreenGrabArgs(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): string[] {
+  const platform = process.platform;
+
+  if (platform === "linux") {
+    const display = process.env.DISPLAY || ":0";
+    return [
+      "-f", "x11grab",
+      "-framerate", "30",
+      "-video_size", `${w}x${h}`,
+      "-i", `${display}+${x},${y}`,
+    ];
+  }
+
+  if (platform === "darwin") {
+    // avfoundation: device index "1" is typically the screen
+    // Use -capture_cursor 1 to include cursor, -framerate for fps
+    // crop_region is offset_x:offset_y:width:height (avfoundation >= ffmpeg 4.4)
+    return [
+      "-f", "avfoundation",
+      "-framerate", "30",
+      "-capture_cursor", "1",
+      "-i", "1:none",
+      "-vf", `crop=${w}:${h}:${x}:${y}`,
+    ];
+  }
+
+  if (platform === "win32") {
+    // gdigrab: capture desktop with offset
+    return [
+      "-f", "gdigrab",
+      "-framerate", "30",
+      "-offset_x", String(x),
+      "-offset_y", String(y),
+      "-video_size", `${w}x${h}`,
+      "-i", "desktop",
+    ];
+  }
+
+  // Fallback: try x11grab
+  console.warn(`[screen-rec] Unknown platform "${platform}", falling back to x11grab`);
+  const display = process.env.DISPLAY || ":0";
+  return [
+    "-f", "x11grab",
+    "-framerate", "30",
+    "-video_size", `${w}x${h}`,
+    "-i", `${display}+${x},${y}`,
+  ];
+}
+
+/** Start recording the screen using ffmpeg (cross-platform) */
 export function startScreenRecording(
   sessionDir: string,
   mainWindow: BrowserWindow | null,
@@ -230,16 +285,14 @@ export function startScreenRecording(
   captureW = captureW & ~1;
   captureH = captureH & ~1;
 
-  const display = process.env.DISPLAY || ":0";
+  // Build platform-specific ffmpeg input args
+  const inputArgs = buildScreenGrabArgs(captureX, captureY, captureW, captureH);
 
-  console.log(`[screen-rec] Starting screen recording: ${display}+${captureX},${captureY} ${captureW}x${captureH}`);
+  console.log(`[screen-rec] Starting screen recording on ${process.platform}: ${captureW}x${captureH} at (${captureX},${captureY})`);
 
   screenRecordProcess = spawn("ffmpeg", [
     "-y",
-    "-f", "x11grab",
-    "-framerate", "30",
-    "-video_size", `${captureW}x${captureH}`,
-    "-i", `${display}+${captureX},${captureY}`,
+    ...inputArgs,
     "-c:v", "libx264",
     "-preset", "ultrafast",
     "-pix_fmt", "yuv420p",
@@ -277,13 +330,18 @@ export async function stopScreenRecording(): Promise<{ videoPath: string; durati
     screenTickInterval = null;
   }
 
-  // Send 'q' to ffmpeg for graceful stop, then SIGINT as backup
+  // Send 'q' to ffmpeg for graceful stop, then force-kill as backup
   if (screenRecordProcess) {
     screenRecordProcess.stdin?.write("q");
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        screenRecordProcess?.kill("SIGINT");
+        // SIGINT not available on Windows, use kill() which sends SIGTERM
+        if (process.platform === "win32") {
+          screenRecordProcess?.kill();
+        } else {
+          screenRecordProcess?.kill("SIGINT");
+        }
         setTimeout(() => {
           screenRecordProcess?.kill("SIGKILL");
           resolve();

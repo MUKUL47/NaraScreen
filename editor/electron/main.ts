@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { Worker } from "worker_threads";
 import {
   getScreenSources,
   startScreenRecording,
@@ -9,7 +10,6 @@ import {
 } from "./capture";
 import { generateTTSViaKokoro, generateTTSViaCurl, KOKORO_PYTHON } from "./tts";
 import { probeDuration, generateFilmstrip } from "./ffmpeg";
-import { produceTimelineVideo } from "./produce";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -185,13 +185,37 @@ ipcMain.handle("video:getDuration", async (_event, videoPath: string) => {
   return d;
 });
 
+/** Run produceTimelineVideo in a worker thread to avoid blocking the main process */
+function runProduceWorker(sessionDir: string, version?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(__dirname, "produce-worker.js");
+    const worker = new Worker(workerPath, {
+      workerData: { sessionDir, version },
+    });
+
+    worker.on("message", (msg: { type: string; msg?: string; finalPath?: string; message?: string }) => {
+      if (msg.type === "progress") {
+        mainWindow?.webContents.send("produce-progress", msg.msg);
+      } else if (msg.type === "done") {
+        resolve(msg.finalPath!);
+      } else if (msg.type === "error") {
+        reject(new Error(msg.message || "Production failed"));
+      }
+    });
+
+    worker.on("error", (err) => reject(err));
+    worker.on("exit", (code) => {
+      if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+    });
+  });
+}
+
 ipcMain.handle("video:produce", async (_event, sessionDir: string, version?: string) => {
-  return produceTimelineVideo(sessionDir, mainWindow, version);
+  return runProduceWorker(sessionDir, version);
 });
 
 ipcMain.handle("video:preview", async (_event, sessionDir: string) => {
-  // Produce to a fixed "preview" name, then open with system player
-  const finalPath = await produceTimelineVideo(sessionDir, mainWindow, "preview");
+  const finalPath = await runProduceWorker(sessionDir, "preview");
   shell.openPath(finalPath);
   return finalPath;
 });
