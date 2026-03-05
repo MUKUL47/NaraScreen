@@ -47,6 +47,21 @@ export default defineConfig({
           },
         },
       },
+      {
+        entry: "electron/produce-worker.ts",
+        vite: {
+          build: {
+            outDir: "dist-electron",
+            rollupOptions: {
+              external: ["electron"],
+              output: {
+                format: "cjs",
+                entryFileNames: "[name].js",
+              },
+            },
+          },
+        },
+      },
     ]),
     renderer(),
   ],
