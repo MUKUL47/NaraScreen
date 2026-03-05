@@ -4,7 +4,7 @@ import { assetUrl } from "../lib/fileOps";
 import { formatTime } from "../lib/formatTime";
 import { ACTION_BG_COLORS, ACTION_BORDER_COLORS, ACTION_TEXT_COLORS, ACTION_DISPLAY_NAMES } from "../lib/constants";
 import { ActionIcon, PlusIcon } from "./ActionIcon";
-import { Minus, Plus, Video } from "lucide-react";
+import { Video } from "lucide-react";
 import type { TimelineAction, ActionType } from "../types";
 
 /** Range-based action types that support drag-to-select */
@@ -47,7 +47,6 @@ export function Timeline() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
-  const [zoom, setZoom] = useState(1);
   const [showAddMenu, setShowAddMenu] = useState(false);
 
   // Drag-to-select state
@@ -60,7 +59,7 @@ export function Timeline() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const duration = project?.recordingDuration ?? 0;
-  const pxPerSec = useMemo(() => Math.max(10, (containerWidth / Math.max(duration, 1)) * zoom), [containerWidth, duration, zoom]);
+  const pxPerSec = useMemo(() => Math.max(10, containerWidth / Math.max(duration, 1)), [containerWidth, duration]);
   const totalWidth = duration * pxPerSec;
 
   // Active lanes — only types with at least one action
@@ -164,18 +163,6 @@ export function Timeline() {
     setShowRangeMenu(false);
   }, []);
 
-  // Zoom with scroll wheel
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        setZoom((z) => Math.max(0.1, Math.min(10, z * delta)));
-      }
-    },
-    [],
-  );
-
   // Add action at playhead position
   const handleAddAction = useCallback(
     (type: ActionType) => {
@@ -232,7 +219,6 @@ export function Timeline() {
     <div
       ref={containerRef}
       className="bg-zinc-950 border-t border-zinc-700/40 flex flex-col select-none relative h-full"
-      onWheel={handleWheel}
     >
       <style dangerouslySetInnerHTML={{ __html: `
         .timeline-scroll::-webkit-scrollbar { height: 10px !important; }
@@ -275,25 +261,6 @@ export function Timeline() {
             {formatTime(selectionRange.startTime)} — {formatTime(selectionRange.endTime)}
           </span>
         )}
-
-        {/* Zoom controls — outside the timeline mouseDown area, use onPointerDown to avoid drag interference */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); setZoom((z) => Math.max(0.1, +(z * 0.8).toFixed(2))); }}
-            className="w-6 h-6 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
-          >
-            <Minus size={12} strokeWidth={2.5} />
-          </button>
-          <span className="text-[9px] text-zinc-500 font-mono w-8 text-center">{Math.round(zoom * 100)}%</span>
-          <button
-            type="button"
-            onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); setZoom((z) => Math.min(10, +(z * 1.2).toFixed(2))); }}
-            className="w-6 h-6 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
-          >
-            <Plus size={12} strokeWidth={2.5} />
-          </button>
-        </div>
 
         <span className="text-[11px] text-zinc-400 font-mono tabular-nums">
           {formatTime(playheadTime)} / {formatTime(duration)}
