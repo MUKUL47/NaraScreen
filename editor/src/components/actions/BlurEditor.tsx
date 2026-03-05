@@ -10,6 +10,7 @@ interface BlurEditorProps {
 export function BlurEditor({ action, onUpdate }: BlurEditorProps) {
   const drawingZoom = useProjectStore((s) => s.drawingZoom);
   const setDrawingZoom = useProjectStore((s) => s.setDrawingZoom);
+  const duration = useProjectStore((s) => s.project?.recordingDuration ?? 999);
 
   const rects = action.blurRects ?? [];
 
@@ -88,7 +89,7 @@ export function BlurEditor({ action, onUpdate }: BlurEditorProps) {
           value={action.blurDuration ?? 3}
           onChange={(e) => onUpdate({ blurDuration: parseFloat(e.target.value) || 3 })}
           min={0.5}
-          max={30}
+          max={duration}
           step={0.5}
           className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-400"
         />

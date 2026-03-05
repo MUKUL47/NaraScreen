@@ -13,6 +13,13 @@ export type ActionType =
   | "blur"
   | "mute";
 
+/** A text panel with position, text, and styling */
+export interface CalloutPanel {
+  text: string;
+  rect: [number, number, number, number]; // [x, y, w, h] in video coords
+  fontSize: number; // font size in pixels (default 24)
+}
+
 /** A keyframe action placed on the recording timeline */
 export interface TimelineAction {
   id: string;
@@ -62,6 +69,8 @@ export interface TimelineAction {
   calloutStyle?: "label" | "arrow" | "step-counter" | "lower-third";
   calloutStep?: number; // for step-counter auto-increment
   calloutDuration?: number; // how long to display (seconds)
+  /** Multiple text panels with position, text, and font size */
+  calloutPanels?: CalloutPanel[];
 
   // Blur: apply blur to one or more regions
   blurRects?: [number, number, number, number][]; // array of [x, y, w, h] in video coords

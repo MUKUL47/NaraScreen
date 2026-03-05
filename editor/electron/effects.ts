@@ -1,8 +1,7 @@
-import { spawnSync } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { FFMPEG_PATH } from "./bin-paths";
 import {
+  ffmpegSync,
   probeDuration,
   extractFrame,
   cutClip,
@@ -105,7 +104,7 @@ function buildPlainFreeze(
   args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
   if (narration) args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(freezePath);
-  spawnSync(FFMPEG_PATH, args);
+  ffmpegSync(args);
 
   state.segIdx++;
   return { paths: [freezePath] };
@@ -151,7 +150,7 @@ function buildZoomEffect(
     `x='${xExpr}'`, `y='${yExpr}'`,
     `d=${inFrames}`, `s=${outW}x${outH}`, `fps=30`,
   ].join(":");
-  spawnSync(FFMPEG_PATH, ["-y", "-i", framePath, "-vf", zpIn, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p", zoomInPath]);
+  ffmpegSync(["-y", "-i", framePath, "-vf", zpIn, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p", zoomInPath]);
   paths.push(zoomInPath);
   state.segIdx++;
 
@@ -163,14 +162,14 @@ function buildZoomEffect(
   holdArgs.push("-vf", zpHold, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
   if (narration) holdArgs.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   holdArgs.push(holdPath);
-  spawnSync(FFMPEG_PATH, holdArgs);
+  ffmpegSync(holdArgs);
   paths.push(holdPath);
   state.segIdx++;
 
   // Zoom-out
   const zoomOutPath = path.join(ctx.tempDir, `zoomout_${String(state.segIdx).padStart(3, "0")}.mp4`);
   const zpOut = [`zoompan=z='1+(${maxZ.toFixed(4)}-1)*${ssReverse}'`, `x='${xExpr}'`, `y='${yExpr}'`, `d=${inFrames}`, `s=${outW}x${outH}`, `fps=30`].join(":");
-  spawnSync(FFMPEG_PATH, ["-y", "-i", framePath, "-vf", zpOut, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p", zoomOutPath]);
+  ffmpegSync(["-y", "-i", framePath, "-vf", zpOut, "-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p", zoomOutPath]);
   paths.push(zoomOutPath);
   state.segIdx++;
 
@@ -210,7 +209,7 @@ function buildFreezeSpotlight(
   args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
   if (narration) args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(spotPath);
-  spawnSync(FFMPEG_PATH, args);
+  ffmpegSync(args);
 
   state.segIdx++;
   return { paths: [spotPath] };
@@ -258,7 +257,7 @@ function buildMovingSpotlight(
     args.push("-c:a", "aac", "-b:a", "192k");
   }
   args.push(spotPath);
-  spawnSync(FFMPEG_PATH, args);
+  ffmpegSync(args);
 
   state.segIdx++;
   return { paths: [spotPath] };
@@ -316,7 +315,7 @@ function buildFreezeCallout(
   const vf = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,${drawtext}`;
   const callPath = path.join(ctx.tempDir, `call_${String(state.segIdx).padStart(3, "0")}.mp4`);
 
-  spawnSync(FFMPEG_PATH, [
+  ffmpegSync([
     "-y", "-loop", "1", "-framerate", "30", "-i", framePath,
     "-t", callDur.toFixed(3), "-r", "30",
     "-vf", vf,
@@ -360,7 +359,7 @@ function buildMovingCallout(
     callArgs.push("-c:a", "aac", "-b:a", "192k");
   }
   callArgs.push(callPath);
-  spawnSync(FFMPEG_PATH, callArgs);
+  ffmpegSync(callArgs);
 
   // Overlay narration audio if needed
   if (narration) {
@@ -407,7 +406,7 @@ function buildMovingNarrate(
 
 /** Overlay audio onto a video clip */
 function overlayAudio(videoPath: string, audioPath: string, outputPath: string): boolean {
-  spawnSync(FFMPEG_PATH, [
+  ffmpegSync([
     "-y", "-i", videoPath, "-i", audioPath,
     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
     outputPath,
@@ -494,7 +493,7 @@ ${dialogues.join("\n")}
 
 /** Burn subtitles into a video segment */
 function burnSubtitles(videoPath: string, subtitlePath: string, outputPath: string): boolean {
-  const result = spawnSync(FFMPEG_PATH, [
+  const result = ffmpegSync([
     "-y", "-i", videoPath,
     "-vf", `ass=${subtitlePath}`,
     "-c:v", "libx264", "-preset", "fast", "-crf", "0",
@@ -570,7 +569,7 @@ function buildFreezeBlur(
   args.push("-c:v", "libx264", "-preset", "fast", "-crf", "0", "-pix_fmt", "yuv420p");
   if (narration) args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(blurPath);
-  spawnSync(FFMPEG_PATH, args);
+  ffmpegSync(args);
 
   state.segIdx++;
   return { paths: [blurPath] };
@@ -618,7 +617,7 @@ function buildMovingBlur(
     args.push("-c:a", "aac", "-b:a", "192k");
   }
   args.push(blurPath);
-  spawnSync(FFMPEG_PATH, args);
+  ffmpegSync(args);
 
   state.segIdx++;
   return { paths: [blurPath] };
@@ -750,7 +749,7 @@ export function cutSpeedClip(
   }
   args.push(outputPath);
 
-  spawnSync(FFMPEG_PATH, args);
+  ffmpegSync(args);
 }
 
 /** Mix background music into the final video */
@@ -783,7 +782,7 @@ export function mixBackgroundMusic(
     volumeFilter = `volume=${volume},${enableParts.join(",")}`;
   }
 
-  spawnSync(FFMPEG_PATH, [
+  ffmpegSync([
     "-y",
     "-i", videoPath,
     "-i", musicPath,

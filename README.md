@@ -65,10 +65,14 @@ Record Screen ──> Visual Timeline Editor ──> Produce MP4
 ## Features
 
 ### Timeline Editor
-- **Visual Filmstrip** — Thumbnail strip of your recording for easy navigation
-- **Playhead Scrubbing** — Click anywhere to seek, frame-accurate positioning
-- **Drag-to-Select** — Drag a range on the timeline to quickly add range-based actions
-- **Zoom Controls** — Ctrl+scroll to zoom the timeline in/out
+- **Multi-lane timeline** — Per-action-type horizontal lanes with colored pill clips
+- **Visual filmstrip** — Thumbnail strip of your recording for easy navigation
+- **Playhead scrubbing** — Click anywhere to seek, frame-accurate positioning
+- **Drag-to-select** — Drag a range on the timeline to quickly add range-based actions
+- **Drag-to-move** — Grab any action pill and drag it to reposition on the timeline
+- **Drag edge handles** — Hover pill edges to resize action duration directly on the timeline
+- **Snap-to-playhead** — Actions snap to the playhead, timeline boundaries, and other action edges when dragging (yellow guide line)
+- **Adaptive time ruler** — Tick intervals adjust automatically based on timeline density
 
 ### Action Types
 
@@ -78,9 +82,24 @@ Record Screen ──> Visual Timeline Editor ──> Produce MP4
 | **Zoom** | Draw a region on the video, smooth animated zoom in → hold → zoom out |
 | **Pause** | Freeze the video frame for emphasis |
 | **Spotlight** | Highlight a region, dim everything else with adjustable opacity |
+| **Blur** | Blur one or multiple regions to hide sensitive data |
+| **Mute** | Strip audio from a specific time range |
 | **Speed Ramp** | 0.25x to 4x playback speed for any section |
+| **Skip/Cut** | Remove a section of the recording entirely |
 | **Text Callout** | Labels, step counters, lower-third banners overlaid on the video |
 | **Background Music** | Ambient audio track that auto-ducks during narration |
+
+### Video Player
+- **Playback speed control** — Cycle through 0.5x / 1x / 1.5x / 2x
+- **Frame-by-frame seeking** — Arrow keys for 1s, Shift+arrows for 5s jumps
+- **Draw regions** — Click and drag on the video to define zoom, spotlight, blur, or callout regions
+
+### Editing Workflow
+- **Duplicate action** — Press D to clone any action (offset by 1 second)
+- **Split action at playhead** — Press B to split range-based actions into two parts
+- **Undo/Redo** — 50-level history (Ctrl+Z / Ctrl+Shift+Z)
+- **Auto-save** — Debounced 3-second save after any change, never lose work
+- **Quick-add shortcuts** — Number keys 1-9 to instantly add actions at the playhead
 
 ### Narration
 - **62 TTS voices** across **9 languages** via Kokoro
@@ -93,7 +112,24 @@ Record Screen ──> Visual Timeline Editor ──> Produce MP4
 ### Production
 - **One-click produce** — Renders final MP4 with all effects baked in
 - **Versioned output** — Auto-saves as `final_v1.mp4`, `final_v2.mp4`, etc.
+- **Live production logs** — Real-time progress logs in the loading overlay
 - **FFmpeg pipeline** — zoompan, setpts, drawtext, concat, amix, ASS subtitles
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| Space | Play / Pause |
+| Left / Right | Seek -1s / +1s |
+| Shift + Left / Right | Seek -5s / +5s |
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z / Ctrl+Y | Redo |
+| Ctrl+S | Save |
+| Delete / Backspace | Delete selected action |
+| D | Duplicate selected action |
+| B | Split selected action at playhead |
+| Escape | Deselect action |
+| 1-9 | Quick-add action at playhead (1=Zoom, 2=Narrate, 3=Spotlight, 4=Blur, 5=Mute, 6=Speed, 7=Callout, 8=Music, 9=Skip) |
 
 ---
 

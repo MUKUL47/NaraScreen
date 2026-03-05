@@ -58,6 +58,14 @@ function App() {
   const overlayRects =
     selectedAction?.type === "blur" && selectedAction.blurRects?.length
       ? selectedAction.blurRects
+      : selectedAction?.type === "callout" && selectedAction.calloutPanels?.length
+        ? selectedAction.calloutPanels.map((p) => p.rect)
+        : undefined;
+
+  // Callout panels for text preview overlay
+  const calloutPanels =
+    selectedAction?.type === "callout" && selectedAction.calloutPanels?.length
+      ? selectedAction.calloutPanels
       : undefined;
 
   const handleZoomDrawn = useCallback(
@@ -74,8 +82,13 @@ function App() {
         // Stay in drawing mode so user can add more rects
         return;
       } else if (selectedAction.type === "callout") {
-        // For callout, use the top-left corner as position
-        updateAction(selectedActionId, { calloutPosition: [rect[0], rect[1]] });
+        // Append new text panel to calloutPanels
+        const existing = selectedAction.calloutPanels ?? [];
+        updateAction(selectedActionId, {
+          calloutPanels: [...existing, { text: "", rect, fontSize: 24 }],
+        });
+        // Stay in drawing mode so user can add more panels
+        return;
       }
       setDrawingZoom(false);
     },
@@ -130,6 +143,7 @@ function App() {
                   onZoomDrawn={handleZoomDrawn}
                   zoomRect={zoomRect}
                   overlayRects={overlayRects}
+                  calloutPanels={calloutPanels}
                 />
               </div>
 

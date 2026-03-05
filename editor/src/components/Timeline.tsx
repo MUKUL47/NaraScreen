@@ -30,10 +30,30 @@ function getActionEndTime(action: TimelineAction): number {
   }
 }
 
+/** Update the end time of an action given a new end time */
+function setActionEndTime(action: TimelineAction, newEnd: number): Partial<TimelineAction> {
+  const dur = Math.max(0.5, newEnd - action.timestamp);
+  switch (action.type) {
+    case "spotlight": return { spotlightDuration: dur };
+    case "blur": return { blurDuration: dur };
+    case "mute": return { muteEndTimestamp: newEnd };
+    case "speed": return { speedEndTimestamp: newEnd };
+    case "skip": return { skipEndTimestamp: newEnd };
+    case "callout": return { calloutDuration: dur };
+    case "music": return { musicEndTimestamp: newEnd };
+    case "zoom": return { zoomHold: Math.max(0, dur - (action.zoomDuration ?? 1)) };
+    default: return {};
+  }
+}
+
 const RULER_H = 24;
 const FILMSTRIP_H = 48;
 const LANE_H = 28;
 const SIDEBAR_W = 44;
+const SNAP_THRESHOLD_PX = 6;
+const EDGE_HANDLE_W = 5;
+
+type DragMode = "move" | "resize-left" | "resize-right" | null;
 
 export function Timeline() {
   const project = useProjectStore((s) => s.project);
@@ -44,6 +64,7 @@ export function Timeline() {
   const setPlayhead = useProjectStore((s) => s.setPlayhead);
   const setSelectedAction = useProjectStore((s) => s.setSelectedAction);
   const addAction = useProjectStore((s) => s.addAction);
+  const updateAction = useProjectStore((s) => s.updateAction);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
@@ -58,6 +79,16 @@ export function Timeline() {
   const timelineInnerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // Pill drag state (move / resize)
+  const [pillDrag, setPillDrag] = useState<{
+    actionId: string;
+    mode: DragMode;
+    startClientX: number;
+    origTimestamp: number;
+    origEndTime: number;
+  } | null>(null);
+  const [snapLine, setSnapLine] = useState<number | null>(null);
+
   const duration = project?.recordingDuration ?? 0;
   const pxPerSec = useMemo(() => Math.max(10, containerWidth / Math.max(duration, 1)), [containerWidth, duration]);
   const totalWidth = duration * pxPerSec;
@@ -69,6 +100,37 @@ export function Timeline() {
   }, [actions]);
 
   const totalContentHeight = RULER_H + FILMSTRIP_H + activeLanes.length * LANE_H;
+
+  // Snap targets: playhead + all action start/end times (excluding the dragged action)
+  const snapTargets = useMemo(() => {
+    const targets = new Set<number>();
+    targets.add(playheadTime);
+    targets.add(0);
+    targets.add(duration);
+    for (const a of actions) {
+      if (pillDrag && a.id === pillDrag.actionId) continue;
+      targets.add(a.timestamp);
+      targets.add(getActionEndTime(a));
+    }
+    return Array.from(targets);
+  }, [actions, playheadTime, duration, pillDrag]);
+
+  const snapTime = useCallback(
+    (time: number): number => {
+      const thresholdSec = SNAP_THRESHOLD_PX / pxPerSec;
+      let closest = time;
+      let minDist = thresholdSec;
+      for (const target of snapTargets) {
+        const dist = Math.abs(time - target);
+        if (dist < minDist) {
+          minDist = dist;
+          closest = target;
+        }
+      }
+      return closest;
+    },
+    [snapTargets, pxPerSec],
+  );
 
   // Observe container width
   useEffect(() => {
@@ -93,7 +155,7 @@ export function Timeline() {
     [pxPerSec, duration],
   );
 
-  // Mouse down — start potential drag
+  // Mouse down on empty timeline — start potential drag-to-select
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
@@ -106,7 +168,7 @@ export function Timeline() {
     [clientXToTime],
   );
 
-  // Document-level drag listeners
+  // Document-level drag listeners for range selection
   useEffect(() => {
     if (dragStart === null) return;
 
@@ -123,7 +185,6 @@ export function Timeline() {
     const onMouseUp = (e: MouseEvent) => {
       const time = clientXToTime(e.clientX);
       if (isDragging.current && dragEnd !== null) {
-        // Freeze the selection range and detach drag listeners
         setDragStart(null);
         setFinalRange([Math.min(dragStart, dragEnd), Math.max(dragStart, dragEnd)]);
         setShowRangeMenu(true);
@@ -143,6 +204,83 @@ export function Timeline() {
       document.removeEventListener("mouseup", onMouseUp);
     };
   }, [dragStart, dragEnd, clientXToTime, setPlayhead, setSelectedAction]);
+
+  // Document-level drag listeners for pill move/resize
+  useEffect(() => {
+    if (!pillDrag) return;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const deltaTime = (e.clientX - pillDrag.startClientX) / pxPerSec;
+
+      if (pillDrag.mode === "move") {
+        const rawTime = Math.max(0, Math.min(duration, pillDrag.origTimestamp + deltaTime));
+        const snapped = snapTime(rawTime);
+        const actionDuration = pillDrag.origEndTime - pillDrag.origTimestamp;
+        // Also try snapping the end
+        const rawEnd = rawTime + actionDuration;
+        const snappedEnd = snapTime(rawEnd);
+        let finalTime: number;
+        if (Math.abs(snapped - rawTime) <= Math.abs(snappedEnd - rawEnd)) {
+          finalTime = snapped;
+          setSnapLine(snapped);
+        } else {
+          finalTime = snappedEnd - actionDuration;
+          setSnapLine(snappedEnd);
+        }
+        // Clamp
+        finalTime = Math.max(0, Math.min(duration - actionDuration, finalTime));
+        updateAction(pillDrag.actionId, { timestamp: finalTime });
+      } else if (pillDrag.mode === "resize-left") {
+        const rawTime = Math.max(0, Math.min(pillDrag.origEndTime - 0.5, pillDrag.origTimestamp + deltaTime));
+        const snapped = snapTime(rawTime);
+        setSnapLine(snapped !== rawTime ? snapped : null);
+        const newDuration = pillDrag.origEndTime - snapped;
+        const endUpdate = setActionEndTime(
+          actions.find((a) => a.id === pillDrag.actionId)!,
+          pillDrag.origEndTime,
+        );
+        updateAction(pillDrag.actionId, { timestamp: snapped, ...endUpdate });
+      } else if (pillDrag.mode === "resize-right") {
+        const rawEnd = Math.max(pillDrag.origTimestamp + 0.5, Math.min(duration, pillDrag.origEndTime + deltaTime));
+        const snapped = snapTime(rawEnd);
+        setSnapLine(snapped !== rawEnd ? snapped : null);
+        const action = actions.find((a) => a.id === pillDrag.actionId);
+        if (action) {
+          updateAction(pillDrag.actionId, setActionEndTime(action, snapped));
+        }
+      }
+    };
+
+    const onMouseUp = () => {
+      setPillDrag(null);
+      setSnapLine(null);
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [pillDrag, pxPerSec, duration, snapTime, updateAction, actions]);
+
+  // Start pill drag
+  const handlePillMouseDown = useCallback(
+    (e: React.MouseEvent, action: TimelineAction, mode: DragMode) => {
+      e.stopPropagation();
+      e.preventDefault();
+      setSelectedAction(action.id);
+      setPlayhead(action.timestamp);
+      setPillDrag({
+        actionId: action.id,
+        mode,
+        startClientX: e.clientX,
+        origTimestamp: action.timestamp,
+        origEndTime: getActionEndTime(action),
+      });
+    },
+    [setSelectedAction, setPlayhead],
+  );
 
   // Add range-based action from drag selection
   const handleAddRangeAction = useCallback(
@@ -215,6 +353,10 @@ export function Timeline() {
     return 30;
   }, [tickInterval]);
 
+  // Check if action type supports edge resizing
+  const isResizable = (type: ActionType) =>
+    ["spotlight", "blur", "mute", "speed", "skip", "callout", "music", "zoom"].includes(type);
+
   return (
     <div
       ref={containerRef}
@@ -269,17 +411,14 @@ export function Timeline() {
 
       {/* Main timeline area: sidebar + scrollable content */}
       <div ref={scrollContainerRef} className="flex-1 flex overflow-auto timeline-scroll">
-        {/* Track label sidebar — fixed left */}
+        {/* Track label sidebar */}
         <div className="shrink-0 border-r border-zinc-800/50 bg-zinc-950" style={{ width: SIDEBAR_W }}>
-          {/* Ruler spacer */}
           <div className="border-b border-zinc-800/30 flex items-center justify-center" style={{ height: RULER_H }}>
             <span className="text-[8px] text-zinc-600 uppercase tracking-wider font-semibold">Time</span>
           </div>
-          {/* Video track label */}
           <div className="border-b border-zinc-800/30 flex items-center justify-center" style={{ height: FILMSTRIP_H }}>
             <Video size={13} className="text-zinc-500" />
           </div>
-          {/* Action lane labels */}
           {activeLanes.map((type) => (
             <div
               key={type}
@@ -358,41 +497,76 @@ export function Timeline() {
                   const endTime = getActionEndTime(action);
                   const width = Math.max((endTime - action.timestamp) * pxPerSec, 22);
                   const isSelected = action.id === selectedActionId;
+                  const canResize = isResizable(action.type);
+                  const beingDragged = pillDrag?.actionId === action.id;
 
                   return (
-                    <button
+                    <div
                       key={action.id}
-                      className={`absolute flex items-center gap-1 px-1.5 rounded-md cursor-pointer transition-all overflow-hidden
+                      className={`absolute flex items-center rounded-md transition-colors overflow-hidden group
                         ${ACTION_BG_COLORS[laneType] || "bg-zinc-500/20"}
                         ${isSelected
                           ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-sm`
                           : "border border-transparent hover:brightness-110"
-                        }`}
+                        }
+                        ${beingDragged ? "opacity-90 z-30" : ""}
+                      `}
                       style={{ left, width, top: 3, height: LANE_H - 6 }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedAction(action.id);
-                        setPlayhead(action.timestamp);
-                      }}
-                      title={`${ACTION_DISPLAY_NAMES[laneType] || laneType} @ ${formatTime(action.timestamp)}`}
                     >
-                      <ActionIcon
-                        type={laneType}
-                        size={10}
-                        className={`shrink-0 ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}
-                      />
-                      {width > 50 && (
-                        <span className={`text-[9px] font-medium truncate ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}>
-                          {ACTION_DISPLAY_NAMES[laneType]}
-                        </span>
+                      {/* Left resize handle */}
+                      {canResize && (
+                        <div
+                          className="absolute left-0 top-0 bottom-0 cursor-col-resize z-10 opacity-0 group-hover:opacity-100 hover:bg-white/20 transition-opacity"
+                          style={{ width: EDGE_HANDLE_W }}
+                          onMouseDown={(e) => handlePillMouseDown(e, action, "resize-left")}
+                        />
                       )}
-                    </button>
+
+                      {/* Main draggable body */}
+                      <div
+                        className="flex-1 flex items-center gap-1 px-1.5 cursor-grab active:cursor-grabbing min-w-0 h-full"
+                        onMouseDown={(e) => handlePillMouseDown(e, action, "move")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedAction(action.id);
+                          setPlayhead(action.timestamp);
+                        }}
+                        title={`${ACTION_DISPLAY_NAMES[laneType] || laneType} @ ${formatTime(action.timestamp)}`}
+                      >
+                        <ActionIcon
+                          type={laneType}
+                          size={10}
+                          className={`shrink-0 ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}
+                        />
+                        {width > 50 && (
+                          <span className={`text-[9px] font-medium truncate ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}>
+                            {ACTION_DISPLAY_NAMES[laneType]}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Right resize handle */}
+                      {canResize && (
+                        <div
+                          className="absolute right-0 top-0 bottom-0 cursor-col-resize z-10 opacity-0 group-hover:opacity-100 hover:bg-white/20 transition-opacity"
+                          style={{ width: EDGE_HANDLE_W }}
+                          onMouseDown={(e) => handlePillMouseDown(e, action, "resize-right")}
+                        />
+                      )}
+                    </div>
                   );
                 })}
               </div>
             );
           })}
+
+          {/* ─── Snap guide line ─── */}
+          {snapLine !== null && (
+            <div
+              className="absolute top-0 w-px bg-yellow-400/60 pointer-events-none z-40"
+              style={{ left: snapLine * pxPerSec, height: totalContentHeight }}
+            />
+          )}
 
           {/* ─── Drag selection highlight ─── */}
           {selectionRange && (
@@ -407,7 +581,6 @@ export function Timeline() {
             className="absolute top-0 pointer-events-none z-30"
             style={{ left: playheadTime * pxPerSec, height: totalContentHeight }}
           >
-            {/* Triangle handle */}
             <div
               className="absolute -translate-x-1.25"
               style={{ top: RULER_H - 8 }}
@@ -416,7 +589,6 @@ export function Timeline() {
                 <polygon points="0,0 10,0 5,8" fill="#ef4444" />
               </svg>
             </div>
-            {/* Vertical line */}
             <div
               className="absolute top-0 w-px bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]"
               style={{ left: 0, height: totalContentHeight }}

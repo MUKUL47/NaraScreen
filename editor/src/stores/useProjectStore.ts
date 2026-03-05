@@ -48,6 +48,8 @@ interface ProjectState {
   addAction: (type: TimelineAction["type"], timestamp: number, endTimestamp?: number) => void;
   updateAction: (id: string, partial: Partial<TimelineAction>) => void;
   deleteAction: (id: string) => void;
+  duplicateAction: (id: string) => void;
+  splitAction: (id: string, splitTime: number) => void;
   undo: () => void;
   redo: () => void;
 
@@ -241,6 +243,86 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         project: { ...state.project, actions },
         selectedActionId:
           state.selectedActionId === id ? null : state.selectedActionId,
+        isDirty: true,
+      };
+    });
+  },
+
+  duplicateAction: (id) => {
+    set((state) => {
+      if (!state.project) return state;
+      const source = state.project.actions.find((a) => a.id === id);
+      if (!source) return state;
+      const snapshot: TimelineAction[] = JSON.parse(JSON.stringify(state.project.actions));
+      const history = [...state._actionsHistory, snapshot].slice(-MAX_HISTORY);
+
+      actionCounter++;
+      const newId = `action-${String(actionCounter).padStart(3, "0")}`;
+      const clone: TimelineAction = { ...JSON.parse(JSON.stringify(source)), id: newId, timestamp: source.timestamp + 1 };
+
+      const actions = [...state.project.actions, clone].sort((a, b) => a.timestamp - b.timestamp);
+      return {
+        _actionsHistory: history,
+        _actionsFuture: [],
+        project: { ...state.project, actions },
+        selectedActionId: newId,
+        isDirty: true,
+      };
+    });
+  },
+
+  splitAction: (id, splitTime) => {
+    set((state) => {
+      if (!state.project) return state;
+      const source = state.project.actions.find((a) => a.id === id);
+      if (!source) return state;
+
+      // Only split range-based actions
+      const endTimeKey = source.type === "mute" ? "muteEndTimestamp"
+        : source.type === "speed" ? "speedEndTimestamp"
+        : source.type === "skip" ? "skipEndTimestamp"
+        : source.type === "music" ? "musicEndTimestamp"
+        : source.type === "spotlight" ? "spotlightDuration"
+        : source.type === "blur" ? "blurDuration"
+        : source.type === "callout" ? "calloutDuration"
+        : null;
+      if (!endTimeKey) return state;
+
+      const snapshot: TimelineAction[] = JSON.parse(JSON.stringify(state.project.actions));
+      const history = [...state._actionsHistory, snapshot].slice(-MAX_HISTORY);
+
+      actionCounter++;
+      const newId = `action-${String(actionCounter).padStart(3, "0")}`;
+
+      // For duration-based actions (spotlight, blur, callout), split the duration
+      const isDurationBased = ["spotlightDuration", "blurDuration", "calloutDuration"].includes(endTimeKey);
+      const originalEnd = isDurationBased
+        ? source.timestamp + ((source as any)[endTimeKey] ?? 3)
+        : (source as any)[endTimeKey] ?? source.timestamp + 3;
+
+      if (splitTime <= source.timestamp || splitTime >= originalEnd) return state;
+
+      const firstHalf = { ...JSON.parse(JSON.stringify(source)) };
+      const secondHalf: TimelineAction = { ...JSON.parse(JSON.stringify(source)), id: newId, timestamp: splitTime };
+
+      if (isDurationBased) {
+        firstHalf[endTimeKey] = splitTime - source.timestamp;
+        (secondHalf as any)[endTimeKey] = originalEnd - splitTime;
+      } else {
+        firstHalf[endTimeKey] = splitTime;
+        (secondHalf as any)[endTimeKey] = originalEnd;
+      }
+
+      const actions = state.project.actions
+        .map((a) => (a.id === id ? firstHalf : a))
+        .concat(secondHalf)
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      return {
+        _actionsHistory: history,
+        _actionsFuture: [],
+        project: { ...state.project, actions },
+        selectedActionId: newId,
         isDirty: true,
       };
     });
@@ -488,3 +570,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setIsProducing: (v) => set({ isProducing: v }),
 }));
+
+// Auto-save: debounced save when project becomes dirty
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+useProjectStore.subscribe((state, prevState) => {
+  if (state.isDirty && !prevState.isDirty) {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+      useProjectStore.getState().save();
+    }, 3000);
+  }
+  if (state.isDirty && state.project !== prevState.project) {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+      useProjectStore.getState().save();
+    }, 3000);
+  }
+});
