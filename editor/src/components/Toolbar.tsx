@@ -2,7 +2,7 @@ import { useCallback, useState, useEffect, useRef } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
 import { pickSessionDir } from "../lib/fileOps";
 import { OpenIcon, SaveIcon, PreviewIcon, ProduceIcon, VersionsIcon } from "./ActionIcon";
-import { Monitor, Mic, MicOff, Terminal, X } from "lucide-react";
+import { Monitor, Mic, MicOff, Terminal, X, FileVideo, Undo2, Redo2 } from "lucide-react";
 
 export function Toolbar() {
   const sessionDir = useProjectStore((s) => s.sessionDir);
@@ -13,10 +13,15 @@ export function Toolbar() {
   const openSession = useProjectStore((s) => s.openSession);
   const save = useProjectStore((s) => s.save);
   const startScreenCapture = useProjectStore((s) => s.startScreenCapture);
+  const importVideo = useProjectStore((s) => s.importVideo);
   const produce = useProjectStore((s) => s.produce);
   const preview = useProjectStore((s) => s.preview);
   const appendProduceLog = useProjectStore((s) => s.appendProduceLog);
   const produceLog = useProjectStore((s) => s.produceLog);
+  const undo = useProjectStore((s) => s.undo);
+  const redo = useProjectStore((s) => s.redo);
+  const canUndo = useProjectStore((s) => s._actionsHistory.length > 0);
+  const canRedo = useProjectStore((s) => s._actionsFuture.length > 0);
 
   const [showLog, setShowLog] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
@@ -115,6 +120,10 @@ export function Toolbar() {
     window.electronAPI.openVersion(filePath);
   }, []);
 
+  const handleShowInFolder = useCallback((filePath: string) => {
+    window.electronAPI.showInFolder(filePath);
+  }, []);
+
   // Don't render during capture mode
   if (captureMode) return null;
 
@@ -122,40 +131,40 @@ export function Toolbar() {
 
   return (
     <div className="relative shrink-0">
-      <div className="h-11 bg-slate-900 border-b border-slate-700/50 flex items-center px-4 gap-2">
-        <span className="text-sm font-bold text-slate-200 tracking-tight mr-3">
+      <div className="h-11 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-700/40 flex items-center px-4 gap-2">
+        <span className="text-sm font-bold text-zinc-200 tracking-tight mr-3">
           NaraScreen
         </span>
 
-        <div className="w-px h-5 bg-slate-700" />
+        <div className="w-px h-5 bg-zinc-800" />
 
         {/* Record Screen */}
         <div className="relative ml-2">
           <button
             onClick={handleRecordScreen}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-medium rounded-md shadow-sm transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-medium rounded-md shadow-lg shadow-red-500/20 transition-colors"
           >
             <Monitor size={13} />
             Record Screen
           </button>
           {showScreenPicker && (
-            <div className="absolute top-full left-0 mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-30 min-w-48">
-              <div className="px-3 py-2 text-xs text-slate-400 border-b border-slate-700 font-medium">
+            <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-xl z-30 min-w-48">
+              <div className="px-3 py-2 text-xs text-zinc-400 border-b border-zinc-700/40 font-medium">
                 Pick a display
               </div>
               {screens.map((s) => (
                 <button
                   key={s.id}
                   onClick={() => handlePickScreen(s.id)}
-                  className="block w-full px-4 py-2 text-xs text-left text-slate-200 hover:bg-slate-700 transition-colors"
+                  className="block w-full px-4 py-2 text-xs text-left text-zinc-200 hover:bg-zinc-800 transition-colors"
                 >
                   {s.name}
-                  <span className="text-slate-500 ml-2">({s.x},{s.y})</span>
+                  <span className="text-zinc-500 ml-2">({s.x},{s.y})</span>
                 </button>
               ))}
               <button
                 onClick={() => setShowScreenPicker(false)}
-                className="block w-full px-4 py-1.5 text-xs text-slate-500 hover:text-slate-300 border-t border-slate-700"
+                className="block w-full px-4 py-1.5 text-xs text-zinc-500 hover:text-zinc-300 border-t border-zinc-700/40"
               >
                 Cancel
               </button>
@@ -165,27 +174,54 @@ export function Toolbar() {
 
         <button
           onClick={handleOpen}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-md transition-colors"
         >
           <OpenIcon size={13} />
           Open
         </button>
 
-        <div className="w-px h-5 bg-slate-700" />
+        <button
+          onClick={importVideo}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-md transition-colors"
+        >
+          <FileVideo size={13} />
+          Import Video
+        </button>
+
+        <div className="w-px h-5 bg-zinc-800" />
 
         <button
           onClick={handleSave}
           disabled={!sessionDir}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-30 disabled:pointer-events-none text-white text-xs rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-white text-xs rounded-md transition-colors"
         >
           <SaveIcon size={13} />
           {isDirty ? "Save *" : "Save"}
         </button>
 
         <button
+          onClick={undo}
+          disabled={!canUndo}
+          title="Undo (Ctrl+Z)"
+          className="p-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 rounded-md transition-colors"
+        >
+          <Undo2 size={13} />
+        </button>
+        <button
+          onClick={redo}
+          disabled={!canRedo}
+          title="Redo (Ctrl+Shift+Z)"
+          className="p-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 rounded-md transition-colors"
+        >
+          <Redo2 size={13} />
+        </button>
+
+        <div className="w-px h-5 bg-zinc-800" />
+
+        <button
           onClick={handlePreview}
           disabled={!sessionDir || actionCount === 0 || isProducing}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-blue-500/20 transition-colors"
         >
           <PreviewIcon size={13} />
           {isProducing ? "..." : "Preview"}
@@ -194,7 +230,7 @@ export function Toolbar() {
         <button
           onClick={handleProduce}
           disabled={!sessionDir || actionCount === 0 || isProducing}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-emerald-500/20 transition-colors"
         >
           <ProduceIcon size={13} />
           {isProducing ? "Producing..." : "Produce"}
@@ -203,7 +239,7 @@ export function Toolbar() {
         <button
           onClick={handleShowVersions}
           disabled={!sessionDir}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-30 disabled:pointer-events-none text-slate-300 text-xs rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
         >
           <VersionsIcon size={13} />
           Versions{versions.length > 0 ? ` (${versions.length})` : ""}
@@ -213,7 +249,7 @@ export function Toolbar() {
 
         {sessionDir && (
           <span
-            className="text-[10px] text-slate-600 truncate max-w-60 font-mono"
+            className="text-[10px] text-zinc-600 truncate max-w-60 font-mono"
             title={sessionDir}
           >
             {sessionDir.split("/").slice(-2).join("/")}
@@ -221,7 +257,7 @@ export function Toolbar() {
         )}
 
         {actionCount > 0 && (
-          <span className="text-[10px] text-slate-500 font-medium">
+          <span className="text-[10px] text-zinc-500 font-medium">
             {actionCount} action{actionCount !== 1 ? "s" : ""}
           </span>
         )}
@@ -229,7 +265,7 @@ export function Toolbar() {
         {produceLog && (
           <button
             onClick={() => { setShowLog(!showLog); setShowVersions(false); }}
-            className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+            className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             <Terminal size={11} />
             {showLog ? "Hide Log" : "Log"}
@@ -238,7 +274,7 @@ export function Toolbar() {
 
         {/* Kokoro TTS status */}
         <span
-          className={`flex items-center gap-1 text-[10px] ${kokoroStatus === "connected" ? "text-emerald-500" : kokoroStatus === "disconnected" ? "text-amber-500" : "text-slate-600"}`}
+          className={`flex items-center gap-1 text-[10px] ${kokoroStatus === "connected" ? "text-emerald-500" : kokoroStatus === "disconnected" ? "text-amber-500" : "text-zinc-600"}`}
           title={kokoroStatus === "connected" ? "Voice Engine: Connected" : kokoroStatus === "disconnected" ? "Voice Engine: Not detected" : "Checking..."}
         >
           {kokoroStatus === "connected" ? <Mic size={11} /> : kokoroStatus === "disconnected" ? <MicOff size={11} /> : <Mic size={11} />}
@@ -272,7 +308,7 @@ export function Toolbar() {
 
       {/* Production log — overlay, doesn't push content */}
       {showLog && produceLog && (
-        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-black/95 border-b border-slate-700 overflow-auto p-3 font-mono text-xs text-green-400 shadow-xl">
+        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-black/95 border-b border-zinc-700/40 overflow-auto p-3 font-mono text-xs text-green-400 shadow-xl">
           <pre className="whitespace-pre-wrap">{produceLog}</pre>
           <div ref={logEndRef} />
         </div>
@@ -280,40 +316,48 @@ export function Toolbar() {
 
       {/* Versions — overlay, doesn't push content */}
       {showVersions && (
-        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-slate-900/98 border-b border-slate-700 overflow-auto p-3 shadow-xl">
+        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-zinc-950/98 border-b border-zinc-700/40 overflow-auto p-3 shadow-xl">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-slate-300">Produced Versions</span>
+            <span className="text-xs font-semibold text-zinc-300">Produced Versions</span>
             <button
               onClick={() => setShowVersions(false)}
-              className="text-xs text-slate-500 hover:text-slate-300"
+              className="text-xs text-zinc-500 hover:text-zinc-300"
             >
               Close
             </button>
           </div>
           {versions.length === 0 ? (
-            <p className="text-xs text-slate-500">No versions produced yet.</p>
+            <p className="text-xs text-zinc-500">No versions produced yet.</p>
           ) : (
             <div className="space-y-1">
               {versions.map((v) => (
                 <div
                   key={v.name}
-                  className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded hover:bg-slate-700"
+                  className="flex items-center justify-between px-3 py-2 bg-zinc-900 rounded hover:bg-zinc-800"
                 >
                   <div>
-                    <span className="text-xs text-slate-200 font-mono">{v.name}</span>
-                    <span className="text-[10px] text-slate-500 ml-2">
+                    <span className="text-xs text-zinc-200 font-mono">{v.name}</span>
+                    <span className="text-[10px] text-zinc-500 ml-2">
                       {(v.size / 1024 / 1024).toFixed(1)} MB
                     </span>
-                    <span className="text-[10px] text-slate-500 ml-2">
+                    <span className="text-[10px] text-zinc-500 ml-2">
                       {new Date(v.created).toLocaleString()}
                     </span>
                   </div>
-                  <button
-                    onClick={() => handleOpenVersion(v.path)}
-                    className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] rounded"
-                  >
-                    Open
-                  </button>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => handleOpenVersion(v.path)}
+                      className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] rounded"
+                    >
+                      Open
+                    </button>
+                    <button
+                      onClick={() => handleShowInFolder(v.path)}
+                      className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 text-white text-[10px] rounded"
+                    >
+                      Show in Folder
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

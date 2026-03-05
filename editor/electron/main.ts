@@ -55,6 +55,9 @@ function createMainWindow() {
   });
 }
 
+// Disable overlay scrollbars so ::-webkit-scrollbar CSS works
+app.commandLine.appendSwitch("disable-features", "OverlayScrollbar");
+
 app.whenReady().then(createMainWindow);
 
 app.on("window-all-closed", () => {
@@ -115,6 +118,16 @@ ipcMain.handle("dialog:openDirectory", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ["openDirectory"],
     title: "Open Demo Session",
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle("dialog:openVideoFile", async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    title: "Import Video",
+    filters: [{ name: "Video", extensions: ["mp4", "mkv", "webm", "avi", "mov"] }],
   });
   return result.canceled ? null : result.filePaths[0];
 });
@@ -265,8 +278,11 @@ ipcMain.handle("versions:list", async (_event, sessionDir: string) => {
 });
 
 ipcMain.handle("versions:open", async (_event, filePath: string) => {
-  const { shell } = await import("electron");
   shell.openPath(filePath);
+});
+
+ipcMain.handle("versions:showInFolder", async (_event, filePath: string) => {
+  shell.showItemInFolder(filePath);
 });
 
 // ---- Cache IPC Handlers ----

@@ -28,17 +28,17 @@ export function MusicEditor({ action, onUpdate }: MusicEditorProps) {
   return (
     <>
       <div>
-        <label className="block text-xs text-slate-400 font-medium mb-1">
+        <label className="block text-xs text-zinc-400 font-medium mb-1">
           Audio File
         </label>
         {action.musicPath ? (
           <div className="flex items-center gap-2">
-            <span className="flex-1 text-xs text-slate-300 truncate" title={action.musicPath}>
+            <span className="flex-1 text-xs text-zinc-300 truncate" title={action.musicPath}>
               {action.musicPath.split("/").pop()}
             </span>
             <button
               onClick={handlePickFile}
-              className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-white text-[10px] rounded"
+              className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-white text-[10px] rounded"
             >
               Change
             </button>
@@ -52,7 +52,7 @@ export function MusicEditor({ action, onUpdate }: MusicEditorProps) {
         ) : (
           <button
             onClick={handlePickFile}
-            className="w-full px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs rounded"
+            className="w-full px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded"
           >
             Select Audio File...
           </button>
@@ -60,7 +60,7 @@ export function MusicEditor({ action, onUpdate }: MusicEditorProps) {
       </div>
 
       <div>
-        <label className="block text-xs text-slate-400 font-medium mb-1">
+        <label className="block text-xs text-zinc-400 font-medium mb-1">
           Volume ({((action.musicVolume ?? 0.5) * 100).toFixed(0)}%)
         </label>
         <input
@@ -74,7 +74,7 @@ export function MusicEditor({ action, onUpdate }: MusicEditorProps) {
       </div>
 
       <div>
-        <label className="block text-xs text-slate-400 font-medium mb-1">
+        <label className="block text-xs text-zinc-400 font-medium mb-1">
           Duck to ({((action.musicDuckTo ?? 0.2) * 100).toFixed(0)}%) during narration
         </label>
         <input
@@ -85,14 +85,14 @@ export function MusicEditor({ action, onUpdate }: MusicEditorProps) {
           onChange={(e) => onUpdate({ musicDuckTo: parseInt(e.target.value) / 100 })}
           className="w-full"
         />
-        <div className="flex justify-between text-[10px] text-slate-500">
+        <div className="flex justify-between text-[10px] text-zinc-500">
           <span>Muted</span>
           <span>Full volume</span>
         </div>
       </div>
 
       <div>
-        <label className="block text-xs text-slate-400 font-medium mb-1">
+        <label className="block text-xs text-zinc-400 font-medium mb-1">
           End Timestamp (seconds)
         </label>
         <input
@@ -104,14 +104,14 @@ export function MusicEditor({ action, onUpdate }: MusicEditorProps) {
           min={action.timestamp}
           max={duration}
           step={1}
-          className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-blue-400"
+          className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-400"
         />
-        <div className="text-[10px] text-slate-500 mt-1">
+        <div className="text-[10px] text-zinc-500 mt-1">
           Music plays: {formatTime(action.timestamp)} → {formatTime(action.musicEndTimestamp ?? duration)}
         </div>
       </div>
 
-      <div className="text-[10px] text-slate-600 border-t border-slate-800 pt-2">
+      <div className="text-[10px] text-zinc-600 border-t border-zinc-800/50 pt-2">
         Background music with auto-ducking: volume drops during narration segments
         and rises back up during silent parts.
       </div>

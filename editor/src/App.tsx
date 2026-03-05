@@ -6,8 +6,10 @@ import { Timeline } from "./components/Timeline";
 import { Monitor } from "lucide-react";
 import { ActionPanel } from "./components/ActionPanel";
 import { useProjectStore } from "./stores/useProjectStore";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 
 function App() {
+  useKeyboardShortcuts();
   const sessionDir = useProjectStore((s) => s.sessionDir);
   const openSession = useProjectStore((s) => s.openSession);
 
@@ -43,6 +45,12 @@ function App() {
         ? selectedAction.spotlightRect ?? null
         : null;
 
+  // All blur rects for the selected blur action
+  const overlayRects =
+    selectedAction?.type === "blur" && selectedAction.blurRects?.length
+      ? selectedAction.blurRects
+      : undefined;
+
   const handleZoomDrawn = useCallback(
     (rect: [number, number, number, number]) => {
       if (!selectedActionId || !selectedAction) return;
@@ -50,6 +58,12 @@ function App() {
         updateAction(selectedActionId, { zoomRect: rect });
       } else if (selectedAction.type === "spotlight") {
         updateAction(selectedActionId, { spotlightRect: rect });
+      } else if (selectedAction.type === "blur") {
+        // Append new rect to existing blur rects
+        const existing = selectedAction.blurRects ?? [];
+        updateAction(selectedActionId, { blurRects: [...existing, rect] });
+        // Stay in drawing mode so user can add more rects
+        return;
       } else if (selectedAction.type === "callout") {
         // For callout, use the top-left corner as position
         updateAction(selectedActionId, { calloutPosition: [rect[0], rect[1]] });
@@ -80,14 +94,14 @@ function App() {
           /* Capture Mode: instructions while recording */
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center space-y-4">
-              <h1 className="text-2xl font-bold text-slate-300">
+              <h1 className="text-2xl font-bold text-zinc-300">
                 Recording...
               </h1>
-              <p className="text-slate-500 text-sm max-w-md">
+              <p className="text-zinc-500 text-sm max-w-md">
                 Navigate the target website in the capture window.
                 Click "Stop & Edit" when finished.
               </p>
-              <p className="text-slate-600 text-xs">
+              <p className="text-zinc-600 text-xs">
                 Your screen is being recorded. Click "Stop & Edit" when done.
               </p>
             </div>
@@ -106,11 +120,12 @@ function App() {
                   drawingZoom={drawingZoom}
                   onZoomDrawn={handleZoomDrawn}
                   zoomRect={zoomRect}
+                  overlayRects={overlayRects}
                 />
               </div>
 
               {/* Timeline */}
-              <div className="h-40 shrink-0">
+              <div className="h-48 shrink-0">
                 <Timeline />
               </div>
             </div>
@@ -120,18 +135,18 @@ function App() {
           </>
         ) : (
           /* Welcome screen */
-          <div className="flex-1 flex items-center justify-center bg-gradient-to-b from-slate-900 to-slate-950">
+          <div className="flex-1 flex items-center justify-center bg-linear-to-b from-zinc-950 via-zinc-900 to-zinc-950">
             <div className="text-center space-y-4">
               <div className="flex justify-center">
-                <Monitor size={48} className="text-slate-600" />
+                <Monitor size={48} className="text-zinc-600" />
               </div>
-              <h1 className="text-3xl font-bold text-slate-100 tracking-tight">
+              <h1 className="text-3xl font-bold text-zinc-100 tracking-tight">
                 NaraScreen
               </h1>
-              <p className="text-slate-500 text-sm max-w-sm leading-relaxed">
+              <p className="text-zinc-500 text-sm max-w-sm leading-relaxed">
                 Record your screen, add narration, zooms, and effects — then produce polished demo videos.
               </p>
-              <p className="text-slate-600 text-xs pt-2">
+              <p className="text-zinc-600 text-xs pt-2">
                 Click <span className="text-red-400 font-medium">Record Screen</span> to begin
               </p>
             </div>

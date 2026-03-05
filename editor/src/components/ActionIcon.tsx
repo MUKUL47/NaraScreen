@@ -7,6 +7,8 @@ import {
   Scissors,
   Type,
   Music,
+  EyeOff,
+  VolumeOff,
   Circle,
   FolderOpen,
   Save,
@@ -27,6 +29,8 @@ const ICON_MAP: Record<string, typeof Pause> = {
   skip: Scissors,
   callout: Type,
   music: Music,
+  blur: EyeOff,
+  mute: VolumeOff,
 };
 
 interface ActionIconProps {

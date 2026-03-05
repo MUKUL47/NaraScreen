@@ -20,7 +20,7 @@ export function PauseEditor({ action, onUpdate }: PauseEditorProps) {
 
   return (
     <div>
-      <label className="block text-xs text-slate-400 font-medium mb-1">
+      <label className="block text-xs text-zinc-400 font-medium mb-1">
         Resume after
       </label>
       <select
@@ -30,7 +30,7 @@ export function PauseEditor({ action, onUpdate }: PauseEditorProps) {
             : action.resumeAfter || "narration"
         }
         onChange={(e) => handleResumeChange(e.target.value)}
-        className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-blue-400"
+        className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-400"
       >
         <option value="narration">After narration ends</option>
         <option value="zoom">After zoom completes</option>
@@ -47,7 +47,7 @@ export function PauseEditor({ action, onUpdate }: PauseEditorProps) {
           min={0.5}
           step={0.5}
           placeholder="Duration (seconds)"
-          className="w-full mt-2 bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-blue-400"
+          className="w-full mt-2 bg-zinc-950 border border-zinc-700/50 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-400"
         />
       )}
     </div>

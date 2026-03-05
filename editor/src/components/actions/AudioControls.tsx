@@ -122,7 +122,7 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
     <div className="relative">
       {/* Loading overlay */}
       {ttsLoading && (
-        <div className="absolute inset-0 z-10 bg-slate-900/70 rounded flex items-center justify-center backdrop-blur-sm">
+        <div className="absolute inset-0 z-10 bg-zinc-950/70 rounded flex items-center justify-center backdrop-blur-sm">
           <div className="flex flex-col items-center gap-2">
             <div className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
             <span className="text-xs text-emerald-400">Generating audio...</span>
@@ -130,7 +130,7 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
         </div>
       )}
 
-      <label className="block text-xs text-slate-400 font-medium mb-1">
+      <label className="block text-xs text-zinc-400 font-medium mb-1">
         {label || `Narration (${langLabel})`}
       </label>
 
@@ -139,7 +139,7 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
         onChange={(e) => handleTextChange(e.target.value)}
         rows={2}
         placeholder={`${langLabel} narration...`}
-        className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-400 resize-none"
+        className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-blue-400 resize-none"
       />
 
       {/* Voice selector */}
@@ -148,7 +148,7 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
           <select
             value={currentVoice}
             onChange={(e) => setSelectedVoice(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-[11px] text-slate-300 focus:outline-none focus:border-blue-400"
+            className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-2 py-1 text-[11px] text-zinc-300 focus:outline-none focus:border-blue-400"
           >
             {voices.map((v) => (
               <option key={v} value={v}>{v}</option>
@@ -161,7 +161,7 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
         <button
           onClick={handleGenerateTTS}
           disabled={ttsLoading || !text?.trim()}
-          className="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white text-xs rounded"
+          className="flex-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white text-xs rounded"
         >
           {ttsLoading ? "Generating..." : `Generate Audio`}
         </button>
@@ -169,14 +169,14 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
           <>
             <button
               onClick={handlePlay}
-              className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs rounded"
+              className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded"
               title="Play audio preview"
             >
               Play
             </button>
             <button
               onClick={handleStop}
-              className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs rounded"
+              className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded"
               title="Stop"
             >
               Stop

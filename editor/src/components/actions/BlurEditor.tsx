@@ -2,20 +2,22 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { LanguageAudioSection } from "./NarrateEditor";
 import type { TimelineAction } from "../../types";
 
-interface SpotlightEditorProps {
+interface BlurEditorProps {
   action: TimelineAction;
   onUpdate: (partial: Partial<TimelineAction>) => void;
 }
 
-export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
+export function BlurEditor({ action, onUpdate }: BlurEditorProps) {
   const drawingZoom = useProjectStore((s) => s.drawingZoom);
   const setDrawingZoom = useProjectStore((s) => s.setDrawingZoom);
+
+  const rects = action.blurRects ?? [];
 
   return (
     <>
       <div>
         <label className="block text-xs text-zinc-400 font-medium mb-1">
-          Spotlight Region
+          Blur Regions ({rects.length})
         </label>
         <button
           onClick={() => setDrawingZoom(!drawingZoom)}
@@ -27,21 +29,33 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
         >
           {drawingZoom
             ? "Drawing... (click & drag on video)"
-            : action.spotlightRect
-              ? "Redraw Region"
-              : "Draw Spotlight Region"}
+            : rects.length > 0
+              ? "Add Another Region"
+              : "Draw Blur Region"}
         </button>
-        {action.spotlightRect && (
-          <div className="mt-1 flex items-center justify-between">
-            <span className="text-[10px] text-zinc-500">
-              {action.spotlightRect[0]},{action.spotlightRect[1]} {action.spotlightRect[2]}x
-              {action.spotlightRect[3]}
-            </span>
+        {rects.length > 0 && (
+          <div className="mt-1.5 space-y-1">
+            {rects.map((r, i) => (
+              <div key={i} className="flex items-center justify-between bg-zinc-900 rounded px-2 py-1">
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  #{i + 1}: {r[0]},{r[1]} {r[2]}x{r[3]}
+                </span>
+                <button
+                  onClick={() => {
+                    const updated = rects.filter((_, idx) => idx !== i);
+                    onUpdate({ blurRects: updated.length > 0 ? updated : undefined });
+                  }}
+                  className="text-[10px] text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
             <button
-              onClick={() => onUpdate({ spotlightRect: undefined })}
+              onClick={() => onUpdate({ blurRects: undefined })}
               className="text-[10px] text-red-400 hover:text-red-300"
             >
-              Clear
+              Clear All
             </button>
           </div>
         )}
@@ -49,19 +63,19 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
 
       <div>
         <label className="block text-xs text-zinc-400 font-medium mb-1">
-          Dim Opacity ({((action.dimOpacity ?? 0.7) * 100).toFixed(0)}%)
+          Blur Radius ({action.blurRadius ?? 20})
         </label>
         <input
           type="range"
-          min={0}
-          max={100}
-          value={(action.dimOpacity ?? 0.7) * 100}
-          onChange={(e) => onUpdate({ dimOpacity: parseInt(e.target.value) / 100 })}
+          min={1}
+          max={50}
+          value={action.blurRadius ?? 20}
+          onChange={(e) => onUpdate({ blurRadius: parseInt(e.target.value) })}
           className="w-full"
         />
         <div className="flex justify-between text-[10px] text-zinc-500">
-          <span>0% (no dim)</span>
-          <span>100% (black)</span>
+          <span>Subtle</span>
+          <span>Heavy</span>
         </div>
       </div>
 
@@ -71,10 +85,8 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
         </label>
         <input
           type="number"
-          value={action.spotlightDuration ?? 3}
-          onChange={(e) =>
-            onUpdate({ spotlightDuration: parseFloat(e.target.value) || 3 })
-          }
+          value={action.blurDuration ?? 3}
+          onChange={(e) => onUpdate({ blurDuration: parseFloat(e.target.value) || 3 })}
           min={0.5}
           max={30}
           step={0.5}
@@ -82,10 +94,7 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
         />
       </div>
 
-      <LanguageAudioSection
-        action={action}
-        label="Narration (optional)"
-      />
+      <LanguageAudioSection action={action} label="Narration (optional)" />
 
       <label className="flex items-center gap-2 cursor-pointer mt-2">
         <input
@@ -94,11 +103,11 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
           onChange={(e) => onUpdate({ freeze: e.target.checked })}
           className="w-3 h-3 rounded border-zinc-700/50 bg-zinc-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
         />
-        <span className="text-[10px] text-zinc-400">Freeze video during spotlight</span>
+        <span className="text-[10px] text-zinc-400">Freeze video during blur</span>
       </label>
 
       <div className="text-[10px] text-zinc-600 border-t border-zinc-800/50 pt-2">
-        Highlights the selected region while dimming the rest of the screen.
+        Blurs selected regions to hide sensitive content. Draw multiple regions to blur several areas at once.
       </div>
     </>
   );

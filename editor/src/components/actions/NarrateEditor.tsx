@@ -59,7 +59,7 @@ export function LanguageAudioSection({
   return (
     <>
       {label && (
-        <label className="block text-xs text-slate-400 font-medium mb-1">{label}</label>
+        <label className="block text-xs text-zinc-400 font-medium mb-1">{label}</label>
       )}
 
       {/* Language dropdown */}
@@ -67,7 +67,7 @@ export function LanguageAudioSection({
         <select
           value={currentLang}
           onChange={(e) => handleAddLang(e.target.value)}
-          className="flex-1 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-violet-500"
+          className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-500"
         >
           {/* Active languages first */}
           {languages.map((lang) => {
@@ -190,7 +190,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
           className={`flex-1 px-2 py-1 text-[10px] font-medium rounded transition-colors ${
             audioMode === "tts"
               ? "bg-emerald-600 text-white"
-              : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
           }`}
         >
           Text to Speech
@@ -200,7 +200,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
           className={`flex-1 px-2 py-1 text-[10px] font-medium rounded transition-colors ${
             audioMode === "record"
               ? "bg-orange-600 text-white"
-              : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+              : "bg-zinc-900 text-zinc-400 hover:bg-zinc-800"
           }`}
         >
           Record Voice
@@ -209,7 +209,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
 
       {audioMode === "record" ? (
         <div className="space-y-2">
-          <label className="block text-xs text-slate-400 font-medium">
+          <label className="block text-xs text-zinc-400 font-medium">
             Record your narration
           </label>
           <div className="flex gap-2">
@@ -233,9 +233,9 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
           {recordedUrl && !recording && (
             <div className="space-y-1">
               <div className="flex gap-2">
-                <button onClick={handlePlayRecorded} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs rounded">Play</button>
-                <button onClick={handleStopPlayback} className="px-2 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs rounded">Stop</button>
-                <button onClick={handleClearRecording} className="px-2 py-1.5 bg-slate-800 hover:bg-red-600/30 text-red-400 text-xs rounded">Remove</button>
+                <button onClick={handlePlayRecorded} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded">Play</button>
+                <button onClick={handleStopPlayback} className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded">Stop</button>
+                <button onClick={handleClearRecording} className="px-2 py-1.5 bg-zinc-900 hover:bg-red-600/30 text-red-400 text-xs rounded">Remove</button>
               </div>
               <div className="text-[10px] text-orange-400">
                 Recorded audio ready{recordedDuration ? ` (${recordedDuration.toFixed(1)}s)` : ""}
@@ -243,7 +243,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
             </div>
           )}
           {action.customAudioPath && (
-            <div className="text-[10px] text-slate-500">
+            <div className="text-[10px] text-zinc-500">
               Custom audio takes priority over TTS
             </div>
           )}
@@ -253,15 +253,15 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
       )}
 
       {/* Options: freeze + subtitles */}
-      <div className="mt-3 pt-3 border-t border-slate-700/50 space-y-2">
+      <div className="mt-3 pt-3 border-t border-zinc-700/40 space-y-2">
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
             checked={action.freeze ?? false}
             onChange={(e) => updateAction(action.id, { freeze: e.target.checked })}
-            className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+            className="w-3 h-3 rounded border-zinc-700/50 bg-zinc-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
           />
-          <span className="text-[10px] text-slate-400">Freeze video during narration</span>
+          <span className="text-[10px] text-zinc-400">Freeze video during narration</span>
         </label>
 
         <label className="flex items-center gap-2 cursor-pointer">
@@ -269,14 +269,14 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
             type="checkbox"
             checked={action.showSubtitles !== false}
             onChange={(e) => updateAction(action.id, { showSubtitles: e.target.checked })}
-            className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+            className="w-3 h-3 rounded border-zinc-700/50 bg-zinc-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
           />
-          <span className="text-[10px] text-slate-400">Show subtitles</span>
+          <span className="text-[10px] text-zinc-400">Show subtitles</span>
         </label>
 
         {action.showSubtitles !== false && (
           <div>
-            <label className="block text-[10px] text-slate-500 font-medium mb-1">
+            <label className="block text-[10px] text-zinc-500 font-medium mb-1">
               Subtitle Size ({action.subtitleSize ?? 28}px)
             </label>
             <input
@@ -287,7 +287,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
               onChange={(e) => updateAction(action.id, { subtitleSize: parseInt(e.target.value) })}
               className="w-full"
             />
-            <div className="flex justify-between text-[9px] text-slate-600">
+            <div className="flex justify-between text-[9px] text-zinc-600">
               <span>Small</span>
               <span>Large</span>
             </div>

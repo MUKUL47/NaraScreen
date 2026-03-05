@@ -11,6 +11,8 @@ import { SpeedEditor } from "./actions/SpeedEditor";
 import { SkipEditor } from "./actions/SkipEditor";
 import { CalloutEditor } from "./actions/CalloutEditor";
 import { MusicEditor } from "./actions/MusicEditor";
+import { BlurEditor } from "./actions/BlurEditor";
+import { MuteEditor } from "./actions/MuteEditor";
 
 export function ActionPanel() {
   const project = useProjectStore((s) => s.project);
@@ -33,8 +35,8 @@ export function ActionPanel() {
 
   if (!action) {
     return (
-      <div className="w-72 bg-slate-900/60 border-l border-slate-700/50 p-6 flex items-center justify-center shrink-0">
-        <p className="text-slate-600 text-xs text-center leading-relaxed">
+      <div className="w-72 bg-zinc-950/60 border-l border-zinc-700/40 p-6 flex items-center justify-center shrink-0">
+        <p className="text-zinc-600 text-xs text-center leading-relaxed">
           Select an action on the timeline to edit,
           or click "+ Add Action" to create one.
         </p>
@@ -43,16 +45,16 @@ export function ActionPanel() {
   }
 
   return (
-    <div className="w-72 bg-slate-900/60 border-l border-slate-700/50 flex flex-col shrink-0 max-h-full">
+    <div className="w-72 bg-zinc-950/60 border-l border-zinc-700/40 flex flex-col shrink-0 max-h-full">
       <div className="overflow-y-auto flex-1 p-3 space-y-3">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <ActionIcon type={action.type} size={14} className={ACTION_COLORS[action.type]?.replace("bg-", "text-").replace("-500", "-400") || "text-slate-400"} />
-            <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wide">
+            <ActionIcon type={action.type} size={14} className={ACTION_COLORS[action.type]?.replace("bg-", "text-").replace("-500", "-400") || "text-zinc-400"} />
+            <h2 className="text-xs font-bold text-zinc-200 uppercase tracking-wide">
               {ACTION_DISPLAY_NAMES[action.type] || action.type}
             </h2>
-            <span className="text-[10px] text-slate-600 font-mono">{action.id}</span>
+            <span className="text-[10px] text-zinc-600 font-mono">{action.id}</span>
           </div>
           <button
             onClick={() => deleteAction(action.id)}
@@ -65,7 +67,7 @@ export function ActionPanel() {
 
         {/* Timestamp */}
         <div>
-          <label className="block text-[10px] text-slate-500 font-medium mb-1 uppercase tracking-wider">
+          <label className="block text-[10px] text-zinc-500 font-medium mb-1 uppercase tracking-wider">
             Timestamp (s)
           </label>
           <input
@@ -77,7 +79,7 @@ export function ActionPanel() {
             min={0}
             max={project?.recordingDuration ?? 999}
             step={0.1}
-            className="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20"
+            className="w-full bg-zinc-900 border border-zinc-700/40 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20"
           />
         </div>
 
@@ -105,6 +107,12 @@ export function ActionPanel() {
         )}
         {action.type === "music" && (
           <MusicEditor action={action} onUpdate={handleUpdate} />
+        )}
+        {action.type === "blur" && (
+          <BlurEditor action={action} onUpdate={handleUpdate} />
+        )}
+        {action.type === "mute" && (
+          <MuteEditor action={action} onUpdate={handleUpdate} />
         )}
       </div>
     </div>

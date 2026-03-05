@@ -9,11 +9,17 @@ import {
 
 const api = window.electronAPI;
 
+const MAX_HISTORY = 50;
+
 interface ProjectState {
   // Session
   sessionDir: string | null;
   project: DemoProject | null;
   isDirty: boolean;
+
+  // Undo/Redo
+  _actionsHistory: TimelineAction[][];
+  _actionsFuture: TimelineAction[][];
 
   // Timeline state
   selectedActionId: string | null;
@@ -38,12 +44,17 @@ interface ProjectState {
   addAction: (type: TimelineAction["type"], timestamp: number, endTimestamp?: number) => void;
   updateAction: (id: string, partial: Partial<TimelineAction>) => void;
   deleteAction: (id: string) => void;
+  undo: () => void;
+  redo: () => void;
 
   setIsRecording: (v: boolean) => void;
 
   // Screen capture
   startScreenCapture: (displayId?: string) => Promise<void>;
   stopScreenCapture: () => Promise<void>;
+
+  // Import
+  importVideo: () => Promise<void>;
 
   // Production
   produce: () => Promise<void>;
@@ -58,6 +69,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   sessionDir: null,
   project: null,
   isDirty: false,
+  _actionsHistory: [],
+  _actionsFuture: [],
   selectedActionId: null,
   filmstripPaths: [],
   playheadTime: 0,
@@ -89,6 +102,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       sessionDir: dir,
       project,
       isDirty: false,
+      _actionsHistory: [],
+      _actionsFuture: [],
       selectedActionId: null,
       filmstripPaths,
       playheadTime: 0,
@@ -110,9 +125,44 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setDrawingZoom: (v) => set({ drawingZoom: v }),
 
+  undo: () => {
+    set((state) => {
+      if (!state.project || state._actionsHistory.length === 0) return state;
+      const history = [...state._actionsHistory];
+      const previous = history.pop()!;
+      const currentSnapshot: TimelineAction[] = JSON.parse(JSON.stringify(state.project.actions));
+      return {
+        _actionsHistory: history,
+        _actionsFuture: [...state._actionsFuture, currentSnapshot],
+        project: { ...state.project, actions: previous },
+        selectedActionId: null,
+        isDirty: true,
+      };
+    });
+  },
+
+  redo: () => {
+    set((state) => {
+      if (!state.project || state._actionsFuture.length === 0) return state;
+      const future = [...state._actionsFuture];
+      const next = future.pop()!;
+      const currentSnapshot: TimelineAction[] = JSON.parse(JSON.stringify(state.project.actions));
+      return {
+        _actionsHistory: [...state._actionsHistory, currentSnapshot],
+        _actionsFuture: future,
+        project: { ...state.project, actions: next },
+        selectedActionId: null,
+        isDirty: true,
+      };
+    });
+  },
+
   addAction: (type, timestamp, endTimestamp?) => {
     set((state) => {
       if (!state.project) return state;
+      const snapshot: TimelineAction[] = JSON.parse(JSON.stringify(state.project.actions));
+      const history = [...state._actionsHistory, snapshot].slice(-MAX_HISTORY);
+
       actionCounter++;
       const id = `action-${String(actionCounter).padStart(3, "0")}`;
 
@@ -130,6 +180,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...(type === "skip" && { skipEndTimestamp: endTimestamp ?? timestamp + 3 }),
         ...(type === "callout" && { calloutText: "", calloutStyle: "label" as const, calloutDuration: rangeDuration ?? 3 }),
         ...(type === "music" && { musicVolume: 0.5, musicDuckTo: 0.2, musicEndTimestamp: endTimestamp }),
+        ...(type === "blur" && { blurRadius: 20, blurDuration: rangeDuration ?? 3 }),
+        ...(type === "mute" && { muteEndTimestamp: endTimestamp ?? timestamp + 3 }),
       };
 
       const actions = [...state.project.actions, newAction].sort(
@@ -137,6 +189,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       );
 
       return {
+        _actionsHistory: history,
+        _actionsFuture: [],
         project: { ...state.project, actions },
         selectedActionId: id,
         isDirty: true,
@@ -147,14 +201,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   updateAction: (id, partial) => {
     set((state) => {
       if (!state.project) return state;
+      const snapshot: TimelineAction[] = JSON.parse(JSON.stringify(state.project.actions));
+      const history = [...state._actionsHistory, snapshot].slice(-MAX_HISTORY);
+
       const actions = state.project.actions.map((a) =>
         a.id === id ? { ...a, ...partial } : a,
       );
-      // Re-sort if timestamp changed
       if (partial.timestamp !== undefined) {
         actions.sort((a, b) => a.timestamp - b.timestamp);
       }
       return {
+        _actionsHistory: history,
+        _actionsFuture: [],
         project: { ...state.project, actions },
         isDirty: true,
       };
@@ -164,8 +222,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   deleteAction: (id) => {
     set((state) => {
       if (!state.project) return state;
+      const snapshot: TimelineAction[] = JSON.parse(JSON.stringify(state.project.actions));
+      const history = [...state._actionsHistory, snapshot].slice(-MAX_HISTORY);
+
       const actions = state.project.actions.filter((a) => a.id !== id);
       return {
+        _actionsHistory: history,
+        _actionsFuture: [],
         project: { ...state.project, actions },
         selectedActionId:
           state.selectedActionId === id ? null : state.selectedActionId,
@@ -264,6 +327,86 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       console.error("Stop screen capture failed:", err);
       set({ captureMode: false, isRecording: false });
     }
+  },
+
+  // ---- Import Video ----
+
+  importVideo: async () => {
+    // 1. Pick a video file
+    const videoPath = await api.openVideoFile();
+    if (!videoPath) return;
+
+    // 2. Pick save directory
+    const home = (await api.homeDir()).replace(/\/?$/, "/");
+    const defaultDir = `${home}NaraScreen`;
+    await api.mkdir(defaultDir, { recursive: true });
+    const chosenDir = await api.pickSaveDirectory(defaultDir);
+    if (!chosenDir) return;
+
+    // 3. Create session directory
+    const now = new Date();
+    const ts = now.toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+    const sessionDir = `${chosenDir}/${ts}`;
+    await api.mkdir(sessionDir, { recursive: true });
+    await api.mkdir(`${sessionDir}/recordings`, { recursive: true });
+
+    // 4. Copy video to recordings/
+    const destPath = `${sessionDir}/recordings/recording.mp4`;
+    const response = await fetch(`file://${videoPath}`);
+    const buffer = await response.arrayBuffer();
+    await api.writeBinaryFile(destPath, buffer);
+
+    // 5. Get duration
+    let duration = 0;
+    try {
+      duration = await api.getVideoDuration(destPath);
+    } catch { /* fallback */ }
+
+    // 6. Generate filmstrip
+    try {
+      await api.generateFilmstrip(sessionDir);
+    } catch (err) {
+      console.error("Filmstrip generation failed:", err);
+    }
+
+    // 7. Create project
+    const project: DemoProject = {
+      title: "Imported Video",
+      baseUrl: "import://",
+      recordingPath: destPath,
+      recordingDuration: duration,
+      viewport: { width: 1920, height: 1080 },
+      output: { width: 1920, height: 1080, fps: 30, format: "mp4" },
+      tts: {
+        provider: "kokoro-direct",
+        kokoroEndpoint: "http://localhost:8880/v1/audio/speech",
+        voiceEn: "af_heart",
+        voiceHi: "hf_alpha",
+        speed: 1,
+      },
+      actions: [],
+    };
+
+    await api.writeTextFile(
+      `${sessionDir}/demo-project.json`,
+      JSON.stringify(project, null, 2),
+    );
+
+    // 8. Load filmstrip and open session
+    const filmstripPaths = await loadFilmstrip(sessionDir);
+    api.cacheSet("lastSessionDir", sessionDir);
+
+    set({
+      sessionDir,
+      project,
+      isDirty: false,
+      selectedActionId: null,
+      filmstripPaths,
+      playheadTime: 0,
+      captureMode: false,
+      isRecording: false,
+      produceLog: "",
+    });
   },
 
   // ---- Production ----

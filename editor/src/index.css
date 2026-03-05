@@ -5,6 +5,28 @@ html, body, #root {
   margin: 0;
   overflow: hidden;
   font-family: system-ui, -apple-system, sans-serif;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: #09090b;
+  color: #d4d4d8;
+}
+
+/* Timeline scrollbar — force visible */
+.timeline-scroll {
+  overflow-x: scroll !important;
+  scrollbar-width: auto;
+  scrollbar-color: #3f3f46 #18181b;
+}
+.timeline-scroll::-webkit-scrollbar {
+  height: 16px !important;
+  display: block !important;
+}
+.timeline-scroll::-webkit-scrollbar-track {
+  background: #18181b;
+}
+.timeline-scroll::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 7px;
+  border: 2px solid #18181b;
+}
+.timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
 }

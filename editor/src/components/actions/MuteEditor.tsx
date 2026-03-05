@@ -2,27 +2,27 @@ import type { TimelineAction } from "../../types";
 import { formatTime } from "../../lib/formatTime";
 import { useProjectStore } from "../../stores/useProjectStore";
 
-interface SkipEditorProps {
+interface MuteEditorProps {
   action: TimelineAction;
   onUpdate: (partial: Partial<TimelineAction>) => void;
 }
 
-export function SkipEditor({ action, onUpdate }: SkipEditorProps) {
+export function MuteEditor({ action, onUpdate }: MuteEditorProps) {
   const duration = useProjectStore((s) => s.project?.recordingDuration ?? 0);
 
-  const skipDuration = (action.skipEndTimestamp ?? action.timestamp + 3) - action.timestamp;
+  const muteDuration = (action.muteEndTimestamp ?? action.timestamp + 3) - action.timestamp;
 
   return (
     <>
       <div>
         <label className="block text-xs text-zinc-400 font-medium mb-1">
-          Cut End Timestamp (seconds)
+          Mute End Timestamp (seconds)
         </label>
         <input
           type="number"
-          value={action.skipEndTimestamp ?? action.timestamp + 3}
+          value={action.muteEndTimestamp ?? action.timestamp + 3}
           onChange={(e) =>
-            onUpdate({ skipEndTimestamp: parseFloat(e.target.value) || action.timestamp + 3 })
+            onUpdate({ muteEndTimestamp: parseFloat(e.target.value) || action.timestamp + 3 })
           }
           min={action.timestamp + 0.1}
           max={duration}
@@ -31,14 +31,14 @@ export function SkipEditor({ action, onUpdate }: SkipEditorProps) {
         />
       </div>
 
-      <div className="text-xs text-zinc-400 bg-red-500/10 border border-red-500/20 rounded p-2">
-        Removing {skipDuration.toFixed(1)}s from {formatTime(action.timestamp)} to{" "}
-        {formatTime(action.skipEndTimestamp ?? action.timestamp + 3)}
+      <div className="text-xs text-zinc-400 bg-rose-500/10 border border-rose-500/20 rounded p-2">
+        Muting audio for {muteDuration.toFixed(1)}s from {formatTime(action.timestamp)} to{" "}
+        {formatTime(action.muteEndTimestamp ?? action.timestamp + 3)}
       </div>
 
       <div className="text-[10px] text-zinc-600 border-t border-zinc-800/50 pt-2">
-        This section will be completely removed from the final video.
-        Use for wrong clicks, loading screens, or mistakes.
+        Audio will be silenced in this range. Video remains unchanged.
+        Use for background noise, coughs, or unwanted sounds.
       </div>
     </>
   );

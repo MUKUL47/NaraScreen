@@ -11,6 +11,7 @@ interface ElectronAPI {
 
   // Dialog
   openDirectory: () => Promise<string | null>;
+  openVideoFile: () => Promise<string | null>;
   pickSaveDirectory: (defaultPath?: string) => Promise<string | null>;
   saveFile: (opts: {
     title?: string;
@@ -35,6 +36,7 @@ interface ElectronAPI {
   // Versions
   listVersions: (sessionDir: string) => Promise<{ name: string; path: string; size: number; created: string }[]>;
   openVersion: (filePath: string) => Promise<void>;
+  showInFolder: (filePath: string) => Promise<void>;
 
   // Events
   onProduceProgress: (callback: (msg: string) => void) => void;

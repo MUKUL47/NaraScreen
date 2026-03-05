@@ -77,8 +77,32 @@ export function extractFrame(videoPath: string, timestamp: number, outputPath: s
   ]);
 }
 
-/** Cut a clip from a video (video only, no audio) */
+/** Cut a clip from a video, preserving audio if present */
 export function cutClip(
+  inputPath: string,
+  startTime: number,
+  endTime: number,
+  outputPath: string,
+): void {
+  const hasAudio = hasAudioStream(inputPath);
+  const args = [
+    "-y", "-i", inputPath,
+    "-ss", startTime.toFixed(3),
+    "-to", endTime.toFixed(3),
+    "-c:v", "libx264", "-preset", "fast", "-crf", "0",
+    "-pix_fmt", "yuv420p",
+  ];
+  if (hasAudio) {
+    args.push("-c:a", "aac", "-b:a", "192k");
+  } else {
+    args.push("-an");
+  }
+  args.push(outputPath);
+  spawnSync("ffmpeg", args);
+}
+
+/** Cut a clip with audio stripped (muted) */
+export function cutClipMuted(
   inputPath: string,
   startTime: number,
   endTime: number,
@@ -88,8 +112,9 @@ export function cutClip(
     "-y", "-i", inputPath,
     "-ss", startTime.toFixed(3),
     "-to", endTime.toFixed(3),
-    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-    "-pix_fmt", "yuv420p", "-an",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "0",
+    "-pix_fmt", "yuv420p",
+    "-an",
     outputPath,
   ]);
 }

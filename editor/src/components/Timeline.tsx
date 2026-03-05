@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useProjectStore } from "../stores/useProjectStore";
 import { assetUrl } from "../lib/fileOps";
 import { formatTime } from "../lib/formatTime";
@@ -7,7 +8,76 @@ import { ActionIcon, PlusIcon } from "./ActionIcon";
 import type { TimelineAction } from "../types";
 
 /** Range-based action types that support drag-to-select */
-const RANGE_ACTIONS: TimelineAction["type"][] = ["spotlight", "speed", "callout", "music"];
+const RANGE_ACTIONS: TimelineAction["type"][] = ["spotlight", "blur", "mute", "speed", "callout", "music"];
+
+/** Viewport-aware popup for grouped action markers */
+const GroupPopup = forwardRef<
+  HTMLDivElement,
+  {
+    badgeRect: DOMRect;
+    group: { actions: TimelineAction[]; ts: number };
+    selectedActionId: string | null;
+    onSelect: (action: TimelineAction) => void;
+  }
+>(({ badgeRect, group, selectedActionId, onSelect }, ref) => {
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const popupRect = el.getBoundingClientRect();
+    const pad = 8;
+
+    // Horizontal: center on badge, clamp to viewport
+    let left = badgeRect.left + badgeRect.width / 2 - popupRect.width / 2;
+    left = Math.max(pad, Math.min(left, window.innerWidth - popupRect.width - pad));
+
+    // Vertical: prefer above badge, fall back to below
+    let top = badgeRect.top - popupRect.height - 4;
+    if (top < pad) {
+      top = badgeRect.bottom + 4;
+    }
+
+    setPos({ left, top });
+  }, [badgeRect]);
+
+  return (
+    <div
+      ref={(node) => {
+        (innerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node;
+      }}
+      className="absolute bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-2xl min-w-40 py-1"
+      style={{
+        left: pos?.left ?? badgeRect.left,
+        top: pos?.top ?? badgeRect.top - 100,
+        visibility: pos ? "visible" : "hidden",
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="px-3 py-1 text-[9px] text-zinc-500 font-mono border-b border-zinc-700/40">
+        {formatTime(group.ts)}
+      </div>
+      {group.actions.map((action) => (
+        <button
+          key={action.id}
+          className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left hover:bg-zinc-800/70 transition-colors ${
+            selectedActionId === action.id ? "bg-zinc-800" : ""
+          } ${ACTION_TEXT_COLORS[action.type] || "text-zinc-300"}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(action);
+          }}
+        >
+          <span className={`w-3 h-3 rounded-full ${ACTION_COLORS[action.type]} shrink-0`} />
+          {ACTION_DISPLAY_NAMES[action.type] || action.type}
+        </button>
+      ))}
+    </div>
+  );
+});
 
 export function Timeline() {
   const project = useProjectStore((s) => s.project);
@@ -70,6 +140,8 @@ export function Timeline() {
       setDragEnd(null);
       setShowRangeMenu(false);
       isDragging.current = false;
+      setOpenGroupIdx(null);
+      setGroupBadgeRect(null);
     },
     [clientXToTime],
   );
@@ -160,13 +232,25 @@ export function Timeline() {
     [addAction, playheadTime],
   );
 
-  // Action marker positions
-  const actionPositions = useMemo(() => {
-    return actions.map((a) => ({
-      action: a,
-      left: a.timestamp * pxPerSec,
-    }));
+  // Group overlapping actions into clusters (within 12px)
+  const actionGroups = useMemo(() => {
+    const sorted = [...actions].sort((a, b) => a.timestamp - b.timestamp);
+    const groups: { actions: typeof actions; left: number; ts: number }[] = [];
+    for (const a of sorted) {
+      const left = a.timestamp * pxPerSec;
+      const existing = groups.find((g) => Math.abs(g.left - left) < 12);
+      if (existing) {
+        existing.actions.push(a);
+      } else {
+        groups.push({ actions: [a], left, ts: a.timestamp });
+      }
+    }
+    return groups;
   }, [actions, pxPerSec]);
+
+  const [openGroupIdx, setOpenGroupIdx] = useState<number | null>(null);
+  const [groupBadgeRect, setGroupBadgeRect] = useState<DOMRect | null>(null);
+  const groupPopupRef = useRef<HTMLDivElement>(null);
 
   // Filmstrip thumb positions (one every 2 seconds)
   const thumbWidth = 80;
@@ -191,31 +275,65 @@ export function Timeline() {
     };
   }, [dragStart, dragEnd, pxPerSec]);
 
+  // Compute time range for the selected action (if it has a range)
+  const selectedActionRange = useMemo(() => {
+    if (!selectedActionId) return null;
+    const action = actions.find((a) => a.id === selectedActionId);
+    if (!action) return null;
+
+    let endTime: number | null = null;
+    switch (action.type) {
+      case "spotlight": endTime = action.timestamp + (action.spotlightDuration ?? 3); break;
+      case "blur": endTime = action.timestamp + (action.blurDuration ?? 3); break;
+      case "mute": endTime = action.muteEndTimestamp ?? null; break;
+      case "speed": endTime = action.speedEndTimestamp ?? null; break;
+      case "skip": endTime = action.skipEndTimestamp ?? null; break;
+      case "callout": endTime = action.timestamp + (action.calloutDuration ?? 3); break;
+      case "music": endTime = action.musicEndTimestamp ?? null; break;
+      case "zoom": endTime = action.timestamp + (action.zoomDuration ?? 1) + (action.zoomHold ?? 2); break;
+      default: return null;
+    }
+    if (!endTime || endTime <= action.timestamp) return null;
+
+    const color = ACTION_COLORS[action.type] || "bg-zinc-500";
+    return {
+      left: action.timestamp * pxPerSec,
+      width: (endTime - action.timestamp) * pxPerSec,
+      color,
+    };
+  }, [selectedActionId, actions, pxPerSec]);
+
   return (
     <div
       ref={containerRef}
-      className="bg-slate-900 border-t border-slate-700 flex flex-col select-none relative"
+      className="bg-zinc-950 border-t border-zinc-700/40 flex flex-col select-none relative"
       onWheel={handleWheel}
     >
+      <style dangerouslySetInnerHTML={{ __html: `
+        .timeline-scroll::-webkit-scrollbar { height: 16px !important; }
+        .timeline-scroll::-webkit-scrollbar-track { background: #18181b; }
+        .timeline-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 8px; border: 3px solid #18181b; }
+        .timeline-scroll::-webkit-scrollbar-thumb:hover { background: #52525b; }
+      `}} />
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-slate-800">
-        <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">Timeline</span>
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800/50">
+        <span className="text-[11px] text-zinc-500 font-semibold uppercase tracking-wider">Timeline</span>
 
         <div className="relative">
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium rounded-md shadow-sm transition-colors"
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-linear-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-sm font-medium rounded-md shadow-lg shadow-violet-500/25 transition-colors"
           >
             <PlusIcon size={14} />
             Add Action
           </button>
           {showAddMenu && (
-            <div className="absolute bottom-full left-0 mb-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-20 min-w-[180px] py-1">
-              {(["narrate", "zoom", "spotlight", "speed", "callout", "music"] as const).map((t) => (
+            <div className="absolute bottom-full left-0 mb-1 bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-xl z-20 min-w-[180px] py-1">
+              {(["narrate", "zoom", "spotlight", "blur", "mute", "speed", "callout", "music"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => handleAddAction(t)}
-                  className={`flex items-center gap-2.5 w-full px-4 py-2 text-sm text-left hover:bg-slate-700/70 transition-colors ${ACTION_TEXT_COLORS[t] || "text-slate-300"}`}
+                  className={`flex items-center gap-2.5 w-full px-4 py-2 text-sm text-left hover:bg-zinc-800/70 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
                 >
                   <ActionIcon type={t} size={14} />
                   {ACTION_DISPLAY_NAMES[t] || t}
@@ -234,11 +352,11 @@ export function Timeline() {
           </span>
         )}
 
-        <span className="text-[10px] text-slate-600">
+        <span className="text-[10px] text-zinc-600">
           Drag to select range
         </span>
 
-        <span className="text-xs text-slate-400 font-mono tabular-nums">
+        <span className="text-xs text-zinc-400 font-mono tabular-nums">
           {formatTime(playheadTime)} / {formatTime(duration)}
         </span>
       </div>
@@ -246,7 +364,7 @@ export function Timeline() {
       {/* Scrollable timeline area */}
       <div
         ref={scrollContainerRef}
-        className="overflow-x-auto overflow-y-hidden flex-1"
+        className="overflow-x-auto overflow-y-hidden flex-1 timeline-scroll"
         style={{ minHeight: 120 }}
       >
         <div
@@ -264,15 +382,15 @@ export function Timeline() {
           }}
         >
           {/* Time ruler */}
-          <div className="h-5 relative border-b border-slate-800">
+          <div className="h-5 relative border-b border-zinc-800/50">
             {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => (
               <div
                 key={i}
-                className="absolute top-0 h-full border-l border-slate-700"
+                className="absolute top-0 h-full border-l border-zinc-700/40"
                 style={{ left: i * pxPerSec }}
               >
                 {i % Math.max(1, Math.round(5 / zoom)) === 0 && (
-                  <span className="text-[9px] text-slate-500 ml-1">
+                  <span className="text-[9px] text-zinc-500 ml-1">
                     {formatTime(i)}
                   </span>
                 )}
@@ -295,28 +413,72 @@ export function Timeline() {
           </div>
 
           {/* Action markers row */}
-          <div className="h-8 relative">
-            {actionPositions.map(({ action, left }) => (
-              <button
-                key={action.id}
-                className={`absolute top-1 w-5 h-5 rounded-full text-[9px] font-bold text-white flex items-center justify-center shadow cursor-pointer border-2 ${
-                  selectedActionId === action.id
-                    ? "border-white scale-125"
-                    : "border-transparent"
-                } ${ACTION_COLORS[action.type]}`}
-                style={{ left: left - 10 }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedAction(action.id);
-                  setPlayhead(action.timestamp);
-                }}
-                title={`${action.type} @ ${formatTime(action.timestamp)}`}
-              >
-                {ACTION_LABELS[action.type]}
-              </button>
-            ))}
+          <div className="relative" style={{ height: 32 }}>
+            {actionGroups.map((group, gi) => {
+              const isSingle = group.actions.length === 1;
+              const hasSelected = group.actions.some((a) => a.id === selectedActionId);
+
+              if (isSingle) {
+                const action = group.actions[0];
+                return (
+                  <button
+                    key={action.id}
+                    className={`absolute w-5 h-5 rounded-full text-[9px] font-bold text-white flex items-center justify-center shadow cursor-pointer border-2 z-10 ${
+                      selectedActionId === action.id
+                        ? "border-white scale-125 z-20"
+                        : "border-transparent"
+                    } ${ACTION_COLORS[action.type]}`}
+                    style={{ left: group.left - 10, top: 4 }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedAction(action.id);
+                      setPlayhead(action.timestamp);
+                    }}
+                    title={`${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${formatTime(action.timestamp)}`}
+                  >
+                    {ACTION_LABELS[action.type]}
+                  </button>
+                );
+              }
+
+              // Grouped badge
+              return (
+                <div key={`group-${gi}`} className="absolute z-10" style={{ left: group.left - 12, top: 4 }}>
+                  <button
+                    className={`w-6 h-6 rounded-full text-[9px] font-bold text-white flex items-center justify-center shadow cursor-pointer border-2 bg-zinc-700 ${
+                      hasSelected ? "border-white scale-110" : "border-zinc-400"
+                    }`}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (openGroupIdx === gi) {
+                        setOpenGroupIdx(null);
+                        setGroupBadgeRect(null);
+                      } else {
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setGroupBadgeRect(rect);
+                        setOpenGroupIdx(gi);
+                      }
+                    }}
+                    title={`${group.actions.length} actions @ ${formatTime(group.ts)}`}
+                  >
+                    {group.actions.length}
+                  </button>
+
+                  {/* Popup rendered via portal-style fixed overlay below */}
+                </div>
+              );
+            })}
           </div>
+
+          {/* Selected action range highlight */}
+          {selectedActionRange && (
+            <div
+              className={`absolute top-0 bottom-0 opacity-20 pointer-events-none ${selectedActionRange.color}`}
+              style={{ left: selectedActionRange.left, width: selectedActionRange.width }}
+            />
+          )}
 
           {/* Drag selection highlight */}
           {selectionRange && (
@@ -328,10 +490,10 @@ export function Timeline() {
 
           {/* Playhead */}
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none z-10"
+            className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none z-10 shadow-[0_0_8px_rgba(239,68,68,0.5)]"
             style={{ left: playheadTime * pxPerSec }}
           >
-            <div className="w-3 h-3 bg-red-500 rounded-full -translate-x-[5px] -translate-y-1" />
+            <div className="w-3 h-3 bg-red-500 rounded-full -translate-x-[5px] -translate-y-1 shadow-[0_0_6px_rgba(239,68,68,0.6)]" />
           </div>
         </div>
       </div>
@@ -340,10 +502,10 @@ export function Timeline() {
       {showRangeMenu && selectionRange && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={clearDragSelection}>
           <div
-            className="bg-slate-800 border border-slate-600 rounded-xl shadow-2xl min-w-[220px] py-2"
+            className="bg-zinc-900 border border-zinc-700/50 rounded-xl shadow-2xl min-w-[220px] py-2"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-2 text-xs text-slate-400 border-b border-slate-700 text-center font-mono">
+            <div className="px-4 py-2 text-xs text-zinc-400 border-b border-zinc-700/40 text-center font-mono">
               {formatTime(selectionRange.startTime)} — {formatTime(selectionRange.endTime)}
             </div>
             <div className="py-1">
@@ -351,7 +513,7 @@ export function Timeline() {
                 <button
                   key={t}
                   onClick={() => handleAddRangeAction(t)}
-                  className={`flex items-center gap-3 w-full px-5 py-2.5 text-sm text-left hover:bg-slate-700/70 transition-colors ${ACTION_TEXT_COLORS[t] || "text-slate-300"}`}
+                  className={`flex items-center gap-3 w-full px-5 py-2.5 text-sm text-left hover:bg-zinc-800/70 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
                 >
                   <ActionIcon type={t} size={15} />
                   {ACTION_DISPLAY_NAMES[t] || t}
@@ -360,12 +522,35 @@ export function Timeline() {
             </div>
             <button
               onClick={clearDragSelection}
-              className="w-full px-4 py-2 text-[11px] text-slate-500 hover:text-slate-300 border-t border-slate-700"
+              className="w-full px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300 border-t border-zinc-700/40"
             >
               Cancel
             </button>
           </div>
         </div>
+      )}
+
+      {/* Group actions popup — portaled to body to escape all overflow/z-index issues */}
+      {openGroupIdx !== null && groupBadgeRect && actionGroups[openGroupIdx] && createPortal(
+        <div
+          className="fixed inset-0"
+          style={{ zIndex: 9999 }}
+          onClick={() => { setOpenGroupIdx(null); setGroupBadgeRect(null); }}
+        >
+          <GroupPopup
+            ref={groupPopupRef}
+            badgeRect={groupBadgeRect}
+            group={actionGroups[openGroupIdx]}
+            selectedActionId={selectedActionId}
+            onSelect={(action) => {
+              setSelectedAction(action.id);
+              setPlayhead(action.timestamp);
+              setOpenGroupIdx(null);
+              setGroupBadgeRect(null);
+            }}
+          />
+        </div>,
+        document.body,
       )}
     </div>
   );

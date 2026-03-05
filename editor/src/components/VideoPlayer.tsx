@@ -12,6 +12,8 @@ interface VideoPlayerProps {
   onZoomDrawn?: (rect: [number, number, number, number]) => void;
   /** Show zoom rect overlay */
   zoomRect?: [number, number, number, number] | null;
+  /** Show multiple overlay rects (e.g. blur regions) */
+  overlayRects?: [number, number, number, number][];
 }
 
 export function VideoPlayer({
@@ -22,6 +24,7 @@ export function VideoPlayer({
   drawingZoom,
   onZoomDrawn,
   zoomRect,
+  overlayRects,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -205,7 +208,7 @@ export function VideoPlayer({
             onEnded={() => setIsPlaying(false)}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-slate-500">
+          <div className="w-full h-full flex items-center justify-center text-zinc-500">
             No recording loaded
           </div>
         )}
@@ -223,6 +226,20 @@ export function VideoPlayer({
           />
         )}
 
+        {/* Multiple overlay rects (blur regions) */}
+        {overlayRects && videoRef.current && overlayRects.map((r, i) => (
+          <div
+            key={i}
+            className="absolute border-2 border-indigo-400 bg-indigo-400/15 pointer-events-none"
+            style={{
+              left: `${(r[0] / (videoRef.current!.videoWidth || 1920)) * 100}%`,
+              top: `${(r[1] / (videoRef.current!.videoHeight || 1080)) * 100}%`,
+              width: `${(r[2] / (videoRef.current!.videoWidth || 1920)) * 100}%`,
+              height: `${(r[3] / (videoRef.current!.videoHeight || 1080)) * 100}%`,
+            }}
+          />
+        ))}
+
         {/* Drawing rect */}
         {drawingRect && videoRef.current && (
           <div
@@ -238,22 +255,22 @@ export function VideoPlayer({
       </div>
 
       {/* Controls */}
-      <div className="flex items-center gap-3 px-4 py-1.5 bg-slate-900/90 border-t border-slate-800/50">
+      <div className="flex items-center gap-3 px-4 py-1.5 bg-zinc-950/90 border-t border-zinc-800/50/50">
         <button
           onClick={togglePlay}
           disabled={!videoSrc}
-          className="w-7 h-7 flex items-center justify-center rounded-md bg-slate-800 hover:bg-slate-700 text-white text-xs font-mono disabled:opacity-30 transition-colors"
+          className="w-7 h-7 flex items-center justify-center rounded-md bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-mono disabled:opacity-30 transition-colors"
         >
           {isPlaying ? "||" : "\u25B6"}
         </button>
 
-        <span className="text-[11px] text-slate-400 font-mono tabular-nums w-24">
+        <span className="text-[11px] text-zinc-400 font-mono tabular-nums w-24">
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
 
         {/* Seek bar */}
         <div
-          className="flex-1 h-1.5 bg-slate-800 rounded-full cursor-pointer relative group"
+          className="flex-1 h-1.5 bg-zinc-900 rounded-full cursor-pointer relative group"
           onClick={handleSeekBarClick}
         >
           <div
@@ -266,7 +283,7 @@ export function VideoPlayer({
           />
         </div>
 
-        <span className="text-[9px] text-slate-600 hidden lg:inline">
+        <span className="text-[9px] text-zinc-600 hidden lg:inline">
           Space / Arrows
         </span>
       </div>

@@ -20,7 +20,7 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
   return (
     <>
       <div>
-        <label className="block text-xs text-slate-400 font-medium mb-1">
+        <label className="block text-xs text-zinc-400 font-medium mb-1">
           Zoom Region
         </label>
         <button
@@ -28,7 +28,7 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
           className={`px-3 py-1.5 text-xs rounded w-full ${
             drawingZoom
               ? "bg-yellow-600 text-white"
-              : "bg-slate-700 hover:bg-slate-600 text-slate-300"
+              : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
           }`}
         >
           {drawingZoom
@@ -39,7 +39,7 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
         </button>
         {action.zoomRect && (
           <div className="mt-1 flex items-center justify-between">
-            <span className="text-[10px] text-slate-500">
+            <span className="text-[10px] text-zinc-500">
               {action.zoomRect[0]},{action.zoomRect[1]} {action.zoomRect[2]}x
               {action.zoomRect[3]}
               {zoomScale && (
@@ -57,7 +57,7 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
       </div>
 
       <div>
-        <label className="block text-xs text-slate-400 font-medium mb-1">
+        <label className="block text-xs text-zinc-400 font-medium mb-1">
           Animation Duration (seconds)
         </label>
         <input
@@ -69,12 +69,12 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
           min={0.3}
           max={5}
           step={0.1}
-          className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-blue-400"
+          className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-400"
         />
       </div>
 
       <div>
-        <label className="block text-xs text-slate-400 font-medium mb-1">
+        <label className="block text-xs text-zinc-400 font-medium mb-1">
           Hold Duration (seconds)
         </label>
         <input
@@ -88,7 +88,7 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
           placeholder="Auto (audio duration or 3s)"
           min={0}
           step={0.5}
-          className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-blue-400"
+          className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-400"
         />
       </div>
 
@@ -97,7 +97,7 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
         label="Narration (plays while zoomed)"
       />
 
-      <div className="text-[10px] text-slate-600 border-t border-slate-800 pt-2">
+      <div className="text-[10px] text-zinc-600 border-t border-zinc-800/50 pt-2">
         Flow: Zoom In ({action.zoomDuration ?? 1}s) → Hold (frozen) → Zoom Out ({action.zoomDuration ?? 1}s)
       </div>
     </>

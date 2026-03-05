@@ -33,13 +33,13 @@ export function CaptureToolbar() {
   }, [stopScreenCapture]);
 
   return (
-    <div className="h-12 bg-slate-800 border-b border-slate-700 flex items-center px-4 gap-3 shrink-0">
+    <div className="h-12 bg-zinc-900 border-b border-zinc-700/40 flex items-center px-4 gap-3 shrink-0">
       <span className="text-sm font-semibold text-red-400 mr-2">
         Recording
       </span>
 
       <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-      <span className="text-sm text-slate-300 font-mono">
+      <span className="text-sm text-zinc-300 font-mono">
         {formatTime(timer)}
       </span>
 
@@ -48,7 +48,7 @@ export function CaptureToolbar() {
       <button
         onClick={handleStop}
         disabled={stopping}
-        className="px-4 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-slate-700 text-white text-xs rounded font-medium"
+        className="px-4 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-zinc-800 text-white text-xs rounded font-medium"
       >
         {stopping ? "Stopping..." : "Stop & Edit"}
       </button>

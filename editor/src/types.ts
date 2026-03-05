@@ -9,7 +9,9 @@ export type ActionType =
   | "speed"
   | "skip"
   | "callout"
-  | "music";
+  | "music"
+  | "blur"
+  | "mute";
 
 /** A keyframe action placed on the recording timeline */
 export interface TimelineAction {
@@ -60,6 +62,14 @@ export interface TimelineAction {
   calloutStyle?: "label" | "arrow" | "step-counter" | "lower-third";
   calloutStep?: number; // for step-counter auto-increment
   calloutDuration?: number; // how long to display (seconds)
+
+  // Blur: apply blur to one or more regions
+  blurRects?: [number, number, number, number][]; // array of [x, y, w, h] in video coords
+  blurRadius?: number; // blur strength (default 20)
+  blurDuration?: number; // how long to show (seconds)
+
+  // Mute: strip audio from a time range
+  muteEndTimestamp?: number; // when mute ends
 
   // Background Music: ambient track with auto-ducking
   musicPath?: string; // path to audio file

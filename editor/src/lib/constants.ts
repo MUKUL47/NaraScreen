@@ -8,6 +8,8 @@ export const ACTION_COLORS: Record<string, string> = {
   skip: "bg-red-500",
   callout: "bg-cyan-500",
   music: "bg-pink-500",
+  blur: "bg-indigo-500",
+  mute: "bg-rose-500",
 };
 
 /** Action type → short label for timeline markers */
@@ -20,6 +22,8 @@ export const ACTION_LABELS: Record<string, string> = {
   skip: "X",
   callout: "T",
   music: "M",
+  blur: "B",
+  mute: "🔇",
 };
 
 /** Action type → Tailwind text color class */
@@ -32,6 +36,8 @@ export const ACTION_TEXT_COLORS: Record<string, string> = {
   skip: "text-red-400",
   callout: "text-cyan-400",
   music: "text-pink-400",
+  blur: "text-indigo-400",
+  mute: "text-rose-400",
 };
 
 /** Action type → display name */
@@ -44,4 +50,6 @@ export const ACTION_DISPLAY_NAMES: Record<string, string> = {
   skip: "Skip / Cut",
   callout: "Text Callout",
   music: "Music",
+  blur: "Blur",
+  mute: "Mute",
 };

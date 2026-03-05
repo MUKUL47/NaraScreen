@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Dialog
   openDirectory: () => ipcRenderer.invoke("dialog:openDirectory"),
+  openVideoFile: () => ipcRenderer.invoke("dialog:openVideoFile"),
   pickSaveDirectory: (defaultPath?: string) => ipcRenderer.invoke("dialog:pickSaveDirectory", defaultPath),
   saveFile: (opts: {
     title?: string;
@@ -48,6 +49,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("versions:list", sessionDir),
   openVersion: (filePath: string) =>
     ipcRenderer.invoke("versions:open", filePath),
+  showInFolder: (filePath: string) =>
+    ipcRenderer.invoke("versions:showInFolder", filePath),
 
   // Binary file write (for recorded audio)
   writeBinaryFile: (filePath: string, data: ArrayBuffer) =>
