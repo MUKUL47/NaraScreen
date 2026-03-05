@@ -150,7 +150,13 @@ export async function stopRecording(): Promise<{
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        ffmpegProcess?.kill("SIGKILL");
+        try {
+          if (process.platform === "win32" && ffmpegProcess?.pid) {
+            spawnSync("taskkill", ["/F", "/pid", String(ffmpegProcess.pid)]);
+          } else {
+            ffmpegProcess?.kill("SIGKILL");
+          }
+        } catch { /* already dead */ }
         resolve();
       }, 10000);
 
@@ -291,6 +297,9 @@ export function startScreenRecording(
 
   console.log(`[screen-rec] Starting screen recording on ${process.platform}: ${captureW}x${captureH} at (${captureX},${captureY})`);
 
+  // On Windows, gdigrab doesn't read stdin for 'q' quit command,
+  // so we must spawn with a detached process group to send CTRL_BREAK_EVENT later.
+  const isWin = process.platform === "win32";
   screenRecordProcess = spawn(FFMPEG_PATH, [
     "-y",
     ...inputArgs,
@@ -298,7 +307,10 @@ export function startScreenRecording(
     "-preset", "ultrafast",
     "-pix_fmt", "yuv420p",
     videoPath,
-  ], { stdio: ["pipe", "ignore", "pipe"] });
+  ], {
+    stdio: ["pipe", "ignore", "pipe"],
+    ...(isWin ? { detached: false } : {}),
+  });
 
   screenRecordProcess.stderr?.on("data", (data: Buffer) => {
     console.log("[screen-rec]", data.toString().trim());
@@ -331,23 +343,41 @@ export async function stopScreenRecording(): Promise<{ videoPath: string; durati
     screenTickInterval = null;
   }
 
-  // Send 'q' to ffmpeg for graceful stop, then force-kill as backup
+  // Gracefully stop ffmpeg so it writes the moov atom (finalizes the mp4)
   if (screenRecordProcess) {
-    screenRecordProcess.stdin?.write("q");
+    const pid = screenRecordProcess.pid;
+
+    if (process.platform === "win32") {
+      // On Windows, stdin 'q' doesn't work with gdigrab.
+      // Use taskkill to send CTRL+C equivalent via taskkill, which lets ffmpeg
+      // finalize the file. Regular kill() would corrupt the mp4.
+      if (pid) {
+        try {
+          // taskkill without /F sends WM_CLOSE, letting ffmpeg flush & exit
+          spawnSync("taskkill", ["/pid", String(pid)]);
+        } catch {
+          screenRecordProcess.kill();
+        }
+      } else {
+        screenRecordProcess.kill();
+      }
+    } else {
+      // On Unix, write 'q' to stdin for graceful stop
+      screenRecordProcess.stdin?.write("q");
+    }
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        // SIGINT not available on Windows, use kill() which sends SIGTERM
-        if (process.platform === "win32") {
-          screenRecordProcess?.kill();
-        } else {
-          screenRecordProcess?.kill("SIGINT");
-        }
-        setTimeout(() => {
-          screenRecordProcess?.kill("SIGKILL");
-          resolve();
-        }, 3000);
-      }, 5000);
+        // Force kill as last resort
+        try {
+          if (process.platform === "win32" && pid) {
+            spawnSync("taskkill", ["/F", "/pid", String(pid)]);
+          } else {
+            screenRecordProcess?.kill("SIGKILL");
+          }
+        } catch { /* already dead */ }
+        resolve();
+      }, 8000);
 
       screenRecordProcess?.on("exit", () => {
         clearTimeout(timeout);
