@@ -98,7 +98,7 @@ export function Timeline() {
   const [dragStart, setDragStart] = useState<number | null>(null);
   const [dragEnd, setDragEnd] = useState<number | null>(null);
   const [showRangeMenu, setShowRangeMenu] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const isDragging = useRef(false);
   const timelineInnerRef = useRef<HTMLDivElement>(null);
 

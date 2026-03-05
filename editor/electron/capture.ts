@@ -2,6 +2,7 @@ import { BrowserWindow, screen } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { FFMPEG_PATH, FFPROBE_PATH } from "./bin-paths";
 
 let captureWindow: BrowserWindow | null = null;
 let ffmpegProcess: ChildProcess | null = null;
@@ -290,7 +291,7 @@ export function startScreenRecording(
 
   console.log(`[screen-rec] Starting screen recording on ${process.platform}: ${captureW}x${captureH} at (${captureX},${captureY})`);
 
-  screenRecordProcess = spawn("ffmpeg", [
+  screenRecordProcess = spawn(FFMPEG_PATH, [
     "-y",
     ...inputArgs,
     "-c:v", "libx264",
@@ -369,7 +370,7 @@ export async function stopScreenRecording(): Promise<{ videoPath: string; durati
   // Get actual duration via ffprobe
   let duration = elapsed;
   try {
-    const result = spawnSync("ffprobe", [
+    const result = spawnSync(FFPROBE_PATH, [
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=noprint_wrappers=1:nokey=1",

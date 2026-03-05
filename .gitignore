@@ -41,3 +41,4 @@ npm-debug.log*
 # Generated
 *.local
 dist-ssr
+release

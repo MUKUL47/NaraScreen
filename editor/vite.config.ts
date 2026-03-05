@@ -20,7 +20,7 @@ export default defineConfig({
           build: {
             outDir: "dist-electron",
             rollupOptions: {
-              external: ["electron"],
+              external: ["electron", "ffmpeg-static", "ffprobe-static"],
               output: {
                 format: "cjs",
                 entryFileNames: "[name].js",
@@ -38,7 +38,7 @@ export default defineConfig({
           build: {
             outDir: "dist-electron",
             rollupOptions: {
-              external: ["electron"],
+              external: ["electron", "ffmpeg-static", "ffprobe-static"],
               output: {
                 format: "cjs",
                 entryFileNames: "[name].js",
@@ -53,7 +53,7 @@ export default defineConfig({
           build: {
             outDir: "dist-electron",
             rollupOptions: {
-              external: ["electron"],
+              external: ["electron", "ffmpeg-static", "ffprobe-static"],
               output: {
                 format: "cjs",
                 entryFileNames: "[name].js",

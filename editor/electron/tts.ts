@@ -1,7 +1,29 @@
 import { spawnSync } from "child_process";
+import * as path from "path";
 import * as fs from "fs";
 
-export const KOKORO_PYTHON = process.env.KOKORO_PYTHON || "python3";
+const IS_PACKAGED = !process.defaultApp && !process.execPath.includes("node_modules");
+
+/**
+ * Resolve Kokoro Python path.
+ * Priority: KOKORO_PYTHON env var → bundled venv in resources → system python3
+ */
+function resolveKokoroPython(): string {
+  if (process.env.KOKORO_PYTHON) return process.env.KOKORO_PYTHON;
+
+  // Check for bundled Python venv in resources (if user bundles one)
+  if (IS_PACKAGED && process.resourcesPath) {
+    const ext = process.platform === "win32" ? ".exe" : "";
+    const venvPython = path.join(process.resourcesPath, "kokoro-venv", "bin", "python3" + ext);
+    const venvPythonWin = path.join(process.resourcesPath, "kokoro-venv", "Scripts", "python" + ext);
+    if (fs.existsSync(venvPython)) return venvPython;
+    if (fs.existsSync(venvPythonWin)) return venvPythonWin;
+  }
+
+  return "python3";
+}
+
+export const KOKORO_PYTHON = resolveKokoroPython();
 
 export function generateTTSViaKokoro(
   text: string,

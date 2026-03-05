@@ -1,10 +1,11 @@
 import { spawnSync } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import { FFMPEG_PATH, FFPROBE_PATH } from "./bin-paths";
 
 /** Get video resolution via ffprobe */
 export function probeResolution(filePath: string): { width: number; height: number } {
-  const result = spawnSync("ffprobe", [
+  const result = spawnSync(FFPROBE_PATH, [
     "-v", "error",
     "-select_streams", "v:0",
     "-show_entries", "stream=width,height",
@@ -19,7 +20,7 @@ export function probeResolution(filePath: string): { width: number; height: numb
 
 /** Get video/audio duration via ffprobe */
 export function probeDuration(filePath: string): number {
-  const result = spawnSync("ffprobe", [
+  const result = spawnSync(FFPROBE_PATH, [
     "-v", "error",
     "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1",
@@ -31,7 +32,7 @@ export function probeDuration(filePath: string): number {
 
 /** Check if a file has an audio stream */
 export function hasAudioStream(filePath: string): boolean {
-  const result = spawnSync("ffprobe", [
+  const result = spawnSync(FFPROBE_PATH, [
     "-v", "error",
     "-select_streams", "a",
     "-show_entries", "stream=codec_type",
@@ -52,7 +53,7 @@ export function generateFilmstrip(sessionDir: string): number {
   }
 
   const outputPattern = path.join(thumbnailsDir, "thumb_%04d.jpg");
-  const result = spawnSync("ffmpeg", [
+  const result = spawnSync(FFMPEG_PATH, [
     "-y",
     "-i", videoPath,
     "-vf", "fps=1/2,scale=160:-1",
@@ -69,7 +70,7 @@ export function generateFilmstrip(sessionDir: string): number {
 
 /** Extract a single frame from a video at the given timestamp */
 export function extractFrame(videoPath: string, timestamp: number, outputPath: string): void {
-  spawnSync("ffmpeg", [
+  spawnSync(FFMPEG_PATH, [
     "-y", "-ss", timestamp.toFixed(3),
     "-i", videoPath,
     "-frames:v", "1",
@@ -98,7 +99,7 @@ export function cutClip(
     args.push("-an");
   }
   args.push(outputPath);
-  spawnSync("ffmpeg", args);
+  spawnSync(FFMPEG_PATH, args);
 }
 
 /** Cut a clip with audio stripped (muted) */
@@ -108,7 +109,7 @@ export function cutClipMuted(
   endTime: number,
   outputPath: string,
 ): void {
-  spawnSync("ffmpeg", [
+  spawnSync(FFMPEG_PATH, [
     "-y", "-i", inputPath,
     "-ss", startTime.toFixed(3),
     "-to", endTime.toFixed(3),
@@ -122,7 +123,7 @@ export function cutClipMuted(
 /** Normalize a segment's audio to 44100Hz stereo AAC (or add silent audio if none) */
 export function normalizeSegmentAudio(inputPath: string, outputPath: string): string {
   if (hasAudioStream(inputPath)) {
-    const result = spawnSync("ffmpeg", [
+    const result = spawnSync(FFMPEG_PATH, [
       "-y",
       "-i", inputPath,
       "-c:v", "copy",
@@ -137,7 +138,7 @@ export function normalizeSegmentAudio(inputPath: string, outputPath: string): st
 
   // No audio — add silent track using explicit duration (avoid -shortest hang with anullsrc)
   const dur = probeDuration(inputPath);
-  const result = spawnSync("ffmpeg", [
+  const result = spawnSync(FFMPEG_PATH, [
     "-y",
     "-i", inputPath,
     "-f", "lavfi", "-t", dur.toFixed(3), "-i", "anullsrc=r=44100:cl=stereo",
@@ -165,7 +166,7 @@ export function concatSegments(
   );
 
   // Try copy first (fast)
-  const result = spawnSync("ffmpeg", [
+  const result = spawnSync(FFMPEG_PATH, [
     "-y", "-f", "concat", "-safe", "0",
     "-i", concatListPath,
     "-c", "copy",
@@ -175,7 +176,7 @@ export function concatSegments(
   if (result.status === 0) return true;
 
   // Fallback: re-encode
-  spawnSync("ffmpeg", [
+  spawnSync(FFMPEG_PATH, [
     "-y", "-f", "concat", "-safe", "0",
     "-i", concatListPath,
     "-c:v", "libx264", "-preset", "fast", "-crf", "18",
