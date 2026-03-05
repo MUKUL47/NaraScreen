@@ -1,83 +1,39 @@
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
 import { assetUrl } from "../lib/fileOps";
 import { formatTime } from "../lib/formatTime";
-import { ACTION_COLORS, ACTION_TEXT_COLORS, ACTION_DISPLAY_NAMES } from "../lib/constants";
+import { ACTION_BG_COLORS, ACTION_BORDER_COLORS, ACTION_TEXT_COLORS, ACTION_DISPLAY_NAMES } from "../lib/constants";
 import { ActionIcon, PlusIcon } from "./ActionIcon";
-import type { TimelineAction } from "../types";
+import { Minus, Plus, Video } from "lucide-react";
+import type { TimelineAction, ActionType } from "../types";
 
 /** Range-based action types that support drag-to-select */
-const RANGE_ACTIONS: TimelineAction["type"][] = ["spotlight", "blur", "mute", "speed", "callout", "music"];
+const RANGE_ACTIONS: ActionType[] = ["spotlight", "blur", "mute", "speed", "callout", "music"];
 
-/** Viewport-aware popup for grouped action markers */
-const GroupPopup = forwardRef<
-  HTMLDivElement,
-  {
-    badgeRect: DOMRect;
-    group: { actions: TimelineAction[]; ts: number };
-    selectedActionId: string | null;
-    onSelect: (action: TimelineAction) => void;
+/** Fixed display order for lanes */
+const LANE_ORDER: ActionType[] = ["narrate", "zoom", "spotlight", "blur", "mute", "speed", "skip", "callout", "music", "pause"];
+
+/** Compute the end time of an action for pill width */
+function getActionEndTime(action: TimelineAction): number {
+  switch (action.type) {
+    case "spotlight": return action.timestamp + (action.spotlightDuration ?? 3);
+    case "blur": return action.timestamp + (action.blurDuration ?? 3);
+    case "mute": return action.muteEndTimestamp ?? action.timestamp + 3;
+    case "speed": return action.speedEndTimestamp ?? action.timestamp + 5;
+    case "skip": return action.skipEndTimestamp ?? action.timestamp + 3;
+    case "callout": return action.timestamp + (action.calloutDuration ?? 3);
+    case "music": return action.musicEndTimestamp ?? action.timestamp + 10;
+    case "zoom": return action.timestamp + (action.zoomDuration ?? 1) + (action.zoomHold ?? 2);
+    case "narrate": return action.timestamp + 2;
+    case "pause": return action.timestamp + 1;
+    default: return action.timestamp + 1;
   }
->(({ badgeRect, group, selectedActionId, onSelect }, ref) => {
-  const innerRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+}
 
-  useLayoutEffect(() => {
-    const el = innerRef.current;
-    if (!el) return;
-    const popupRect = el.getBoundingClientRect();
-    const pad = 8;
-
-    // Horizontal: center on badge, clamp to viewport
-    let left = badgeRect.left + badgeRect.width / 2 - popupRect.width / 2;
-    left = Math.max(pad, Math.min(left, window.innerWidth - popupRect.width - pad));
-
-    // Vertical: prefer above badge, fall back to below
-    let top = badgeRect.top - popupRect.height - 4;
-    if (top < pad) {
-      top = badgeRect.bottom + 4;
-    }
-
-    setPos({ left, top });
-  }, [badgeRect]);
-
-  return (
-    <div
-      ref={(node) => {
-        (innerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
-        if (typeof ref === "function") ref(node);
-        else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node;
-      }}
-      className="absolute bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-2xl min-w-40 py-1"
-      style={{
-        left: pos?.left ?? badgeRect.left,
-        top: pos?.top ?? badgeRect.top - 100,
-        visibility: pos ? "visible" : "hidden",
-      }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="px-3 py-1 text-[9px] text-zinc-500 font-mono border-b border-zinc-700/40">
-        {formatTime(group.ts)}
-      </div>
-      {group.actions.map((action) => (
-        <button
-          key={action.id}
-          className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left hover:bg-zinc-800/70 transition-colors ${
-            selectedActionId === action.id ? "bg-zinc-800" : ""
-          } ${ACTION_TEXT_COLORS[action.type] || "text-zinc-300"}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect(action);
-          }}
-        >
-          <span className={`w-3 h-3 rounded-full ${ACTION_COLORS[action.type]} shrink-0`} />
-          {ACTION_DISPLAY_NAMES[action.type] || action.type}
-        </button>
-      ))}
-    </div>
-  );
-});
+const RULER_H = 24;
+const FILMSTRIP_H = 48;
+const LANE_H = 28;
+const SIDEBAR_W = 44;
 
 export function Timeline() {
   const project = useProjectStore((s) => s.project);
@@ -98,26 +54,33 @@ export function Timeline() {
   const [dragStart, setDragStart] = useState<number | null>(null);
   const [dragEnd, setDragEnd] = useState<number | null>(null);
   const [showRangeMenu, setShowRangeMenu] = useState(false);
-  const [, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [finalRange, setFinalRange] = useState<[number, number] | null>(null);
   const isDragging = useRef(false);
   const timelineInnerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const duration = project?.recordingDuration ?? 0;
   const pxPerSec = useMemo(() => Math.max(10, (containerWidth / Math.max(duration, 1)) * zoom), [containerWidth, duration, zoom]);
   const totalWidth = duration * pxPerSec;
 
+  // Active lanes — only types with at least one action
+  const activeLanes = useMemo(() => {
+    const types = new Set(actions.map((a) => a.type));
+    return LANE_ORDER.filter((t) => types.has(t));
+  }, [actions]);
+
+  const totalContentHeight = RULER_H + FILMSTRIP_H + activeLanes.length * LANE_H;
+
   // Observe container width
   useEffect(() => {
-    const el = containerRef.current;
+    const el = scrollContainerRef.current;
     if (!el) return;
     const obs = new ResizeObserver((entries) => {
-      setContainerWidth(entries[0].contentRect.width);
+      setContainerWidth(entries[0].contentRect.width - SIDEBAR_W);
     });
     obs.observe(el);
     return () => obs.disconnect();
   }, []);
-
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Convert clientX to time
   const clientXToTime = useCallback(
@@ -140,13 +103,11 @@ export function Timeline() {
       setDragEnd(null);
       setShowRangeMenu(false);
       isDragging.current = false;
-      setOpenGroupIdx(null);
-      setGroupBadgeRect(null);
     },
     [clientXToTime],
   );
 
-  // Use document-level listeners for drag so it continues over the scrollbar
+  // Document-level drag listeners
   useEffect(() => {
     if (dragStart === null) return;
 
@@ -162,18 +123,12 @@ export function Timeline() {
 
     const onMouseUp = (e: MouseEvent) => {
       const time = clientXToTime(e.clientX);
-
       if (isDragging.current && dragEnd !== null) {
-        const containerRect = containerRef.current?.getBoundingClientRect();
-        if (containerRect) {
-          setMenuPos({
-            x: e.clientX - containerRect.left,
-            y: 4,
-          });
-        }
+        // Freeze the selection range and detach drag listeners
+        setDragStart(null);
+        setFinalRange([Math.min(dragStart, dragEnd), Math.max(dragStart, dragEnd)]);
         setShowRangeMenu(true);
       } else {
-        // Simple click — seek playhead
         setPlayhead(time);
         setSelectedAction(null);
         setDragStart(null);
@@ -192,24 +147,21 @@ export function Timeline() {
 
   // Add range-based action from drag selection
   const handleAddRangeAction = useCallback(
-    (type: TimelineAction["type"]) => {
-      if (dragStart === null || dragEnd === null) return;
-      const start = Math.min(dragStart, dragEnd);
-      const end = Math.max(dragStart, dragEnd);
-      addAction(type, start, end);
-      setDragStart(null);
+    (type: ActionType) => {
+      if (!finalRange) return;
+      addAction(type, finalRange[0], finalRange[1]);
+      setFinalRange(null);
       setDragEnd(null);
       setShowRangeMenu(false);
-      setMenuPos(null);
     },
-    [dragStart, dragEnd, addAction],
+    [finalRange, addAction],
   );
 
   const clearDragSelection = useCallback(() => {
     setDragStart(null);
     setDragEnd(null);
+    setFinalRange(null);
     setShowRangeMenu(false);
-    setMenuPos(null);
   }, []);
 
   // Zoom with scroll wheel
@@ -226,106 +178,77 @@ export function Timeline() {
 
   // Add action at playhead position
   const handleAddAction = useCallback(
-    (type: TimelineAction["type"]) => {
+    (type: ActionType) => {
       addAction(type, playheadTime);
       setShowAddMenu(false);
     },
     [addAction, playheadTime],
   );
 
-  // Group overlapping actions into clusters (within 12px)
-  const actionGroups = useMemo(() => {
-    const sorted = [...actions].sort((a, b) => a.timestamp - b.timestamp);
-    const groups: { actions: typeof actions; left: number; ts: number }[] = [];
-    for (const a of sorted) {
-      const left = a.timestamp * pxPerSec;
-      const existing = groups.find((g) => Math.abs(g.left - left) < 12);
-      if (existing) {
-        existing.actions.push(a);
-      } else {
-        groups.push({ actions: [a], left, ts: a.timestamp });
-      }
-    }
-    return groups;
-  }, [actions, pxPerSec]);
-
-  const [openGroupIdx, setOpenGroupIdx] = useState<number | null>(null);
-  const [groupBadgeRect, setGroupBadgeRect] = useState<DOMRect | null>(null);
-  const groupPopupRef = useRef<HTMLDivElement>(null);
-
   // Filmstrip thumb positions (one every 2 seconds)
-  const thumbWidth = 80;
   const thumbPositions = useMemo(() => {
     return filmstripPaths.map((path, i) => ({
       path,
       left: i * 2 * pxPerSec,
-      width: Math.min(thumbWidth, 2 * pxPerSec),
+      width: Math.min(80, 2 * pxPerSec),
     }));
   }, [filmstripPaths, pxPerSec]);
 
-  // Drag selection range in pixels
+  // Drag selection range in pixels (from active drag or frozen final range)
   const selectionRange = useMemo(() => {
-    if (dragStart === null || dragEnd === null) return null;
-    const start = Math.min(dragStart, dragEnd);
-    const end = Math.max(dragStart, dragEnd);
+    let start: number, end: number;
+    if (finalRange) {
+      [start, end] = finalRange;
+    } else if (dragStart !== null && dragEnd !== null) {
+      start = Math.min(dragStart, dragEnd);
+      end = Math.max(dragStart, dragEnd);
+    } else {
+      return null;
+    }
     return {
       left: start * pxPerSec,
       width: (end - start) * pxPerSec,
       startTime: start,
       endTime: end,
     };
-  }, [dragStart, dragEnd, pxPerSec]);
+  }, [dragStart, dragEnd, finalRange, pxPerSec]);
 
-  // Compute time range for the selected action (if it has a range)
-  const selectedActionRange = useMemo(() => {
-    if (!selectedActionId) return null;
-    const action = actions.find((a) => a.id === selectedActionId);
-    if (!action) return null;
+  // Adaptive ruler tick interval
+  const tickInterval = useMemo(() => {
+    if (pxPerSec >= 100) return 1;
+    if (pxPerSec >= 40) return 2;
+    if (pxPerSec >= 20) return 5;
+    if (pxPerSec >= 10) return 10;
+    return 30;
+  }, [pxPerSec]);
 
-    let endTime: number | null = null;
-    switch (action.type) {
-      case "spotlight": endTime = action.timestamp + (action.spotlightDuration ?? 3); break;
-      case "blur": endTime = action.timestamp + (action.blurDuration ?? 3); break;
-      case "mute": endTime = action.muteEndTimestamp ?? null; break;
-      case "speed": endTime = action.speedEndTimestamp ?? null; break;
-      case "skip": endTime = action.skipEndTimestamp ?? null; break;
-      case "callout": endTime = action.timestamp + (action.calloutDuration ?? 3); break;
-      case "music": endTime = action.musicEndTimestamp ?? null; break;
-      case "zoom": endTime = action.timestamp + (action.zoomDuration ?? 1) + (action.zoomHold ?? 2); break;
-      default: return null;
-    }
-    if (!endTime || endTime <= action.timestamp) return null;
-
-    const color = ACTION_COLORS[action.type] || "bg-zinc-500";
-    return {
-      left: action.timestamp * pxPerSec,
-      width: (endTime - action.timestamp) * pxPerSec,
-      color,
-    };
-  }, [selectedActionId, actions, pxPerSec]);
+  const majorTickInterval = useMemo(() => {
+    if (tickInterval <= 2) return 5;
+    if (tickInterval <= 5) return 10;
+    return 30;
+  }, [tickInterval]);
 
   return (
     <div
       ref={containerRef}
-      className="bg-zinc-950 border-t border-zinc-700/40 flex flex-col select-none relative"
+      className="bg-zinc-950 border-t border-zinc-700/40 flex flex-col select-none relative h-full"
       onWheel={handleWheel}
     >
       <style dangerouslySetInnerHTML={{ __html: `
-        .timeline-scroll::-webkit-scrollbar { height: 16px !important; }
+        .timeline-scroll::-webkit-scrollbar { height: 10px !important; }
         .timeline-scroll::-webkit-scrollbar-track { background: #18181b; }
-        .timeline-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 8px; border: 3px solid #18181b; }
+        .timeline-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 5px; border: 2px solid #18181b; }
         .timeline-scroll::-webkit-scrollbar-thumb:hover { background: #52525b; }
       `}} />
-      {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800/50">
-        <span className="text-[11px] text-zinc-500 font-semibold uppercase tracking-wider">Timeline</span>
 
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-zinc-800/50 shrink-0">
         <div className="relative">
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-linear-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-sm font-medium rounded-md shadow-lg shadow-violet-500/25 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1 bg-linear-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-xs font-medium rounded-md shadow-lg shadow-violet-500/25 transition-colors"
           >
-            <PlusIcon size={14} />
+            <PlusIcon size={12} />
             Add Action
           </button>
           {showAddMenu && (
@@ -346,147 +269,194 @@ export function Timeline() {
 
         <div className="flex-1" />
 
-        {/* Show drag selection info */}
+        {/* Drag selection info */}
         {selectionRange && (
           <span className="text-[10px] text-violet-400 font-mono">
             {formatTime(selectionRange.startTime)} — {formatTime(selectionRange.endTime)}
           </span>
         )}
 
-        <span className="text-[10px] text-zinc-600">
-          Drag to select range
-        </span>
+        {/* Zoom controls — outside the timeline mouseDown area, use onPointerDown to avoid drag interference */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); setZoom((z) => Math.max(0.1, +(z * 0.8).toFixed(2))); }}
+            className="w-6 h-6 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+          >
+            <Minus size={12} strokeWidth={2.5} />
+          </button>
+          <span className="text-[9px] text-zinc-500 font-mono w-8 text-center">{Math.round(zoom * 100)}%</span>
+          <button
+            type="button"
+            onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); setZoom((z) => Math.min(10, +(z * 1.2).toFixed(2))); }}
+            className="w-6 h-6 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+          >
+            <Plus size={12} strokeWidth={2.5} />
+          </button>
+        </div>
 
-        <span className="text-xs text-zinc-400 font-mono tabular-nums">
+        <span className="text-[11px] text-zinc-400 font-mono tabular-nums">
           {formatTime(playheadTime)} / {formatTime(duration)}
         </span>
       </div>
 
-      {/* Scrollable timeline area */}
-      <div
-        ref={scrollContainerRef}
-        className="overflow-x-auto overflow-y-hidden flex-1 timeline-scroll"
-        style={{ minHeight: 120 }}
-      >
-        <div
-          ref={timelineInnerRef}
-          className="relative"
-          style={{ width: totalWidth, minWidth: "100%" }}
-          onMouseDown={handleMouseDown}
-        >
-          {/* Time ruler */}
-          <div className="h-5 relative border-b border-zinc-800/50">
-            {Array.from({ length: Math.ceil(duration) + 1 }, (_, i) => (
+      {/* Main timeline area: sidebar + scrollable content */}
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto timeline-scroll">
+        <div className="flex">
+          {/* Track label sidebar — sticky left */}
+          <div className="sticky left-0 z-20 shrink-0 border-r border-zinc-800/50 bg-zinc-950 flex flex-col" style={{ width: SIDEBAR_W }}>
+            {/* Ruler spacer — sticky top */}
+            <div className="sticky top-0 bg-zinc-950 z-20 border-b border-zinc-800/30 flex items-center justify-center shrink-0" style={{ height: RULER_H }}>
+              <span className="text-[8px] text-zinc-600 uppercase tracking-wider font-semibold">Time</span>
+            </div>
+            {/* Video track label — sticky below ruler */}
+            <div className="sticky bg-zinc-950 z-10 border-b border-zinc-800/30 flex items-center justify-center shrink-0" style={{ height: FILMSTRIP_H, top: RULER_H }}>
+              <Video size={13} className="text-zinc-500" />
+            </div>
+            {/* Action lane labels */}
+            {activeLanes.map((type) => (
               <div
-                key={i}
-                className="absolute top-0 h-full border-l border-zinc-700/40"
-                style={{ left: i * pxPerSec }}
+                key={type}
+                className="border-b border-zinc-800/30 flex items-center justify-center shrink-0"
+                style={{ height: LANE_H }}
+                title={ACTION_DISPLAY_NAMES[type] || type}
               >
-                {i % Math.max(1, Math.round(5 / zoom)) === 0 && (
-                  <span className="text-[9px] text-zinc-500 ml-1">
-                    {formatTime(i)}
-                  </span>
-                )}
+                <ActionIcon type={type} size={13} className={ACTION_TEXT_COLORS[type] || "text-zinc-500"} />
               </div>
             ))}
           </div>
 
-          {/* Filmstrip row */}
-          <div className="h-12 relative overflow-hidden">
-            {thumbPositions.map(({ path, left, width }, i) => (
-              <img
-                key={i}
-                src={assetUrl(path)}
-                alt=""
-                className="absolute top-0 h-12 object-cover opacity-60"
-                style={{ left, width }}
-                draggable={false}
-              />
-            ))}
-          </div>
-
-          {/* Action markers row */}
-          <div className="relative" style={{ height: 32 }}>
-            {actionGroups.map((group, gi) => {
-              const isSingle = group.actions.length === 1;
-              const hasSelected = group.actions.some((a) => a.id === selectedActionId);
-
-              if (isSingle) {
-                const action = group.actions[0];
-                return (
-                  <button
-                    key={action.id}
-                    className={`absolute w-5 h-5 rounded-full text-[9px] font-bold text-white flex items-center justify-center shadow cursor-pointer border-2 z-10 ${
-                      selectedActionId === action.id
-                        ? "border-white scale-125 z-20"
-                        : "border-transparent"
-                    } ${ACTION_COLORS[action.type]}`}
-                    style={{ left: group.left - 10, top: 4 }}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedAction(action.id);
-                      setPlayhead(action.timestamp);
-                    }}
-                    title={`${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${formatTime(action.timestamp)}`}
-                  >
-                    <ActionIcon type={action.type} size={11} />
-                  </button>
-                );
-              }
-
-              // Grouped badge
-              return (
-                <div key={`group-${gi}`} className="absolute z-10" style={{ left: group.left - 12, top: 4 }}>
-                  <button
-                    className={`w-6 h-6 rounded-full text-[9px] font-bold text-white flex items-center justify-center shadow cursor-pointer border-2 bg-zinc-700 ${
-                      hasSelected ? "border-white scale-110" : "border-zinc-400"
-                    }`}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (openGroupIdx === gi) {
-                        setOpenGroupIdx(null);
-                        setGroupBadgeRect(null);
-                      } else {
-                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                        setGroupBadgeRect(rect);
-                        setOpenGroupIdx(gi);
-                      }
-                    }}
-                    title={`${group.actions.length} actions @ ${formatTime(group.ts)}`}
-                  >
-                    {group.actions.length}
-                  </button>
-
-                  {/* Popup rendered via portal-style fixed overlay below */}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Selected action range highlight */}
-          {selectedActionRange && (
-            <div
-              className={`absolute top-0 bottom-0 opacity-20 pointer-events-none ${selectedActionRange.color}`}
-              style={{ left: selectedActionRange.left, width: selectedActionRange.width }}
-            />
-          )}
-
-          {/* Drag selection highlight */}
-          {selectionRange && (
-            <div
-              className="absolute top-0 bottom-0 bg-violet-500/20 border-l border-r border-violet-400/50 pointer-events-none z-5"
-              style={{ left: selectionRange.left, width: selectionRange.width }}
-            />
-          )}
-
-          {/* Playhead */}
+          {/* Timeline content */}
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none z-10 shadow-[0_0_8px_rgba(239,68,68,0.5)]"
-            style={{ left: playheadTime * pxPerSec }}
+            ref={timelineInnerRef}
+            className="relative flex-1 flex flex-col"
+            style={{ width: Math.max(totalWidth, containerWidth) }}
+            onMouseDown={handleMouseDown}
           >
-            <div className="w-3 h-3 bg-red-500 rounded-full -translate-x-[5px] -translate-y-1 shadow-[0_0_6px_rgba(239,68,68,0.6)]" />
+            {/* ─── Time ruler (sticky top) ─── */}
+            <div className="sticky top-0 border-b border-zinc-800/30 bg-zinc-950 z-20 shrink-0" style={{ height: RULER_H }}>
+              {Array.from({ length: Math.ceil(duration / tickInterval) + 1 }, (_, i) => {
+                const t = i * tickInterval;
+                if (t > duration) return null;
+                const isMajor = t % majorTickInterval === 0;
+                return (
+                  <div
+                    key={t}
+                    className="absolute top-0"
+                    style={{ left: t * pxPerSec }}
+                  >
+                    <div
+                      className={isMajor ? "border-l border-zinc-600/50" : "border-l border-zinc-800/60"}
+                      style={{ height: isMajor ? RULER_H : RULER_H * 0.5, marginTop: isMajor ? 0 : RULER_H * 0.5 }}
+                    />
+                    {isMajor && (
+                      <span className="absolute top-0.5 left-1 text-[9px] text-zinc-500 whitespace-nowrap">
+                        {formatTime(t)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* ─── Filmstrip track (sticky below ruler) ─── */}
+            <div
+              className="sticky border-b border-zinc-800/30 bg-zinc-950 z-10 shrink-0 overflow-hidden"
+              style={{ top: RULER_H, height: FILMSTRIP_H }}
+            >
+              {thumbPositions.map(({ path, left, width }, i) => (
+                <img
+                  key={i}
+                  src={assetUrl(path)}
+                  alt=""
+                  className="absolute top-0 h-full object-cover opacity-80 rounded-sm"
+                  style={{ left, width }}
+                  draggable={false}
+                />
+              ))}
+            </div>
+
+            {/* ─── Action lanes (flow layout) ─── */}
+            <div className="relative flex-1">
+              {activeLanes.map((laneType, laneIdx) => {
+                const laneActions = actions.filter((a) => a.type === laneType);
+
+                return (
+                  <div
+                    key={laneType}
+                    className="relative border-b border-zinc-800/30"
+                    style={{ height: LANE_H }}
+                  >
+                    {laneActions.map((action) => {
+                      const left = action.timestamp * pxPerSec;
+                      const endTime = getActionEndTime(action);
+                      const width = Math.max((endTime - action.timestamp) * pxPerSec, 22);
+                      const isSelected = action.id === selectedActionId;
+
+                      return (
+                        <button
+                          key={action.id}
+                          className={`absolute flex items-center gap-1 px-1.5 rounded-md cursor-pointer transition-all overflow-hidden
+                            ${ACTION_BG_COLORS[laneType] || "bg-zinc-500/20"}
+                            ${isSelected
+                              ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-sm`
+                              : "border border-transparent hover:brightness-110"
+                            }`}
+                          style={{ left, width, top: 3, height: LANE_H - 6 }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedAction(action.id);
+                            setPlayhead(action.timestamp);
+                          }}
+                          title={`${ACTION_DISPLAY_NAMES[laneType] || laneType} @ ${formatTime(action.timestamp)}`}
+                        >
+                          <ActionIcon
+                            type={laneType}
+                            size={10}
+                            className={`shrink-0 ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}
+                          />
+                          {width > 50 && (
+                            <span className={`text-[9px] font-medium truncate ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}>
+                              {ACTION_DISPLAY_NAMES[laneType]}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+
+              {/* ─── Drag selection highlight ─── */}
+              {selectionRange && (
+                <div
+                  className="absolute top-0 bg-violet-500/15 border-l border-r border-violet-400/40 pointer-events-none"
+                  style={{ left: selectionRange.left, width: selectionRange.width, height: activeLanes.length * LANE_H }}
+                />
+              )}
+            </div>
+
+            {/* ─── Playhead (spans full height) ─── */}
+            <div
+              className="absolute top-0 pointer-events-none z-30"
+              style={{ left: playheadTime * pxPerSec, height: RULER_H + FILMSTRIP_H + activeLanes.length * LANE_H }}
+            >
+              {/* Triangle handle */}
+              <div
+                className="absolute -translate-x-1.25"
+                style={{ top: RULER_H - 8 }}
+              >
+                <svg width="10" height="8" viewBox="0 0 10 8">
+                  <polygon points="0,0 10,0 5,8" fill="#ef4444" />
+                </svg>
+              </div>
+              {/* Vertical line */}
+              <div
+                className="absolute top-0 w-px bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]"
+                style={{ left: 0, height: RULER_H + FILMSTRIP_H + activeLanes.length * LANE_H }}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -521,29 +491,6 @@ export function Timeline() {
             </button>
           </div>
         </div>
-      )}
-
-      {/* Group actions popup — portaled to body to escape all overflow/z-index issues */}
-      {openGroupIdx !== null && groupBadgeRect && actionGroups[openGroupIdx] && createPortal(
-        <div
-          className="fixed inset-0"
-          style={{ zIndex: 9999 }}
-          onClick={() => { setOpenGroupIdx(null); setGroupBadgeRect(null); }}
-        >
-          <GroupPopup
-            ref={groupPopupRef}
-            badgeRect={groupBadgeRect}
-            group={actionGroups[openGroupIdx]}
-            selectedActionId={selectedActionId}
-            onSelect={(action) => {
-              setSelectedAction(action.id);
-              setPlayhead(action.timestamp);
-              setOpenGroupIdx(null);
-              setGroupBadgeRect(null);
-            }}
-          />
-        </div>,
-        document.body,
       )}
     </div>
   );

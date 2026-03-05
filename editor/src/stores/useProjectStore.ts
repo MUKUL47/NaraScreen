@@ -35,6 +35,10 @@ interface ProjectState {
   isProducing: boolean;
   produceLog: string;
 
+  // Global loading
+  isLoading: boolean;
+  loadingMessage: string;
+
   // Actions
   openSession: (dir: string) => Promise<void>;
   save: () => Promise<void>;
@@ -79,8 +83,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   isRecording: false,
   isProducing: false,
   produceLog: "",
+  isLoading: false,
+  loadingMessage: "",
 
   openSession: async (dir: string) => {
+    set({ isLoading: true, loadingMessage: "Opening project..." });
     const project = await loadProject(dir);
     const filmstripPaths = await loadFilmstrip(dir);
 
@@ -109,6 +116,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       playheadTime: 0,
       captureMode: false,
       produceLog: "",
+      isLoading: false,
+      loadingMessage: "",
     });
   },
 
@@ -287,6 +296,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { sessionDir } = get();
     if (!sessionDir) return;
 
+    set({ isLoading: true, loadingMessage: "Processing recording..." });
+
     try {
       const result = await api.stopScreenRecording();
       console.log("[stopScreenCapture] Recording result:", result);
@@ -315,6 +326,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           captureMode: false,
           isRecording: false,
           filmstripPaths,
+          isLoading: false,
+          loadingMessage: "",
         };
       });
 
@@ -325,7 +338,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (err) {
       console.error("Stop screen capture failed:", err);
-      set({ captureMode: false, isRecording: false });
+      set({ captureMode: false, isRecording: false, isLoading: false, loadingMessage: "" });
     }
   },
 
@@ -335,6 +348,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // 1. Pick a video file
     const videoPath = await api.openVideoFile();
     if (!videoPath) return;
+
+    set({ isLoading: true, loadingMessage: "Importing video..." });
 
     // 2. Pick save directory
     const home = (await api.homeDir()).replace(/\/?$/, "/");
@@ -406,6 +421,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       captureMode: false,
       isRecording: false,
       produceLog: "",
+      isLoading: false,
+      loadingMessage: "",
     });
   },
 
@@ -418,7 +435,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // Save first
     await saveProject(sessionDir, project);
 
-    set({ isProducing: true, produceLog: "Starting production...\n" });
+    set({ isProducing: true, isLoading: true, loadingMessage: "Producing video...", produceLog: "Starting production...\n" });
 
     try {
       const finalPath = await api.produceTimelineVideo(sessionDir);
@@ -426,11 +443,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set((s) => ({
         produceLog: s.produceLog + `\nDone! Output: ${finalPath}\n`,
         isProducing: false,
+        isLoading: false,
+        loadingMessage: "",
       }));
     } catch (err) {
       set((s) => ({
         produceLog: s.produceLog + `\nError: ${err}\n`,
         isProducing: false,
+        isLoading: false,
+        loadingMessage: "",
       }));
     }
   },
@@ -442,18 +463,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // Save first
     await saveProject(sessionDir, project);
 
-    set({ isProducing: true, produceLog: "Starting preview...\n" });
+    set({ isProducing: true, isLoading: true, loadingMessage: "Generating preview...", produceLog: "Starting preview...\n" });
 
     try {
       const finalPath = await api.previewVideo(sessionDir);
       set((s) => ({
         produceLog: s.produceLog + `\nPreview opened: ${finalPath}\n`,
         isProducing: false,
+        isLoading: false,
+        loadingMessage: "",
       }));
     } catch (err) {
       set((s) => ({
         produceLog: s.produceLog + `\nPreview error: ${err}\n`,
         isProducing: false,
+        isLoading: false,
+        loadingMessage: "",
       }));
     }
   },

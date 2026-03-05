@@ -9,6 +9,7 @@ export function Toolbar() {
   const project = useProjectStore((s) => s.project);
   const isDirty = useProjectStore((s) => s.isDirty);
   const isProducing = useProjectStore((s) => s.isProducing);
+  const isLoading = useProjectStore((s) => s.isLoading);
   const captureMode = useProjectStore((s) => s.captureMode);
   const openSession = useProjectStore((s) => s.openSession);
   const save = useProjectStore((s) => s.save);
@@ -131,7 +132,7 @@ export function Toolbar() {
 
   return (
     <div className="relative shrink-0">
-      <div className="h-11 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-700/40 flex items-center px-4 gap-2">
+      <div className="h-11 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-700/40 flex items-center px-4 gap-2 relative z-50">
         <span className="text-sm font-bold text-zinc-200 tracking-tight mr-3">
           NaraScreen
         </span>
@@ -142,13 +143,14 @@ export function Toolbar() {
         <div className="relative ml-2">
           <button
             onClick={handleRecordScreen}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-medium rounded-md shadow-lg shadow-red-500/20 transition-colors"
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-red-500/20 transition-colors"
           >
             <Monitor size={13} />
             Record Screen
           </button>
           {showScreenPicker && (
-            <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-xl z-30 min-w-48">
+            <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-xl z-100 min-w-48">
               <div className="px-3 py-2 text-xs text-zinc-400 border-b border-zinc-700/40 font-medium">
                 Pick a display
               </div>
@@ -174,7 +176,8 @@ export function Toolbar() {
 
         <button
           onClick={handleOpen}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-md transition-colors"
+          disabled={isLoading}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
         >
           <OpenIcon size={13} />
           Open
@@ -182,7 +185,8 @@ export function Toolbar() {
 
         <button
           onClick={importVideo}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-md transition-colors"
+          disabled={isLoading}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
         >
           <FileVideo size={13} />
           Import Video
@@ -192,7 +196,7 @@ export function Toolbar() {
 
         <button
           onClick={handleSave}
-          disabled={!sessionDir}
+          disabled={!sessionDir || isLoading}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-white text-xs rounded-md transition-colors"
         >
           <SaveIcon size={13} />
@@ -220,7 +224,7 @@ export function Toolbar() {
 
         <button
           onClick={handlePreview}
-          disabled={!sessionDir || actionCount === 0 || isProducing}
+          disabled={!sessionDir || actionCount === 0 || isProducing || isLoading}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-blue-500/20 transition-colors"
         >
           <PreviewIcon size={13} />
@@ -229,7 +233,7 @@ export function Toolbar() {
 
         <button
           onClick={handleProduce}
-          disabled={!sessionDir || actionCount === 0 || isProducing}
+          disabled={!sessionDir || actionCount === 0 || isProducing || isLoading}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-emerald-500/20 transition-colors"
         >
           <ProduceIcon size={13} />

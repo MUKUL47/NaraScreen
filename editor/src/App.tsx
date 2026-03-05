@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Toolbar } from "./components/Toolbar";
 import { CaptureToolbar } from "./components/CaptureToolbar";
 import { VideoPlayer } from "./components/VideoPlayer";
@@ -29,6 +29,15 @@ function App() {
   const captureMode = useProjectStore((s) => s.captureMode);
   const playheadTime = useProjectStore((s) => s.playheadTime);
   const setPlayhead = useProjectStore((s) => s.setPlayhead);
+  const isLoading = useProjectStore((s) => s.isLoading);
+  const loadingMessage = useProjectStore((s) => s.loadingMessage);
+  const produceLog = useProjectStore((s) => s.produceLog);
+  const loadingLogRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll loading log to bottom
+  useEffect(() => {
+    loadingLogRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [produceLog]);
   const drawingZoom = useProjectStore((s) => s.drawingZoom);
   const setDrawingZoom = useProjectStore((s) => s.setDrawingZoom);
   const selectedActionId = useProjectStore((s) => s.selectedActionId);
@@ -153,6 +162,22 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Global loading overlay */}
+      {isLoading && (
+        <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center">
+          <div className="bg-zinc-900 border border-zinc-700/50 rounded-xl px-8 py-6 flex flex-col items-center gap-3 shadow-2xl max-w-lg w-full mx-4">
+            <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm text-zinc-300 font-medium">{loadingMessage}</span>
+            {produceLog && (
+              <div className="w-full max-h-48 overflow-auto rounded-lg bg-black/60 border border-zinc-800/50 p-3 mt-1">
+                <pre className="text-[11px] font-mono text-green-400/80 whitespace-pre-wrap leading-relaxed">{produceLog}</pre>
+                <div ref={loadingLogRef} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
