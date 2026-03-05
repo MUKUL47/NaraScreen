@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useProjectStore } from "../stores/useProjectStore";
 import { assetUrl } from "../lib/fileOps";
 import { formatTime } from "../lib/formatTime";
-import { ACTION_COLORS, ACTION_LABELS, ACTION_TEXT_COLORS, ACTION_DISPLAY_NAMES } from "../lib/constants";
+import { ACTION_COLORS, ACTION_TEXT_COLORS, ACTION_DISPLAY_NAMES } from "../lib/constants";
 import { ActionIcon, PlusIcon } from "./ActionIcon";
 import type { TimelineAction } from "../types";
 
@@ -430,7 +430,7 @@ export function Timeline() {
                     }}
                     title={`${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${formatTime(action.timestamp)}`}
                   >
-                    {ACTION_LABELS[action.type]}
+                    <ActionIcon type={action.type} size={11} />
                   </button>
                 );
               }
