@@ -450,6 +450,7 @@ function planSegmentPass(
   speedRanges: Array<{ start: number; end: number; factor: number }>,
   muteRanges: Array<{ start: number; end: number }>,
   totalDuration: number,
+  narrations: Map<Action, NarrationResult>,
 ): SegmentPlan[] {
   const sorted = [...insertActions].sort((a, b) => a.timestamp - b.timestamp);
   const plans: SegmentPlan[] = [];
@@ -472,8 +473,8 @@ function planSegmentPass(
     if (action.type === "zoom" || action.type === "pause" || action.freeze === true) {
       currentTime = ts;
     } else {
-      // narrate without freeze: video plays during narration
-      currentTime = Math.min(ts + estimateInsertDuration(action), totalDuration);
+      // narrate without freeze: video plays during narration — use actual narration duration
+      currentTime = Math.min(ts + estimateInsertDuration(action, narrations.get(action)), totalDuration);
     }
   }
 
@@ -868,26 +869,23 @@ function executeSegmentPass(
   if (muteActions.length > 0) parts.push(`${muteActions.length} mute(s)`);
   emit(`\n[Pass: Segments] Processing ${parts.join(", ")}...`);
 
-  const plans = planSegmentPass(insertActions, skipRanges, speedRanges, muteRanges, totalDuration);
-  emit(`  Planned ${plans.length} segments`);
-
-  // Pre-generate narration audio for all insert actions
-  const narrations = new Map<number, NarrationResult>();
-  for (let i = 0; i < plans.length; i++) {
-    const plan = plans[i];
-    if (plan.kind !== "insert") continue;
-
-    const action = plan.action;
-    // Find narration for this action (narrate type, or zoom/spotlight with narration)
+  // Pre-generate narration audio for all insert actions BEFORE planning
+  // so planSegmentPass can use actual narration durations for narrate-without-freeze
+  const narrations = new Map<Action, NarrationResult>();
+  for (let i = 0; i < insertActions.length; i++) {
+    const action = insertActions[i];
     const narr = findNarration(action);
     if (!narr) continue;
 
     const audioPath = path.join(tempDir, `narr_${String(i).padStart(3, "0")}.wav`);
-    const { hasAudio, audioDuration } = prepareNarrationAudio(action, audioPath, project, emit, plan.ts);
+    const { hasAudio, audioDuration } = prepareNarrationAudio(action, audioPath, project, emit, action.timestamp);
     if (hasAudio) {
-      narrations.set(i, { audioPath, audioDuration, text: narr.text || "", lang: narr.lang || "en" });
+      narrations.set(action, { audioPath, audioDuration, text: narr.text || "", lang: narr.lang || "en" });
     }
   }
+
+  const plans = planSegmentPass(insertActions, skipRanges, speedRanges, muteRanges, totalDuration, narrations);
+  emit(`  Planned ${plans.length} segments`);
 
   // Build all segments
   const segments: string[] = [];
@@ -918,7 +916,7 @@ function executeSegmentPass(
     }
 
     // Insert plan
-    const narration = narrations.get(i);
+    const narration = narrations.get(plan.action);
     let insertPaths: string[];
 
     if (plan.insertType === "zoom" && (plan.action.zoomRect || (plan.action.zoomRects && plan.action.zoomRects.length > 0) || (plan.action.zoomTargets && plan.action.zoomTargets.length > 0))) {
