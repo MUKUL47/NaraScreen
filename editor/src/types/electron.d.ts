@@ -27,7 +27,7 @@ interface ElectronAPI {
   // Video
   generateFilmstrip: (sessionDir: string) => Promise<number>;
   getVideoDuration: (videoPath: string) => Promise<number>;
-  produceTimelineVideo: (sessionDir: string, version?: string, selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number) => Promise<string>;
+  produceTimelineVideo: (sessionDir: string, version?: string, selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number, trim?: { start: number; end: number }) => Promise<string>;
   cancelProduce: () => Promise<void>;
 
   // TTS

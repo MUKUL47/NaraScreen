@@ -70,7 +70,7 @@ interface ProjectState {
   importVideo: () => Promise<void>;
 
   // Production
-  produce: (selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number) => Promise<void>;
+  produce: (selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number, trim?: { start: number; end: number } | null) => Promise<void>;
   cancelProduce: () => Promise<void>;
   appendProduceLog: (line: string) => void;
   setIsProducing: (v: boolean) => void;
@@ -527,7 +527,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // ---- Production ----
 
-  produce: async (selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number) => {
+  produce: async (selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number, trim?: { start: number; end: number } | null) => {
     const { sessionDir, project } = get();
     if (!sessionDir || !project) return;
 
@@ -537,7 +537,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isProducing: true, isLoading: true, loadingMessage: "Producing video...", produceLog: "Starting production...\n" });
 
     try {
-      const finalPath = await api.produceTimelineVideo(sessionDir, undefined, selectedActionIds, resolution, crf);
+      const finalPath = await api.produceTimelineVideo(sessionDir, undefined, selectedActionIds, resolution, crf, trim ?? undefined);
 
       set((s) => ({
         produceLog: s.produceLog + `\nDone! Output: ${finalPath}\n`,

@@ -814,11 +814,27 @@ function buildNarrateInsert(
 
   if (narration) {
     const withAudioPath = path.join(tempDir, `playaudio_${String(segIdx).padStart(3, "0")}.mp4`);
-    ffmpegSync([
-      "-y", "-i", playPath, "-i", narration.audioPath,
-      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
-      withAudioPath,
-    ]);
+    const clipHasAudio = hasAudioStream(playPath);
+
+    if (clipHasAudio) {
+      // Mix: duck original audio to 20% and overlay narration at full volume
+      emit(`    Mixing narration with original audio (ducking original to 20%)`);
+      ffmpegSync([
+        "-y", "-i", playPath, "-i", narration.audioPath,
+        "-filter_complex", "[0:a]volume=0.2[bg];[1:a]volume=1.0[narr];[bg][narr]amix=inputs=2:duration=shortest:dropout_transition=0[aout]",
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+        withAudioPath,
+      ]);
+    } else {
+      // No original audio — just add narration
+      ffmpegSync([
+        "-y", "-i", playPath, "-i", narration.audioPath,
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+        withAudioPath,
+      ]);
+    }
+
     if (fs.existsSync(withAudioPath) && fs.statSync(withAudioPath).size > 0) {
       return [withAudioPath];
     }
@@ -1001,6 +1017,9 @@ export async function produceTimelineVideo(
   emit: (msg: string) => void,
   version?: string,
   selectedActionIds?: string[],
+  resolution?: { width: number; height: number },
+  crf?: number,
+  trim?: { start: number; end: number },
 ): Promise<string> {
   // ─── Setup ───
   const project = JSON.parse(fs.readFileSync(path.join(sessionDir, "demo-project.json"), "utf-8"));
@@ -1011,13 +1030,44 @@ export async function produceTimelineVideo(
   fs.mkdirSync(videoDir, { recursive: true });
   fs.mkdirSync(tempDir, { recursive: true });
   const totalDuration = probeDuration(recordingPath);
-  const res = probeResolution(recordingPath);
-  emit(`Recording: ${res.width}x${res.height}, ${totalDuration.toFixed(1)}s`);
+  const nativeRes = probeResolution(recordingPath);
+  const res = resolution || nativeRes;
+  emit(`Recording: ${nativeRes.width}x${nativeRes.height}, ${totalDuration.toFixed(1)}s`);
+  if (resolution) emit(`Output resolution: ${resolution.width}x${resolution.height}`);
+  if (crf) emit(`Output quality CRF: ${crf}`);
+
+  // ─── Trim: pre-cut the source video if trim range is specified ───
+  let effectiveRecording = recordingPath;
+  let trimOffset = 0;
+  if (trim) {
+    emit(`\n[Trim] Cutting source video ${trim.start.toFixed(1)}s - ${trim.end.toFixed(1)}s...`);
+    const trimmedPath = path.join(tempDir, "trimmed_source.mp4");
+    cutClip(recordingPath, trim.start, trim.end, trimmedPath);
+    if (fs.existsSync(trimmedPath) && fs.statSync(trimmedPath).size > 0) {
+      effectiveRecording = trimmedPath;
+      trimOffset = trim.start;
+      emit(`  Trimmed source: ${probeDuration(trimmedPath).toFixed(1)}s`);
+    } else {
+      emit("  Warning: Trim failed, using full source");
+    }
+  }
 
   // ─── Filter by selection ───
   if (selectedActionIds && selectedActionIds.length > 0) {
     allActions = allActions.filter((a: Action & { id?: string }) => selectedActionIds.includes(a.id ?? ""));
     emit(`Selected ${allActions.length} action(s) for processing`);
+  }
+
+  // ─── Remap action timestamps if trimmed ───
+  if (trimOffset > 0) {
+    allActions = allActions.map((a) => {
+      const remapped = { ...a, timestamp: a.timestamp - trimOffset };
+      if (remapped.muteEndTimestamp != null) remapped.muteEndTimestamp -= trimOffset;
+      if (remapped.speedEndTimestamp != null) remapped.speedEndTimestamp -= trimOffset;
+      if (remapped.skipEndTimestamp != null) remapped.skipEndTimestamp -= trimOffset;
+      if (remapped.musicEndTimestamp != null) remapped.musicEndTimestamp -= trimOffset;
+      return remapped;
+    });
   }
 
   // ─── Categorize actions by type ───
@@ -1033,7 +1083,7 @@ export async function produceTimelineVideo(
   const musicAction = allActions.find((a) => a.type === "music" && a.musicPath);
 
   // Track intermediate files for cleanup
-  let currentInput = recordingPath;
+  let currentInput = effectiveRecording;
   let passIdx = 0;
 
   const nextOutput = () => {
@@ -1125,13 +1175,42 @@ export async function produceTimelineVideo(
   if (musicAction) {
     emit(`\n[Pass: Music] Mixing background music...`);
     mixBackgroundMusic(currentInput, musicAction, narrationTimestamps, finalPath, emit);
-  } else if (currentInput === recordingPath) {
+    currentInput = finalPath;
+  } else if (currentInput === effectiveRecording) {
     // No effects applied at all — just copy the recording
     emit("\nNo effects to apply, copying original recording...");
     fs.copyFileSync(currentInput, finalPath);
+    currentInput = finalPath;
   } else {
     // Move the last intermediate to final
     fs.renameSync(currentInput, finalPath);
+    currentInput = finalPath;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Final pass: Resolution scaling + CRF re-encode (if needed)
+  // ═══════════════════════════════════════════════════════════
+
+  const needsScale = resolution && (resolution.width !== nativeRes.width || resolution.height !== nativeRes.height);
+  const needsReencode = crf && crf !== 18;
+
+  if (needsScale || needsReencode) {
+    emit(`\n[Final] Re-encoding${needsScale ? ` to ${res.width}x${res.height}` : ""}${needsReencode ? ` CRF ${crf}` : ""}...`);
+    const reencoded = path.join(tempDir, "final_reencoded.mp4");
+    fs.mkdirSync(tempDir, { recursive: true });
+    const args = ["-y", "-i", finalPath];
+    if (needsScale) {
+      args.push("-vf", `scale=${res.width}:${res.height}:force_original_aspect_ratio=decrease,pad=${res.width}:${res.height}:(ow-iw)/2:(oh-ih)/2`);
+    }
+    args.push("-c:v", "libx264", "-preset", "fast", "-crf", String(crf || 18), "-pix_fmt", "yuv420p");
+    if (hasAudioStream(finalPath)) {
+      args.push("-c:a", "aac", "-b:a", "192k");
+    }
+    args.push(reencoded);
+    ffmpegSync(args);
+    if (fs.existsSync(reencoded) && fs.statSync(reencoded).size > 0) {
+      fs.renameSync(reencoded, finalPath);
+    }
   }
 
   // ─── Cleanup ───

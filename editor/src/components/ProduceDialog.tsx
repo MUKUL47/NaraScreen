@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
 import { ACTION_COLORS, ACTION_DISPLAY_NAMES } from "../lib/constants";
 import { getActionEndTime } from "../lib/actions";
@@ -29,6 +29,7 @@ export interface ProduceSettings {
   selectedIds: string[];
   resolution: Resolution;
   quality: Quality;
+  trim: { start: number; end: number } | null;
 }
 
 interface ProduceDialogProps {
@@ -63,6 +64,12 @@ function formatEstimate(seconds: number): string {
   return sec > 0 ? `~${min}m ${sec}s` : `~${min}m`;
 }
 
+/** Check if an action overlaps with a time range */
+function actionOverlaps(action: TimelineAction, start: number, end: number): boolean {
+  const actionEnd = getActionEndTime(action);
+  return action.timestamp < end && actionEnd > start;
+}
+
 export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
   const actions = useProjectStore((s) => s.project?.actions ?? []);
   const recordingDuration = useProjectStore((s) => s.project?.recordingDuration ?? 0);
@@ -70,18 +77,37 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
   const [resolutionIdx, setResolutionIdx] = useState(2); // default 1080p
   const [qualityIdx, setQualityIdx] = useState(1); // default Medium
 
+  // Trim state
+  const [trimEnabled, setTrimEnabled] = useState(false);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(recordingDuration);
+
   const resolution = RESOLUTIONS[resolutionIdx];
   const quality = QUALITIES[qualityIdx];
 
+  // Filter actions based on trim range
+  const visibleActions = useMemo(() => {
+    if (!trimEnabled) return actions;
+    return actions.filter((a) => actionOverlaps(a, trimStart, trimEnd));
+  }, [actions, trimEnabled, trimStart, trimEnd]);
+
+  // Group visible actions by type
   const grouped = useMemo(() => {
     const map = new Map<string, TimelineAction[]>();
-    for (const a of actions) {
+    for (const a of visibleActions) {
       const list = map.get(a.type) || [];
       list.push(a);
       map.set(a.type, list);
     }
     return map;
-  }, [actions]);
+  }, [visibleActions]);
+
+  // When trim changes, auto-select only visible actions
+  useEffect(() => {
+    if (trimEnabled) {
+      setSelected(new Set(visibleActions.map((a) => a.id)));
+    }
+  }, [trimEnabled, trimStart, trimEnd, visibleActions]);
 
   const toggleAction = useCallback((id: string) => {
     setSelected((prev) => {
@@ -107,18 +133,19 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
   }, [grouped]);
 
   const selectAll = useCallback(() => {
-    setSelected(new Set(actions.map((a) => a.id)));
-  }, [actions]);
+    setSelected(new Set(visibleActions.map((a) => a.id)));
+  }, [visibleActions]);
 
   const selectNone = useCallback(() => {
     setSelected(new Set());
   }, []);
 
   const selectedCount = selected.size;
+  const trimDuration = trimEnabled ? Math.max(0, trimEnd - trimStart) : recordingDuration;
 
   const estimate = useMemo(
-    () => estimateProcessingTime(recordingDuration, selectedCount, resolution, quality),
-    [recordingDuration, selectedCount, resolution, quality],
+    () => estimateProcessingTime(trimDuration, selectedCount, resolution, quality),
+    [trimDuration, selectedCount, resolution, quality],
   );
 
   return (
@@ -131,11 +158,105 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
         <div className="px-5 py-4 border-b border-zinc-800/60">
           <h2 className="text-sm font-bold text-zinc-200">Produce Video</h2>
           <p className="text-[11px] text-zinc-500 mt-1">
-            Configure export settings and select effects to include.
+            Configure export settings, optionally trim, and select effects.
           </p>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+          {/* Trim / Slice */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <h3 className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">Trim Video</h3>
+              <button
+                onClick={() => {
+                  setTrimEnabled(!trimEnabled);
+                  if (!trimEnabled) {
+                    setTrimStart(0);
+                    setTrimEnd(recordingDuration);
+                  }
+                }}
+                className={`text-[10px] px-2 py-0.5 rounded-md transition-colors ${
+                  trimEnabled
+                    ? "bg-violet-600 text-white font-semibold"
+                    : "bg-zinc-800/80 text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                {trimEnabled ? "On" : "Off"}
+              </button>
+              {trimEnabled && (
+                <span className="text-[10px] text-violet-400 font-mono ml-auto">
+                  {formatTime(trimStart)} — {formatTime(trimEnd)} ({formatEstimate(Math.ceil(trimDuration))})
+                </span>
+              )}
+            </div>
+
+            {trimEnabled && (
+              <div className="space-y-2 pl-1">
+                <div className="flex items-center gap-3">
+                  <label className="text-[10px] text-zinc-400 font-semibold w-8">In</label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={recordingDuration}
+                    step={0.1}
+                    value={trimStart}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setTrimStart(Math.min(v, trimEnd - 0.5));
+                    }}
+                    className="flex-1 accent-violet-500 h-1.5"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={trimEnd - 0.5}
+                    step={0.1}
+                    value={trimStart}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value) || 0;
+                      setTrimStart(Math.max(0, Math.min(v, trimEnd - 0.5)));
+                    }}
+                    className="w-16 bg-zinc-800/80 border border-zinc-700/30 rounded px-1.5 py-0.5 text-[10px] text-zinc-200 font-mono text-center"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-[10px] text-zinc-400 font-semibold w-8">Out</label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={recordingDuration}
+                    step={0.1}
+                    value={trimEnd}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setTrimEnd(Math.max(v, trimStart + 0.5));
+                    }}
+                    className="flex-1 accent-violet-500 h-1.5"
+                  />
+                  <input
+                    type="number"
+                    min={trimStart + 0.5}
+                    max={recordingDuration}
+                    step={0.1}
+                    value={trimEnd}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value) || 0;
+                      setTrimEnd(Math.max(trimStart + 0.5, Math.min(v, recordingDuration)));
+                    }}
+                    className="w-16 bg-zinc-800/80 border border-zinc-700/30 rounded px-1.5 py-0.5 text-[10px] text-zinc-200 font-mono text-center"
+                  />
+                </div>
+                {trimEnabled && visibleActions.length !== actions.length && (
+                  <p className="text-[9px] text-zinc-500">
+                    Showing {visibleActions.length} of {actions.length} effects within trim range
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-zinc-800/30" />
+
           {/* Export Settings */}
           <div className="space-y-3">
             <h3 className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">Export Settings</h3>
@@ -200,7 +321,10 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
 
           {/* Effects selection */}
           <div className="space-y-3">
-            <h3 className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">Effects to Include</h3>
+            <h3 className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">
+              Effects to Include
+              {trimEnabled && <span className="text-zinc-600 normal-case font-normal ml-1">(within trim range)</span>}
+            </h3>
 
             {Array.from(grouped.entries()).map(([type, typeActions]) => {
               const allSelected = typeActions.every((a) => selected.has(a.id));
@@ -255,8 +379,10 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
               );
             })}
 
-            {actions.length === 0 && (
-              <p className="text-xs text-zinc-500 text-center py-4">No actions to produce.</p>
+            {visibleActions.length === 0 && (
+              <p className="text-xs text-zinc-500 text-center py-4">
+                {trimEnabled ? "No effects within trim range." : "No actions to produce."}
+              </p>
             )}
           </div>
         </div>
@@ -289,7 +415,12 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
             Cancel
           </button>
           <button
-            onClick={() => onConfirm({ selectedIds: Array.from(selected), resolution, quality })}
+            onClick={() => onConfirm({
+              selectedIds: Array.from(selected),
+              resolution,
+              quality,
+              trim: trimEnabled ? { start: trimStart, end: trimEnd } : null,
+            })}
             disabled={selectedCount === 0}
             className="px-4 py-1.5 text-xs font-medium text-white rounded-md shadow-lg transition-colors disabled:opacity-30 bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20"
           >

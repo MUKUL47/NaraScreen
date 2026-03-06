@@ -186,38 +186,60 @@ ipcMain.handle("video:getDuration", async (_event, videoPath: string) => {
 });
 
 /** Run produceTimelineVideo in a worker thread to avoid blocking the main process */
-function runProduceWorker(sessionDir: string, version?: string, selectedActionIds?: string[]): Promise<string> {
+let activeProduceWorker: Worker | null = null;
+
+function runProduceWorker(
+  sessionDir: string,
+  version?: string,
+  selectedActionIds?: string[],
+  resolution?: { width: number; height: number },
+  crf?: number,
+  trim?: { start: number; end: number },
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const workerPath = path.join(__dirname, "produce-worker.js");
     const worker = new Worker(workerPath, {
-      workerData: { sessionDir, version, selectedActionIds },
+      workerData: { sessionDir, version, selectedActionIds, resolution, crf, trim },
     });
+    activeProduceWorker = worker;
 
     worker.on("message", (msg: { type: string; msg?: string; finalPath?: string; message?: string }) => {
       if (msg.type === "progress") {
         mainWindow?.webContents.send("produce-progress", msg.msg);
       } else if (msg.type === "done") {
+        activeProduceWorker = null;
         resolve(msg.finalPath!);
       } else if (msg.type === "error") {
+        activeProduceWorker = null;
         reject(new Error(msg.message || "Production failed"));
       }
     });
 
-    worker.on("error", (err) => reject(err));
+    worker.on("error", (err) => { activeProduceWorker = null; reject(err); });
     worker.on("exit", (code) => {
+      activeProduceWorker = null;
       if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
     });
   });
 }
 
-ipcMain.handle("video:produce", async (_event, sessionDir: string, version?: string, selectedActionIds?: string[]) => {
-  return runProduceWorker(sessionDir, version, selectedActionIds);
+ipcMain.handle("video:produce", async (
+  _event,
+  sessionDir: string,
+  version?: string,
+  selectedActionIds?: string[],
+  resolution?: { width: number; height: number },
+  crf?: number,
+  trim?: { start: number; end: number },
+) => {
+  return runProduceWorker(sessionDir, version, selectedActionIds, resolution, crf, trim);
 });
 
-ipcMain.handle("video:preview", async (_event, sessionDir: string, selectedActionIds?: string[]) => {
-  const finalPath = await runProduceWorker(sessionDir, "preview", selectedActionIds);
-  shell.openPath(finalPath);
-  return finalPath;
+ipcMain.handle("video:cancelProduce", async () => {
+  if (activeProduceWorker) {
+    await activeProduceWorker.terminate();
+    activeProduceWorker = null;
+  }
 });
 
 // ---- TTS IPC Handlers ----

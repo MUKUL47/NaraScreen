@@ -86,7 +86,7 @@ export function Toolbar() {
     setShowProduceDialog(false);
     setShowLog(true);
     setShowVersions(false);
-    await produce(settings.selectedIds, { width: settings.resolution.width, height: settings.resolution.height }, settings.quality.crf);
+    await produce(settings.selectedIds, { width: settings.resolution.width, height: settings.resolution.height }, settings.quality.crf, settings.trim);
     if (sessionDir) {
       const v = await window.electronAPI.listVersions(sessionDir);
       setVersions(v);
