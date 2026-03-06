@@ -67,6 +67,7 @@ export function Timeline() {
   const updateAction = useProjectStore((s) => s.updateAction);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const addBtnRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(800);
   const [showAddMenu, setShowAddMenu] = useState(false);
 
@@ -378,7 +379,7 @@ export function Timeline() {
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-4 py-1.5 border-b border-zinc-800/50 shrink-0">
-        <div className="relative">
+        <div className="relative" ref={addBtnRef}>
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
             className="flex items-center gap-1.5 px-3 py-1 bg-linear-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-xs font-medium rounded-md shadow-lg shadow-violet-500/25 transition-colors"
@@ -386,20 +387,6 @@ export function Timeline() {
             <PlusIcon size={12} />
             Add Action
           </button>
-          {showAddMenu && (
-            <div className="absolute bottom-full left-0 mb-1 bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-xl z-20 min-w-[180px] py-1">
-              {(["narrate", "zoom", "spotlight", "blur", "mute", "speed", "callout", "music"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => handleAddAction(t)}
-                  className={`flex items-center gap-2.5 w-full px-4 py-2 text-sm text-left hover:bg-zinc-800/70 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
-                >
-                  <ActionIcon type={t} size={14} />
-                  {ACTION_DISPLAY_NAMES[t] || t}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="flex-1" />
@@ -635,6 +622,31 @@ export function Timeline() {
           </div>
         </div>
       )}
+
+      {/* Add Action menu — rendered fixed so it escapes overflow:hidden */}
+      {showAddMenu && addBtnRef.current && (() => {
+        const r = addBtnRef.current!.getBoundingClientRect();
+        return (
+          <>
+            <div className="fixed inset-0 z-999" onClick={() => setShowAddMenu(false)} />
+            <div
+              className="fixed bg-zinc-900/95 backdrop-blur-md border border-zinc-600/40 rounded-xl shadow-2xl shadow-black/60 z-1000 min-w-48 py-1.5"
+              style={{ left: r.left, bottom: window.innerHeight - r.top + 4 }}
+            >
+              {(["narrate", "zoom", "spotlight", "blur", "mute", "speed", "callout", "music"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => handleAddAction(t)}
+                  className={`flex items-center gap-2.5 w-full px-4 py-2 text-sm text-left hover:bg-white/8 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
+                >
+                  <ActionIcon type={t} size={14} />
+                  {ACTION_DISPLAY_NAMES[t] || t}
+                </button>
+              ))}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }
