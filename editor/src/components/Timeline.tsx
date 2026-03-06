@@ -46,12 +46,12 @@ function setActionEndTime(action: TimelineAction, newEnd: number): Partial<Timel
   }
 }
 
-const RULER_H = 24;
-const FILMSTRIP_H = 48;
-const LANE_H = 28;
-const SIDEBAR_W = 44;
+const RULER_H = 28;
+const FILMSTRIP_H = 52;
+const LANE_H = 32;
+const SIDEBAR_W = 48;
 const SNAP_THRESHOLD_PX = 6;
-const EDGE_HANDLE_W = 5;
+const EDGE_HANDLE_W = 6;
 
 type DragMode = "move" | "resize-left" | "resize-right" | null;
 
@@ -230,7 +230,7 @@ export function Timeline() {
         }
         // Clamp
         finalTime = Math.max(0, Math.min(duration - actionDuration, finalTime));
-        // Move both start AND end for absolute-end-timestamp types (mute, speed, skip, music)
+        // Always move both start AND end for all action types
         const action = actions.find((a) => a.id === pillDrag.actionId);
         const newEnd = finalTime + actionDuration;
         const endUpdate = action ? setActionEndTime(action, newEnd) : {};
@@ -368,21 +368,21 @@ export function Timeline() {
   return (
     <div
       ref={containerRef}
-      className="bg-zinc-950 border-t border-zinc-700/40 flex flex-col select-none relative h-full"
+      className="bg-zinc-950 border-t border-zinc-700/30 flex flex-col select-none relative h-full"
     >
       <style dangerouslySetInnerHTML={{ __html: `
         .timeline-scroll::-webkit-scrollbar { height: 10px !important; }
-        .timeline-scroll::-webkit-scrollbar-track { background: #18181b; }
-        .timeline-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 5px; border: 2px solid #18181b; }
-        .timeline-scroll::-webkit-scrollbar-thumb:hover { background: #52525b; }
+        .timeline-scroll::-webkit-scrollbar-track { background: #0a0a0b; border-top: 1px solid #27272a30; }
+        .timeline-scroll::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #3f3f46, #27272a); border-radius: 5px; border: 2px solid #0a0a0b; }
+        .timeline-scroll::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #52525b, #3f3f46); }
       `}} />
 
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-zinc-800/50 shrink-0">
+      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-zinc-800/40 shrink-0 bg-zinc-950/80">
         <div className="relative" ref={addBtnRef}>
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
-            className="flex items-center gap-1.5 px-3 py-1 bg-linear-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-xs font-medium rounded-md shadow-lg shadow-violet-500/25 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-linear-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-xs font-semibold rounded-lg shadow-lg shadow-violet-500/20 transition-colors"
           >
             <PlusIcon size={12} />
             Add Action
@@ -393,12 +393,12 @@ export function Timeline() {
 
         {/* Drag selection info */}
         {selectionRange && (
-          <span className="text-[10px] text-violet-400 font-mono">
+          <span className="text-[10px] text-violet-400 font-mono bg-violet-500/10 px-2 py-0.5 rounded-md">
             {formatTime(selectionRange.startTime)} — {formatTime(selectionRange.endTime)}
           </span>
         )}
 
-        <span className="text-[11px] text-zinc-400 font-mono tabular-nums">
+        <span className="text-[11px] text-zinc-400 font-mono tabular-nums bg-zinc-900/50 px-2 py-0.5 rounded-md">
           {formatTime(playheadTime)} / {formatTime(duration)}
         </span>
       </div>
@@ -406,21 +406,21 @@ export function Timeline() {
       {/* Main timeline area: sidebar + scrollable content */}
       <div ref={scrollContainerRef} className="flex-1 flex overflow-auto timeline-scroll">
         {/* Track label sidebar */}
-        <div className="shrink-0 border-r border-zinc-800/50 bg-zinc-950" style={{ width: SIDEBAR_W }}>
-          <div className="border-b border-zinc-800/30 flex items-center justify-center" style={{ height: RULER_H }}>
-            <span className="text-[8px] text-zinc-600 uppercase tracking-wider font-semibold">Time</span>
+        <div className="shrink-0 border-r border-zinc-800/40 bg-zinc-950/90" style={{ width: SIDEBAR_W }}>
+          <div className="border-b border-zinc-800/20 flex items-center justify-center bg-zinc-900/30" style={{ height: RULER_H }}>
+            <span className="text-[8px] text-zinc-500 uppercase tracking-widest font-bold">Time</span>
           </div>
-          <div className="border-b border-zinc-800/30 flex items-center justify-center" style={{ height: FILMSTRIP_H }}>
-            <Video size={13} className="text-zinc-500" />
+          <div className="border-b border-zinc-800/20 flex items-center justify-center bg-zinc-900/20" style={{ height: FILMSTRIP_H }}>
+            <Video size={14} className="text-zinc-400" />
           </div>
-          {activeLanes.map((type) => (
+          {activeLanes.map((type, i) => (
             <div
               key={type}
-              className="border-b border-zinc-800/30 flex items-center justify-center"
+              className={`border-b border-zinc-800/20 flex items-center justify-center ${i % 2 === 0 ? "bg-zinc-900/15" : "bg-transparent"}`}
               style={{ height: LANE_H }}
               title={ACTION_DISPLAY_NAMES[type] || type}
             >
-              <ActionIcon type={type} size={13} className={ACTION_TEXT_COLORS[type] || "text-zinc-500"} />
+              <ActionIcon type={type} size={14} className={ACTION_TEXT_COLORS[type] || "text-zinc-500"} />
             </div>
           ))}
         </div>
@@ -432,8 +432,8 @@ export function Timeline() {
           style={{ height: totalContentHeight, minWidth: containerWidth }}
           onMouseDown={handleMouseDown}
         >
-          {/* ─── Time ruler ─── */}
-          <div className="absolute top-0 left-0 right-0 border-b border-zinc-800/30" style={{ height: RULER_H }}>
+          {/* --- Time ruler --- */}
+          <div className="absolute top-0 left-0 right-0 border-b border-zinc-800/30 bg-linear-to-b from-zinc-900/40 to-transparent" style={{ height: RULER_H }}>
             {Array.from({ length: Math.ceil(duration / tickInterval) + 1 }, (_, i) => {
               const t = i * tickInterval;
               if (t > duration) return null;
@@ -445,11 +445,11 @@ export function Timeline() {
                   style={{ left: t * pxPerSec }}
                 >
                   <div
-                    className={isMajor ? "border-l border-zinc-600/50" : "border-l border-zinc-800/60"}
-                    style={{ height: isMajor ? RULER_H : RULER_H * 0.5, marginTop: isMajor ? 0 : RULER_H * 0.5 }}
+                    className={isMajor ? "border-l border-zinc-500/40" : "border-l border-zinc-700/30"}
+                    style={{ height: isMajor ? RULER_H : RULER_H * 0.4, marginTop: isMajor ? 0 : RULER_H * 0.6 }}
                   />
                   {isMajor && (
-                    <span className="absolute top-0.5 left-1 text-[9px] text-zinc-500 whitespace-nowrap">
+                    <span className="absolute top-1 left-1.5 text-[9px] text-zinc-400 font-mono whitespace-nowrap">
                       {formatTime(t)}
                     </span>
                   )}
@@ -458,9 +458,9 @@ export function Timeline() {
             })}
           </div>
 
-          {/* ─── Filmstrip track ─── */}
+          {/* --- Filmstrip track --- */}
           <div
-            className="absolute left-0 right-0 border-b border-zinc-800/30"
+            className="absolute left-0 right-0 border-b border-zinc-800/30 bg-zinc-900/20"
             style={{ top: RULER_H, height: FILMSTRIP_H }}
           >
             {thumbPositions.map(({ path, left, width }, i) => (
@@ -468,14 +468,14 @@ export function Timeline() {
                 key={i}
                 src={assetUrl(path)}
                 alt=""
-                className="absolute top-0 h-full object-cover opacity-80 rounded-sm"
+                className="absolute top-0 h-full object-cover opacity-85 rounded-sm"
                 style={{ left, width }}
                 draggable={false}
               />
             ))}
           </div>
 
-          {/* ─── Action lanes ─── */}
+          {/* --- Action lanes --- */}
           {activeLanes.map((laneType, laneIdx) => {
             const laneTop = RULER_H + FILMSTRIP_H + laneIdx * LANE_H;
             const laneActions = actions.filter((a) => a.type === laneType);
@@ -483,13 +483,13 @@ export function Timeline() {
             return (
               <div
                 key={laneType}
-                className="absolute left-0 right-0 border-b border-zinc-800/30"
+                className={`absolute left-0 right-0 border-b border-zinc-800/20 ${laneIdx % 2 === 0 ? "bg-zinc-900/10" : "bg-transparent"}`}
                 style={{ top: laneTop, height: LANE_H }}
               >
                 {laneActions.map((action) => {
                   const left = action.timestamp * pxPerSec;
                   const endTime = getActionEndTime(action);
-                  const width = Math.max((endTime - action.timestamp) * pxPerSec, 22);
+                  const width = Math.max((endTime - action.timestamp) * pxPerSec, 24);
                   const isSelected = action.id === selectedActionId;
                   const canResize = isResizable(action.type);
                   const beingDragged = pillDrag?.actionId === action.id;
@@ -497,21 +497,21 @@ export function Timeline() {
                   return (
                     <div
                       key={action.id}
-                      className={`absolute flex items-center rounded-md transition-colors overflow-hidden group
+                      className={`absolute flex items-center rounded-md overflow-hidden group
                         ${ACTION_BG_COLORS[laneType] || "bg-zinc-500/20"}
                         ${isSelected
-                          ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-sm`
-                          : "border border-transparent hover:brightness-110"
+                          ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-md shadow-black/30`
+                          : "border border-white/5 hover:border-white/15 hover:brightness-110"
                         }
                         ${beingDragged ? "opacity-90 z-30" : ""}
                       `}
-                      style={{ left, width, top: 3, height: LANE_H - 6 }}
+                      style={{ left, width, top: 3, height: LANE_H - 6, transition: beingDragged ? 'none' : 'border-color 150ms, filter 150ms' }}
                     >
                       {/* Left resize handle */}
                       {canResize && (
                         <div
-                          className="absolute left-0 top-0 bottom-0 cursor-col-resize z-10 opacity-0 group-hover:opacity-100 hover:bg-white/20 transition-opacity"
-                          style={{ width: EDGE_HANDLE_W }}
+                          className="absolute left-0 top-0 bottom-0 cursor-col-resize z-10 opacity-0 group-hover:opacity-100 hover:bg-white/20"
+                          style={{ width: EDGE_HANDLE_W, transition: 'opacity 150ms' }}
                           onMouseDown={(e) => handlePillMouseDown(e, action, "resize-left")}
                         />
                       )}
@@ -529,11 +529,11 @@ export function Timeline() {
                       >
                         <ActionIcon
                           type={laneType}
-                          size={10}
+                          size={11}
                           className={`shrink-0 ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}
                         />
                         {width > 50 && (
-                          <span className={`text-[9px] font-medium truncate ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}>
+                          <span className={`text-[9px] font-semibold truncate ${ACTION_TEXT_COLORS[laneType] || "text-zinc-400"}`}>
                             {ACTION_DISPLAY_NAMES[laneType]}
                           </span>
                         )}
@@ -542,8 +542,8 @@ export function Timeline() {
                       {/* Right resize handle */}
                       {canResize && (
                         <div
-                          className="absolute right-0 top-0 bottom-0 cursor-col-resize z-10 opacity-0 group-hover:opacity-100 hover:bg-white/20 transition-opacity"
-                          style={{ width: EDGE_HANDLE_W }}
+                          className="absolute right-0 top-0 bottom-0 cursor-col-resize z-10 opacity-0 group-hover:opacity-100 hover:bg-white/20"
+                          style={{ width: EDGE_HANDLE_W, transition: 'opacity 150ms' }}
                           onMouseDown={(e) => handlePillMouseDown(e, action, "resize-right")}
                         />
                       )}
@@ -554,51 +554,51 @@ export function Timeline() {
             );
           })}
 
-          {/* ─── Snap guide line ─── */}
+          {/* --- Snap guide line --- */}
           {snapLine !== null && (
             <div
-              className="absolute top-0 w-px bg-yellow-400/60 pointer-events-none z-40"
+              className="absolute top-0 w-px bg-yellow-400/70 pointer-events-none z-40"
               style={{ left: snapLine * pxPerSec, height: totalContentHeight }}
             />
           )}
 
-          {/* ─── Drag selection highlight ─── */}
+          {/* --- Drag selection highlight --- */}
           {selectionRange && (
             <div
-              className="absolute bg-violet-500/15 border-l border-r border-violet-400/40 pointer-events-none"
+              className="absolute bg-violet-500/15 border-l-2 border-r-2 border-violet-400/50 pointer-events-none"
               style={{ left: selectionRange.left, width: selectionRange.width, top: RULER_H + FILMSTRIP_H, height: activeLanes.length * LANE_H }}
             />
           )}
 
-          {/* ─── Playhead ─── */}
+          {/* --- Playhead --- */}
           <div
             className="absolute top-0 pointer-events-none z-30"
             style={{ left: playheadTime * pxPerSec, height: totalContentHeight }}
           >
             <div
-              className="absolute -translate-x-1.25"
-              style={{ top: RULER_H - 8 }}
+              className="absolute -translate-x-1.5"
+              style={{ top: RULER_H - 10 }}
             >
-              <svg width="10" height="8" viewBox="0 0 10 8">
-                <polygon points="0,0 10,0 5,8" fill="#ef4444" />
+              <svg width="12" height="10" viewBox="0 0 12 10">
+                <polygon points="0,0 12,0 6,10" fill="#ef4444" />
               </svg>
             </div>
             <div
-              className="absolute top-0 w-px bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.5)]"
+              className="absolute top-0 w-px bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"
               style={{ left: 0, height: totalContentHeight }}
             />
           </div>
         </div>
       </div>
 
-      {/* Range action menu — fixed center overlay */}
+      {/* Range action menu — frosted glass overlay */}
       {showRangeMenu && selectionRange && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={clearDragSelection}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={clearDragSelection}>
           <div
-            className="bg-zinc-900 border border-zinc-700/50 rounded-xl shadow-2xl min-w-[220px] py-2"
+            className="bg-zinc-900/95 backdrop-blur-xl border border-zinc-600/30 rounded-2xl shadow-2xl shadow-black/60 min-w-60 py-2"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-2 text-xs text-zinc-400 border-b border-zinc-700/40 text-center font-mono">
+            <div className="px-4 py-2.5 text-xs text-violet-400 border-b border-zinc-700/30 text-center font-mono font-semibold">
               {formatTime(selectionRange.startTime)} — {formatTime(selectionRange.endTime)}
             </div>
             <div className="py-1">
@@ -606,16 +606,16 @@ export function Timeline() {
                 <button
                   key={t}
                   onClick={() => handleAddRangeAction(t)}
-                  className={`flex items-center gap-3 w-full px-5 py-2.5 text-sm text-left hover:bg-zinc-800/70 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
+                  className={`flex items-center gap-3 w-full px-5 py-2.5 text-sm text-left hover:bg-white/5 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
                 >
                   <ActionIcon type={t} size={15} />
-                  {ACTION_DISPLAY_NAMES[t] || t}
+                  <span className="font-medium">{ACTION_DISPLAY_NAMES[t] || t}</span>
                 </button>
               ))}
             </div>
             <button
               onClick={clearDragSelection}
-              className="w-full px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300 border-t border-zinc-700/40"
+              className="w-full px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300 border-t border-zinc-700/30 transition-colors"
             >
               Cancel
             </button>
@@ -630,17 +630,17 @@ export function Timeline() {
           <>
             <div className="fixed inset-0 z-999" onClick={() => setShowAddMenu(false)} />
             <div
-              className="fixed bg-zinc-900/95 backdrop-blur-md border border-zinc-600/40 rounded-xl shadow-2xl shadow-black/60 z-1000 min-w-48 py-1.5"
-              style={{ left: r.left, bottom: window.innerHeight - r.top + 4 }}
+              className="fixed bg-zinc-900/95 backdrop-blur-xl border border-zinc-600/30 rounded-2xl shadow-2xl shadow-black/60 z-1000 min-w-52 py-1.5"
+              style={{ left: r.left, bottom: window.innerHeight - r.top + 6 }}
             >
               {(["narrate", "zoom", "spotlight", "blur", "mute", "speed", "callout", "music"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => handleAddAction(t)}
-                  className={`flex items-center gap-2.5 w-full px-4 py-2 text-sm text-left hover:bg-white/8 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
+                  className={`flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-left hover:bg-white/5 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
                 >
-                  <ActionIcon type={t} size={14} />
-                  {ACTION_DISPLAY_NAMES[t] || t}
+                  <ActionIcon type={t} size={15} />
+                  <span className="font-medium">{ACTION_DISPLAY_NAMES[t] || t}</span>
                 </button>
               ))}
             </div>

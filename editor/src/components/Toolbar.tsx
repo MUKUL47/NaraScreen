@@ -141,25 +141,25 @@ export function Toolbar() {
 
   return (
     <div className="relative shrink-0">
-      <div className="h-11 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-700/40 flex items-center px-4 gap-2 relative z-50">
-        <span className="text-sm font-bold text-zinc-200 tracking-tight mr-3">
+      <div className="h-11 bg-zinc-950/95 backdrop-blur-xl border-b border-zinc-800/40 flex items-center px-4 gap-2 relative z-50">
+        <span className="text-sm font-bold bg-linear-to-r from-violet-400 to-purple-400 bg-clip-text text-transparent tracking-tight mr-3">
           NaraScreen
         </span>
 
-        <div className="w-px h-5 bg-zinc-800" />
+        <div className="w-px h-5 bg-zinc-800/60" />
 
         {/* Record Screen */}
         <div className="relative ml-2">
           <button
             onClick={handleRecordScreen}
             disabled={isLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-red-500/20 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-semibold rounded-lg shadow-lg shadow-red-500/25 transition-colors"
           >
             <Monitor size={13} />
             Record Screen
           </button>
           {showScreenPicker && (
-            <div className="absolute top-full left-0 mt-1 bg-zinc-900 border border-zinc-700/50 rounded-lg shadow-xl z-100 min-w-48">
+            <div className="absolute top-full left-0 mt-1 bg-zinc-900/95 backdrop-blur-xl border border-zinc-600/30 rounded-xl shadow-2xl shadow-black/50 z-100 min-w-48">
               <div className="px-3 py-2 text-xs text-zinc-400 border-b border-zinc-700/40 font-medium">
                 Pick a display
               </div>
@@ -186,7 +186,7 @@ export function Toolbar() {
         <button
           onClick={handleOpen}
           disabled={isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-lg transition-colors"
         >
           <OpenIcon size={13} />
           Open
@@ -195,18 +195,18 @@ export function Toolbar() {
         <button
           onClick={importVideo}
           disabled={isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-lg transition-colors"
         >
           <FileVideo size={13} />
           Import Video
         </button>
 
-        <div className="w-px h-5 bg-zinc-800" />
+        <div className="w-px h-5 bg-zinc-800/60" />
 
         <button
           onClick={handleSave}
           disabled={!sessionDir || isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-white text-xs rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-white text-xs rounded-lg transition-colors"
         >
           <SaveIcon size={13} />
           {isDirty ? "Save *" : "Save"}
@@ -216,7 +216,7 @@ export function Toolbar() {
           onClick={undo}
           disabled={!canUndo}
           title="Undo (Ctrl+Z)"
-          className="p-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 rounded-md transition-colors"
+          className="p-1.5 bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 rounded-lg transition-colors"
         >
           <Undo2 size={13} />
         </button>
@@ -224,17 +224,17 @@ export function Toolbar() {
           onClick={redo}
           disabled={!canRedo}
           title="Redo (Ctrl+Shift+Z)"
-          className="p-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 rounded-md transition-colors"
+          className="p-1.5 bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 rounded-lg transition-colors"
         >
           <Redo2 size={13} />
         </button>
 
-        <div className="w-px h-5 bg-zinc-800" />
+        <div className="w-px h-5 bg-zinc-800/60" />
 
         <button
           onClick={handlePreview}
           disabled={!sessionDir || actionCount === 0 || isProducing || isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-blue-500/20 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-semibold rounded-lg shadow-lg shadow-blue-500/25 transition-colors"
         >
           <PreviewIcon size={13} />
           {isProducing ? "..." : "Preview"}
@@ -243,7 +243,7 @@ export function Toolbar() {
         <button
           onClick={handleProduce}
           disabled={!sessionDir || actionCount === 0 || isProducing || isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md shadow-lg shadow-emerald-500/20 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-semibold rounded-lg shadow-lg shadow-emerald-500/25 transition-colors"
         >
           <ProduceIcon size={13} />
           {isProducing ? "Producing..." : "Produce"}
@@ -252,7 +252,7 @@ export function Toolbar() {
         <button
           onClick={handleShowVersions}
           disabled={!sessionDir}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800/80 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-lg transition-colors"
         >
           <VersionsIcon size={13} />
           Versions{versions.length > 0 ? ` (${versions.length})` : ""}
@@ -321,7 +321,7 @@ export function Toolbar() {
 
       {/* Production log — overlay, doesn't push content */}
       {showLog && produceLog && (
-        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-black/95 border-b border-zinc-700/40 overflow-auto p-3 font-mono text-xs text-green-400 shadow-xl">
+        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-zinc-950/98 backdrop-blur-sm border-b border-zinc-700/30 overflow-auto p-3 font-mono text-xs text-green-400 shadow-2xl shadow-black/40">
           <pre className="whitespace-pre-wrap">{produceLog}</pre>
           <div ref={logEndRef} />
         </div>
@@ -338,7 +338,7 @@ export function Toolbar() {
 
       {/* Versions — overlay, doesn't push content */}
       {showVersions && (
-        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-zinc-950/98 border-b border-zinc-700/40 overflow-auto p-3 shadow-xl">
+        <div className="absolute left-0 right-0 top-full z-30 max-h-48 bg-zinc-950/98 backdrop-blur-sm border-b border-zinc-700/30 overflow-auto p-3 shadow-2xl shadow-black/40">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-zinc-300">Produced Versions</span>
             <button
