@@ -1,9 +1,9 @@
 import { useCallback, useState, useEffect, useRef } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
 import { pickSessionDir } from "../lib/fileOps";
-import { OpenIcon, SaveIcon, PreviewIcon, ProduceIcon, VersionsIcon } from "./ActionIcon";
+import { OpenIcon, SaveIcon, ProduceIcon, VersionsIcon } from "./ActionIcon";
 import { Monitor, Mic, MicOff, Terminal, X, FileVideo, Undo2, Redo2 } from "lucide-react";
-import { ProduceDialog } from "./ProduceDialog";
+import { ProduceDialog, type ProduceSettings } from "./ProduceDialog";
 
 export function Toolbar() {
   const sessionDir = useProjectStore((s) => s.sessionDir);
@@ -17,7 +17,6 @@ export function Toolbar() {
   const startScreenCapture = useProjectStore((s) => s.startScreenCapture);
   const importVideo = useProjectStore((s) => s.importVideo);
   const produce = useProjectStore((s) => s.produce);
-  const preview = useProjectStore((s) => s.preview);
   const appendProduceLog = useProjectStore((s) => s.appendProduceLog);
   const produceLog = useProjectStore((s) => s.produceLog);
   const undo = useProjectStore((s) => s.undo);
@@ -27,7 +26,7 @@ export function Toolbar() {
 
   const [showLog, setShowLog] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
-  const [produceDialogMode, setProduceDialogMode] = useState<"produce" | "preview" | null>(null);
+  const [showProduceDialog, setShowProduceDialog] = useState(false);
   const [versions, setVersions] = useState<{ name: string; path: string; size: number; created: string }[]>([]);
   const [showScreenPicker, setShowScreenPicker] = useState(false);
   const [screens, setScreens] = useState<{ id: string; name: string; x: number; y: number; width: number; height: number }[]>([]);
@@ -80,28 +79,19 @@ export function Toolbar() {
   }, [save]);
 
   const handleProduce = useCallback(() => {
-    setProduceDialogMode("produce");
+    setShowProduceDialog(true);
   }, []);
 
-  const handlePreview = useCallback(() => {
-    setProduceDialogMode("preview");
-  }, []);
-
-  const handleProduceConfirm = useCallback(async (selectedIds: string[]) => {
-    const mode = produceDialogMode;
-    setProduceDialogMode(null);
+  const handleProduceConfirm = useCallback(async (settings: ProduceSettings) => {
+    setShowProduceDialog(false);
     setShowLog(true);
     setShowVersions(false);
-    if (mode === "produce") {
-      await produce(selectedIds);
-      if (sessionDir) {
-        const v = await window.electronAPI.listVersions(sessionDir);
-        setVersions(v);
-      }
-    } else {
-      await preview(selectedIds);
+    await produce(settings.selectedIds, { width: settings.resolution.width, height: settings.resolution.height }, settings.quality.crf);
+    if (sessionDir) {
+      const v = await window.electronAPI.listVersions(sessionDir);
+      setVersions(v);
     }
-  }, [produceDialogMode, produce, preview, sessionDir]);
+  }, [produce, sessionDir]);
 
   const handleRecordScreen = useCallback(async () => {
     const sources = await window.electronAPI.getScreenSources();
@@ -232,15 +222,6 @@ export function Toolbar() {
         <div className="w-px h-5 bg-zinc-800/60" />
 
         <button
-          onClick={handlePreview}
-          disabled={!sessionDir || actionCount === 0 || isProducing || isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-semibold rounded-lg shadow-lg shadow-blue-500/25 transition-colors"
-        >
-          <PreviewIcon size={13} />
-          {isProducing ? "..." : "Preview"}
-        </button>
-
-        <button
           onClick={handleProduce}
           disabled={!sessionDir || actionCount === 0 || isProducing || isLoading}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-semibold rounded-lg shadow-lg shadow-emerald-500/25 transition-colors"
@@ -262,10 +243,10 @@ export function Toolbar() {
 
         {sessionDir && (
           <span
-            className="text-[10px] text-zinc-600 truncate max-w-60 font-mono"
+            className="text-[11px] text-zinc-300 font-semibold truncate max-w-60"
             title={sessionDir}
           >
-            {sessionDir.split("/").slice(-2).join("/")}
+            {sessionDir}
           </span>
         )}
 
@@ -327,12 +308,11 @@ export function Toolbar() {
         </div>
       )}
 
-      {/* Produce/Preview dialog */}
-      {produceDialogMode && (
+      {/* Produce dialog */}
+      {showProduceDialog && (
         <ProduceDialog
-          mode={produceDialogMode}
           onConfirm={handleProduceConfirm}
-          onCancel={() => setProduceDialogMode(null)}
+          onCancel={() => setShowProduceDialog(false)}
         />
       )}
 

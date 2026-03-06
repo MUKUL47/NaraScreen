@@ -8,6 +8,7 @@ import { ActionPanel } from "./components/ActionPanel";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { ACTION_DISPLAY_NAMES, ACTION_OVERLAY_COLORS } from "./lib/constants";
+import { getActionEndTime, getActionRects } from "./lib/actions";
 import type { LabeledOverlay } from "./types";
 
 function App() {
@@ -32,8 +33,10 @@ function App() {
   const playheadTime = useProjectStore((s) => s.playheadTime);
   const setPlayhead = useProjectStore((s) => s.setPlayhead);
   const isLoading = useProjectStore((s) => s.isLoading);
+  const isProducing = useProjectStore((s) => s.isProducing);
   const loadingMessage = useProjectStore((s) => s.loadingMessage);
   const produceLog = useProjectStore((s) => s.produceLog);
+  const cancelProduce = useProjectStore((s) => s.cancelProduce);
   const loadingLogRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll loading log to bottom
@@ -51,41 +54,10 @@ function App() {
   );
   const zoomRect = null; // no longer used — all rects shown via labeledOverlays
 
-  // Build labeled overlays: selected action's rects + any overlapping actions' rects
-  // "Overlapping" = their time range intersects the selected action's time range
+  // Build labeled overlays: show rects for actions active at current playhead time
+  // + always show selected action's rects
   const labeledOverlays = useMemo<LabeledOverlay[]>(() => {
-    if (!project || !selectedAction) return [];
-
-    // Compute time range of the selected action
-    const getTimeRange = (a: typeof selectedAction): [number, number] => {
-      const start = a.timestamp;
-      let end = start;
-      switch (a.type) {
-        case "zoom": end = start + (a.zoomDuration ?? 1) * 2 + (a.zoomHold ?? 2); break;
-        case "spotlight": end = start + (a.spotlightDuration ?? 3); break;
-        case "blur": end = start + (a.blurDuration ?? 3); break;
-        case "callout": end = start + (a.calloutDuration ?? 3); break;
-        case "mute": end = a.muteEndTimestamp ?? start + 3; break;
-        case "speed": end = a.speedEndTimestamp ?? start + 5; break;
-        case "skip": end = a.skipEndTimestamp ?? start + 3; break;
-        default: end = start + 3;
-      }
-      return [start, end];
-    };
-
-    const [selStart, selEnd] = getTimeRange(selectedAction);
-
-    const getRects = (a: typeof selectedAction): [number, number, number, number][] => {
-      switch (a.type) {
-        case "zoom":
-          if (a.zoomTargets?.length) return a.zoomTargets.map((t) => t.rect);
-          return a.zoomRects ?? (a.zoomRect ? [a.zoomRect] : []);
-        case "spotlight": return a.spotlightRects ?? (a.spotlightRect ? [a.spotlightRect] : []);
-        case "blur": return a.blurRects ?? [];
-        case "callout": return a.calloutPanels?.map((p) => p.rect) ?? [];
-        default: return [];
-      }
-    };
+    if (!project) return [];
 
     const overlays: LabeledOverlay[] = [];
 
@@ -93,15 +65,15 @@ function App() {
       const color = ACTION_OVERLAY_COLORS[action.type];
       if (!color) continue;
 
-      const rects = getRects(action);
+      const rects = getActionRects(action);
       if (rects.length === 0) continue;
 
       const isSelected = action.id === selectedActionId;
 
-      // Skip non-selected actions that don't overlap the selected action's time range
+      // Show if: selected, OR playhead is within this action's time range
       if (!isSelected) {
-        const [aStart, aEnd] = getTimeRange(action);
-        if (aEnd <= selStart || aStart >= selEnd) continue;
+        const endTime = getActionEndTime(action);
+        if (playheadTime < action.timestamp || playheadTime > endTime) continue;
       }
 
       const label = action.name || `${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${action.timestamp.toFixed(1)}s`;
@@ -112,7 +84,7 @@ function App() {
     }
 
     return overlays;
-  }, [project, selectedAction, selectedActionId]);
+  }, [project, selectedActionId, playheadTime]);
 
   // Callout panels for text preview overlay (only for selected callout action)
   const calloutPanels =
@@ -296,7 +268,7 @@ function App() {
 
       {/* Global loading overlay */}
       {isLoading && (
-        <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center">
+        <div className="fixed inset-0 z-9999 bg-black/60 backdrop-blur-sm flex items-center justify-center">
           <div className="bg-zinc-900 border border-zinc-700/50 rounded-xl px-8 py-6 flex flex-col items-center gap-3 shadow-2xl max-w-lg w-full mx-4">
             <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
             <span className="text-sm text-zinc-300 font-medium">{loadingMessage}</span>
@@ -305,6 +277,14 @@ function App() {
                 <pre className="text-[11px] font-mono text-green-400/80 whitespace-pre-wrap leading-relaxed">{produceLog}</pre>
                 <div ref={loadingLogRef} />
               </div>
+            )}
+            {isProducing && (
+              <button
+                onClick={cancelProduce}
+                className="mt-2 px-4 py-1.5 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 rounded-lg transition-colors"
+              >
+                Cancel Production
+              </button>
             )}
           </div>
         </div>

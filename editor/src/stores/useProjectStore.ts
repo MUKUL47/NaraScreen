@@ -27,6 +27,10 @@ interface ProjectState {
   playheadTime: number;
   drawingZoom: boolean;
 
+  // Playback
+  isPlaying: boolean;
+  playbackRate: number;
+
   // Capture mode
   captureMode: boolean;
   isRecording: boolean;
@@ -45,6 +49,9 @@ interface ProjectState {
   setPlayhead: (time: number) => void;
   setSelectedAction: (id: string | null) => void;
   setDrawingZoom: (v: boolean) => void;
+  togglePlay: () => void;
+  setIsPlaying: (v: boolean) => void;
+  cyclePlaybackRate: () => void;
   addAction: (type: TimelineAction["type"], timestamp: number, endTimestamp?: number) => void;
   updateAction: (id: string, partial: Partial<TimelineAction>) => void;
   deleteAction: (id: string) => void;
@@ -63,8 +70,8 @@ interface ProjectState {
   importVideo: () => Promise<void>;
 
   // Production
-  produce: (selectedActionIds?: string[]) => Promise<void>;
-  preview: (selectedActionIds?: string[]) => Promise<void>;
+  produce: (selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number) => Promise<void>;
+  cancelProduce: () => Promise<void>;
   appendProduceLog: (line: string) => void;
   setIsProducing: (v: boolean) => void;
 }
@@ -81,6 +88,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   filmstripPaths: [],
   playheadTime: 0,
   drawingZoom: false,
+  isPlaying: false,
+  playbackRate: 1,
   captureMode: false,
   isRecording: false,
   isProducing: false,
@@ -131,6 +140,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setPlayhead: (time) => set({ playheadTime: time }),
+  togglePlay: () => set((s) => ({ isPlaying: !s.isPlaying })),
+  setIsPlaying: (v) => set({ isPlaying: v }),
+  cyclePlaybackRate: () => {
+    const rates = [0.5, 1, 1.5, 2];
+    const current = get().playbackRate;
+    const idx = rates.indexOf(current);
+    set({ playbackRate: rates[(idx + 1) % rates.length] });
+  },
 
   setSelectedAction: (id) => set({ selectedActionId: id, drawingZoom: false }),
 
@@ -510,7 +527,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // ---- Production ----
 
-  produce: async (selectedActionIds?: string[]) => {
+  produce: async (selectedActionIds?: string[], resolution?: { width: number; height: number }, crf?: number) => {
     const { sessionDir, project } = get();
     if (!sessionDir || !project) return;
 
@@ -520,7 +537,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isProducing: true, isLoading: true, loadingMessage: "Producing video...", produceLog: "Starting production...\n" });
 
     try {
-      const finalPath = await api.produceTimelineVideo(sessionDir, undefined, selectedActionIds);
+      const finalPath = await api.produceTimelineVideo(sessionDir, undefined, selectedActionIds, resolution, crf);
 
       set((s) => ({
         produceLog: s.produceLog + `\nDone! Output: ${finalPath}\n`,
@@ -538,31 +555,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
-  preview: async (selectedActionIds?: string[]) => {
-    const { sessionDir, project } = get();
-    if (!sessionDir || !project) return;
-
-    // Save first
-    await saveProject(sessionDir, project);
-
-    set({ isProducing: true, isLoading: true, loadingMessage: "Generating preview...", produceLog: "Starting preview...\n" });
-
+  cancelProduce: async () => {
     try {
-      const finalPath = await api.previewVideo(sessionDir, selectedActionIds);
-      set((s) => ({
-        produceLog: s.produceLog + `\nPreview opened: ${finalPath}\n`,
-        isProducing: false,
-        isLoading: false,
-        loadingMessage: "",
-      }));
-    } catch (err) {
-      set((s) => ({
-        produceLog: s.produceLog + `\nPreview error: ${err}\n`,
-        isProducing: false,
-        isLoading: false,
-        loadingMessage: "",
-      }));
-    }
+      await api.cancelProduce();
+    } catch { /* ignore if not supported */ }
+    set((s) => ({
+      produceLog: s.produceLog + "\nProduction cancelled.\n",
+      isProducing: false,
+      isLoading: false,
+      loadingMessage: "",
+    }));
   },
 
   appendProduceLog: (line) =>

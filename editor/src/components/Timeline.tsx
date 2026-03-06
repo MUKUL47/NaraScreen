@@ -2,49 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
 import { assetUrl } from "../lib/fileOps";
 import { formatTime } from "../lib/formatTime";
-import { ACTION_BG_COLORS, ACTION_BORDER_COLORS, ACTION_TEXT_COLORS, ACTION_DISPLAY_NAMES } from "../lib/constants";
+import { ACTION_BG_COLORS, ACTION_BORDER_COLORS, ACTION_TEXT_COLORS, ACTION_DISPLAY_NAMES, RANGE_ACTIONS, LANE_ORDER } from "../lib/constants";
+import { getActionEndTime, setActionEndTime } from "../lib/actions";
 import { ActionIcon, PlusIcon } from "./ActionIcon";
-import { Video } from "lucide-react";
+import { Video, Play, Pause } from "lucide-react";
 import type { TimelineAction, ActionType } from "../types";
-
-/** Range-based action types that support drag-to-select */
-const RANGE_ACTIONS: ActionType[] = ["spotlight", "blur", "mute", "speed", "callout", "music"];
-
-/** Fixed display order for lanes */
-const LANE_ORDER: ActionType[] = ["narrate", "zoom", "spotlight", "blur", "mute", "speed", "skip", "callout", "music", "pause"];
-
-/** Compute the end time of an action for pill width */
-function getActionEndTime(action: TimelineAction): number {
-  switch (action.type) {
-    case "spotlight": return action.timestamp + (action.spotlightDuration ?? 3);
-    case "blur": return action.timestamp + (action.blurDuration ?? 3);
-    case "mute": return action.muteEndTimestamp ?? action.timestamp + 3;
-    case "speed": return action.speedEndTimestamp ?? action.timestamp + 5;
-    case "skip": return action.skipEndTimestamp ?? action.timestamp + 3;
-    case "callout": return action.timestamp + (action.calloutDuration ?? 3);
-    case "music": return action.musicEndTimestamp ?? action.timestamp + 10;
-    case "zoom": return action.timestamp + (action.zoomDuration ?? 1) + (action.zoomHold ?? 2);
-    case "narrate": return action.timestamp + 2;
-    case "pause": return action.timestamp + 1;
-    default: return action.timestamp + 1;
-  }
-}
-
-/** Update the end time of an action given a new end time */
-function setActionEndTime(action: TimelineAction, newEnd: number): Partial<TimelineAction> {
-  const dur = Math.max(0.5, newEnd - action.timestamp);
-  switch (action.type) {
-    case "spotlight": return { spotlightDuration: dur };
-    case "blur": return { blurDuration: dur };
-    case "mute": return { muteEndTimestamp: newEnd };
-    case "speed": return { speedEndTimestamp: newEnd };
-    case "skip": return { skipEndTimestamp: newEnd };
-    case "callout": return { calloutDuration: dur };
-    case "music": return { musicEndTimestamp: newEnd };
-    case "zoom": return { zoomHold: Math.max(0, dur - (action.zoomDuration ?? 1)) };
-    default: return {};
-  }
-}
 
 const RULER_H = 28;
 const FILMSTRIP_H = 52;
@@ -65,6 +27,10 @@ export function Timeline() {
   const setSelectedAction = useProjectStore((s) => s.setSelectedAction);
   const addAction = useProjectStore((s) => s.addAction);
   const updateAction = useProjectStore((s) => s.updateAction);
+  const isPlaying = useProjectStore((s) => s.isPlaying);
+  const togglePlay = useProjectStore((s) => s.togglePlay);
+  const playbackRate = useProjectStore((s) => s.playbackRate);
+  const cyclePlaybackRate = useProjectStore((s) => s.cyclePlaybackRate);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const addBtnRef = useRef<HTMLDivElement>(null);
@@ -389,6 +355,22 @@ export function Timeline() {
           </button>
         </div>
 
+        {/* Play controls */}
+        <button
+          onClick={togglePlay}
+          className="w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-white transition-colors"
+          title="Play/Pause (Space)"
+        >
+          {isPlaying ? <Pause size={13} /> : <Play size={13} />}
+        </button>
+        <button
+          onClick={cyclePlaybackRate}
+          className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md transition-colors ${playbackRate === 1 ? "text-zinc-500 bg-zinc-800/40" : "text-violet-400 bg-violet-500/15"}`}
+          title="Cycle speed"
+        >
+          {playbackRate}x
+        </button>
+
         <div className="flex-1" />
 
         {/* Drag selection info */}
@@ -493,6 +475,7 @@ export function Timeline() {
                   const isSelected = action.id === selectedActionId;
                   const canResize = isResizable(action.type);
                   const beingDragged = pillDrag?.actionId === action.id;
+                  const isActive = playheadTime >= action.timestamp && playheadTime <= endTime;
 
                   return (
                     <div
@@ -501,7 +484,9 @@ export function Timeline() {
                         ${ACTION_BG_COLORS[laneType] || "bg-zinc-500/20"}
                         ${isSelected
                           ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-md shadow-black/30`
-                          : "border border-white/5 hover:border-white/15 hover:brightness-110"
+                          : isActive
+                            ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-110 z-10`
+                            : "border border-white/5 hover:border-white/15 hover:brightness-110"
                         }
                         ${beingDragged ? "opacity-90 z-30" : ""}
                       `}
@@ -575,6 +560,13 @@ export function Timeline() {
             className="absolute top-0 pointer-events-none z-30"
             style={{ left: playheadTime * pxPerSec, height: totalContentHeight }}
           >
+            {/* Time label — always visible near playhead */}
+            <div
+              className="absolute -translate-x-1/2 bg-red-500 text-white text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded-sm whitespace-nowrap"
+              style={{ top: 1, left: 0 }}
+            >
+              {formatTime(playheadTime)}
+            </div>
             <div
               className="absolute -translate-x-1.5"
               style={{ top: RULER_H - 10 }}

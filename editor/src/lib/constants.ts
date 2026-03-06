@@ -1,3 +1,5 @@
+import type { ActionType } from "../types";
+
 /** Action type → Tailwind background color class */
 export const ACTION_COLORS: Record<string, string> = {
   pause: "bg-amber-500",
@@ -75,6 +77,12 @@ export const ACTION_OVERLAY_COLORS: Record<string, string> = {
   callout: "#06b6d4",    // cyan-500
   blur: "#6366f1",       // indigo-500
 };
+
+/** Range-based action types that support drag-to-select */
+export const RANGE_ACTIONS: ActionType[] = ["spotlight", "blur", "mute", "speed", "callout", "music"];
+
+/** Fixed display order for lanes */
+export const LANE_ORDER: ActionType[] = ["narrate", "zoom", "spotlight", "blur", "mute", "speed", "skip", "callout", "music", "pause"];
 
 /** Action type → display name */
 export const ACTION_DISPLAY_NAMES: Record<string, string> = {

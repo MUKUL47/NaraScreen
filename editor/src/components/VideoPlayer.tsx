@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from "react";
+import { useProjectStore } from "../stores/useProjectStore";
 import { assetUrl } from "../lib/fileOps";
-import { formatTime } from "../lib/formatTime";
 import type { CalloutPanel, LabeledOverlay } from "../types";
 
 interface VideoPlayerProps {
@@ -8,15 +8,38 @@ interface VideoPlayerProps {
   currentTime: number;
   onTimeUpdate: (time: number) => void;
   onDurationChange?: (duration: number) => void;
-  /** If true, overlay allows drawing zoom rectangle */
   drawingZoom?: boolean;
   onZoomDrawn?: (rect: [number, number, number, number]) => void;
-  /** Labeled overlay rects from all rect-based actions */
   labeledOverlays?: LabeledOverlay[];
-  /** Callout text panels to preview on video */
   calloutPanels?: CalloutPanel[];
-  /** Click an overlay to select its action */
   onSelectAction?: (actionId: string) => void;
+}
+
+/** Compute the actual display rect of a video using object-contain within its container */
+function getVideoDisplayRect(video: HTMLVideoElement) {
+  const containerRect = video.getBoundingClientRect();
+  const vw = video.videoWidth || 1920;
+  const vh = video.videoHeight || 1080;
+  const videoAspect = vw / vh;
+  const containerAspect = containerRect.width / containerRect.height;
+
+  let displayW: number, displayH: number, offsetX: number, offsetY: number;
+
+  if (containerAspect > videoAspect) {
+    // Letterboxed left/right (pillarbox)
+    displayH = containerRect.height;
+    displayW = displayH * videoAspect;
+    offsetX = (containerRect.width - displayW) / 2;
+    offsetY = 0;
+  } else {
+    // Letterboxed top/bottom
+    displayW = containerRect.width;
+    displayH = displayW / videoAspect;
+    offsetX = 0;
+    offsetY = (containerRect.height - displayH) / 2;
+  }
+
+  return { displayW, displayH, offsetX, offsetY, vw, vh };
 }
 
 export function VideoPlayer({
@@ -32,25 +55,34 @@ export function VideoPlayer({
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [duration, setDuration] = useState(0);
-  const [playbackRate, setPlaybackRate] = useState(1);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number } | null>(null);
   const seekingRef = useRef(false);
 
-  const SPEEDS = [0.5, 1, 1.5, 2] as const;
+  // Store-driven playback
+  const isPlaying = useProjectStore((s) => s.isPlaying);
+  const setIsPlaying = useProjectStore((s) => s.setIsPlaying);
+  const playbackRate = useProjectStore((s) => s.playbackRate);
+  const togglePlay = useProjectStore((s) => s.togglePlay);
 
-  const cycleSpeed = useCallback(() => {
-    setPlaybackRate((prev) => {
-      const idx = SPEEDS.indexOf(prev as (typeof SPEEDS)[number]);
-      const next = SPEEDS[(idx + 1) % SPEEDS.length];
-      if (videoRef.current) videoRef.current.playbackRate = next;
-      return next;
-    });
-  }, []);
+  // Sync play/pause state from store to video element
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !video.src) return;
+    if (isPlaying && video.paused) {
+      video.play().catch(() => setIsPlaying(false));
+    } else if (!isPlaying && !video.paused) {
+      video.pause();
+    }
+  }, [isPlaying, setIsPlaying]);
 
-  // Sync video time from external source
+  // Sync playback rate from store to video element
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.playbackRate = playbackRate;
+  }, [playbackRate]);
+
+  // Sync video time from external source (timeline clicks, etc.)
   useEffect(() => {
     const video = videoRef.current;
     if (!video || seekingRef.current) return;
@@ -68,31 +100,19 @@ export function VideoPlayer({
   const handleLoadedMetadata = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    setDuration(video.duration);
     video.playbackRate = playbackRate;
     onDurationChange?.(video.duration);
   }, [onDurationChange, playbackRate]);
-
-  const togglePlay = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      video.play();
-      setIsPlaying(true);
-    } else {
-      video.pause();
-      setIsPlaying(false);
-    }
-  }, []);
 
   const seek = useCallback(
     (delta: number) => {
       const video = videoRef.current;
       if (!video) return;
-      video.currentTime = Math.max(0, Math.min(duration, video.currentTime + delta));
+      const dur = video.duration || 0;
+      video.currentTime = Math.max(0, Math.min(dur, video.currentTime + delta));
       onTimeUpdate(video.currentTime);
     },
-    [duration, onTimeUpdate],
+    [onTimeUpdate],
   );
 
   // Keyboard shortcuts
@@ -124,33 +144,18 @@ export function VideoPlayer({
     return () => window.removeEventListener("keydown", handler);
   }, [togglePlay, seek]);
 
-  // Seek bar drag
-  const handleSeekBarClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      const bar = e.currentTarget;
-      const rect = bar.getBoundingClientRect();
-      const ratio = (e.clientX - rect.left) / rect.width;
-      const time = ratio * duration;
-      const video = videoRef.current;
-      if (video) {
-        video.currentTime = time;
-        onTimeUpdate(time);
-      }
-    },
-    [duration, onTimeUpdate],
-  );
-
-  // Zoom drawing on video
+  // Zoom drawing — convert client coords to video pixel coords (accounting for letterboxing)
   const toVideoCoords = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } | null => {
       const video = videoRef.current;
       if (!video) return null;
-      const rect = video.getBoundingClientRect();
-      const scaleX = video.videoWidth / rect.width;
-      const scaleY = video.videoHeight / rect.height;
+      const { displayW, displayH, offsetX, offsetY, vw, vh } = getVideoDisplayRect(video);
+      const containerRect = video.getBoundingClientRect();
+      const relX = clientX - containerRect.left - offsetX;
+      const relY = clientY - containerRect.top - offsetY;
       return {
-        x: Math.round(Math.max(0, (clientX - rect.left) * scaleX)),
-        y: Math.round(Math.max(0, (clientY - rect.top) * scaleY)),
+        x: Math.round(Math.max(0, Math.min(vw, (relX / displayW) * vw))),
+        y: Math.round(Math.max(0, Math.min(vh, (relY / displayH) * vh))),
       };
     },
     [],
@@ -202,12 +207,26 @@ export function VideoPlayer({
 
   const videoSrc = videoPath ? assetUrl(videoPath) : null;
 
+  /** Convert video-pixel rect [x,y,w,h] to CSS style positioned within the container,
+   *  accounting for object-contain letterboxing. */
+  const videoRectToStyle = (rect: [number, number, number, number]) => {
+    const video = videoRef.current;
+    if (!video) return {};
+    const { displayW, displayH, offsetX, offsetY, vw, vh } = getVideoDisplayRect(video);
+    return {
+      left: offsetX + (rect[0] / vw) * displayW,
+      top: offsetY + (rect[1] / vh) * displayH,
+      width: (rect[2] / vw) * displayW,
+      height: (rect[3] / vh) * displayH,
+    };
+  };
+
   return (
-    <div className="flex flex-col bg-black rounded overflow-hidden">
-      {/* Video container */}
+    <div className="bg-black overflow-hidden h-full">
+      {/* Video container — fills entire space */}
       <div
         ref={containerRef}
-        className={`relative flex-1 ${drawingZoom ? "cursor-crosshair" : ""}`}
+        className={`relative w-full h-full ${drawingZoom ? "cursor-crosshair" : ""}`}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -230,20 +249,16 @@ export function VideoPlayer({
           </div>
         )}
 
-        {/* Labeled overlay rects from all rect-based actions */}
+        {/* Labeled overlay rects — positioned to match actual video display area */}
         {labeledOverlays && videoRef.current && labeledOverlays.map((overlay, i) => {
-          const vw = videoRef.current!.videoWidth || 1920;
-          const vh = videoRef.current!.videoHeight || 1080;
-          const opacity = overlay.selected ? 1 : 0.4;
+          const style = videoRectToStyle(overlay.rect);
+          const opacity = overlay.selected ? 1 : 0.5;
           return (
             <div
               key={`${overlay.actionId}-${i}`}
               className="absolute cursor-pointer"
               style={{
-                left: `${(overlay.rect[0] / vw) * 100}%`,
-                top: `${(overlay.rect[1] / vh) * 100}%`,
-                width: `${(overlay.rect[2] / vw) * 100}%`,
-                height: `${(overlay.rect[3] / vh) * 100}%`,
+                ...style,
                 border: `2px solid ${overlay.color}`,
                 backgroundColor: `${overlay.color}${overlay.selected ? "1a" : "0d"}`,
                 opacity,
@@ -255,7 +270,6 @@ export function VideoPlayer({
                 onSelectAction?.(overlay.actionId);
               }}
             >
-              {/* Label badge */}
               <div
                 className="absolute -top-5 left-0 max-w-full truncate px-1 py-0.5 rounded text-white font-medium whitespace-nowrap"
                 style={{
@@ -273,19 +287,15 @@ export function VideoPlayer({
 
         {/* Callout text panel previews */}
         {calloutPanels && videoRef.current && calloutPanels.map((panel, i) => {
-          const vw = videoRef.current!.videoWidth || 1920;
-          const vh = videoRef.current!.videoHeight || 1080;
-          const videoRect = videoRef.current!.getBoundingClientRect();
-          const scaleRatio = videoRect.width / vw;
+          const style = videoRectToStyle(panel.rect);
+          const { displayW, vw } = videoRef.current ? getVideoDisplayRect(videoRef.current) : { displayW: 1, vw: 1 };
+          const scaleRatio = displayW / vw;
           return (
             <div
               key={i}
               className="absolute pointer-events-none flex items-center justify-center overflow-hidden"
               style={{
-                left: `${(panel.rect[0] / vw) * 100}%`,
-                top: `${(panel.rect[1] / vh) * 100}%`,
-                width: `${(panel.rect[2] / vw) * 100}%`,
-                height: `${(panel.rect[3] / vh) * 100}%`,
+                ...style,
                 border: "2px solid rgba(251, 191, 36, 0.6)",
                 backgroundColor: "rgba(0, 0, 0, 0.5)",
                 borderRadius: "4px",
@@ -307,58 +317,15 @@ export function VideoPlayer({
         })}
 
         {/* Drawing rect */}
-        {drawingRect && videoRef.current && (
-          <div
-            className="absolute border-2 border-yellow-400 bg-yellow-400/10 pointer-events-none"
-            style={{
-              left: `${(drawingRect.x / (videoRef.current.videoWidth || 1920)) * 100}%`,
-              top: `${(drawingRect.y / (videoRef.current.videoHeight || 1080)) * 100}%`,
-              width: `${(drawingRect.w / (videoRef.current.videoWidth || 1920)) * 100}%`,
-              height: `${(drawingRect.h / (videoRef.current.videoHeight || 1080)) * 100}%`,
-            }}
-          />
-        )}
-      </div>
-
-      {/* Controls */}
-      <div className="flex items-center gap-3 px-4 py-1.5 bg-zinc-950/90 border-t border-zinc-800/50/50">
-        <button
-          onClick={togglePlay}
-          disabled={!videoSrc}
-          className="w-7 h-7 flex items-center justify-center rounded-md bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-mono disabled:opacity-30 transition-colors"
-        >
-          {isPlaying ? "||" : "\u25B6"}
-        </button>
-
-        <span className="text-[11px] text-zinc-400 font-mono tabular-nums w-24">
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </span>
-
-        <button
-          onClick={cycleSpeed}
-          className={`text-[10px] font-mono text-zinc-400 hover:text-zinc-200 bg-zinc-900 hover:bg-zinc-800 px-1.5 py-0.5 rounded transition-colors ${playbackRate === 1 ? "opacity-40" : ""}`}
-        >
-          {playbackRate}x
-        </button>
-
-        {/* Seek bar */}
-        <div
-          className="flex-1 h-1.5 bg-zinc-900 rounded-full cursor-pointer relative group"
-          onClick={handleSeekBarClick}
-        >
-          <div
-            className="h-full bg-violet-500 rounded-full transition-all"
-            style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
-          />
-          <div
-            className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ left: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
-          />
-        </div>
-
-        <span className="text-[9px] text-zinc-600 hidden lg:inline">
-          Space / Arrows
-        </span>
+        {drawingRect && videoRef.current && (() => {
+          const style = videoRectToStyle([drawingRect.x, drawingRect.y, drawingRect.w, drawingRect.h]);
+          return (
+            <div
+              className="absolute border-2 border-yellow-400 bg-yellow-400/10 pointer-events-none"
+              style={style}
+            />
+          );
+        })()}
       </div>
     </div>
   );
