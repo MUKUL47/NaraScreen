@@ -86,7 +86,7 @@ function computeVersionLabel(videoDir: string): string {
 }
 
 // ═════════════════════════════════════════════════════════════
-// Pass 1: Overlay Effects (blur, spotlight, callout)
+// Overlay Passes (blur, spotlight, callout)
 // These apply timed filters on the full video — no duration change
 // ═════════════════════════════════════════════════════════════
 
@@ -100,8 +100,6 @@ function applyBlurPass(
 ): void {
   emit(`\n[Pass: Blur] Applying ${blurActions.length} blur effect(s)...`);
 
-  // Build a chain of timed blur filters
-  // For each blur action, we split, crop, blur, overlay with enable
   let filterChain = "";
   let lastLabel = "0:v";
   let idx = 0;
@@ -158,17 +156,11 @@ function applySpotlightPass(
 ): void {
   emit(`\n[Pass: Spotlight] Applying ${spotActions.length} spotlight effect(s)...`);
 
-  // For each spotlight action (which may have multiple rects):
-  // 1. Dim the full frame
-  // 2. For each rect, crop the bright region from original and overlay onto dimmed
-  // 3. Overlay the composite onto passthrough, enabled only during time range
-
   let filterChain = "";
   let lastLabel = "0:v";
   let idx = 0;
 
   for (const action of spotActions) {
-    // Merge legacy single rect + multi-rect
     const rects = action.spotlightRects ?? (action.spotlightRect ? [action.spotlightRect] : []);
     if (rects.length === 0) continue;
 
@@ -180,15 +172,12 @@ function applySpotlightPass(
     emit(`  Spotlight at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
 
     const sep = filterChain ? ";" : "";
-    // Split: passthrough + dark + one copy per bright region
     const splitCount = 2 + rects.length;
     const splitLabels = [`pass${idx}`, `dark${idx}`, ...rects.map((_, ri) => `crop${idx}_${ri}`)];
     filterChain += `${sep}[${lastLabel}]split=${splitCount}${splitLabels.map((l) => `[${l}]`).join("")}`;
 
-    // Dim the full frame
     filterChain += `;[dark${idx}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill[dimmed${idx}]`;
 
-    // For each rect: crop bright region from original copy, overlay onto dimmed
     let compositeLabel = `dimmed${idx}`;
     for (let ri = 0; ri < rects.length; ri++) {
       const [sx, sy, sw, sh] = rects[ri];
@@ -198,7 +187,6 @@ function applySpotlightPass(
       compositeLabel = outLabel;
     }
 
-    // Overlay the composite onto passthrough, only during time range
     filterChain += `;[pass${idx}][spotlight${idx}]overlay=0:0:enable='${enableExpr}'[out${idx}]`;
     lastLabel = `out${idx}`;
     idx++;
@@ -220,13 +208,9 @@ function applySpotlightPass(
 }
 
 function escapeDrawtext(text: string): string {
-  // For ffmpeg drawtext inside filter_complex:
-  // 1. Escape single quotes for the text='...' wrapper
-  // 2. Escape colons (: is key=value separator in drawtext)
-  // 3. Escape backslashes
   return text
     .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\u2019")  // Replace with unicode right single quote (safest)
+    .replace(/'/g, "\u2019")
     .replace(/:/g, "\\:")
     .replace(/;/g, "\\;");
 }
@@ -240,8 +224,6 @@ function applyCalloutPass(
 ): void {
   emit(`\n[Pass: Callout] Applying ${calloutActions.length} callout(s)...`);
 
-  // Build a filter_complex chain: [0:v]drawtext=...,drawtext=...[vout]
-  // Using filter_complex avoids -vf comma-parsing issues with enable expressions
   const filters: string[] = [];
 
   for (const action of calloutActions) {
@@ -251,7 +233,6 @@ function applyCalloutPass(
     const style = action.calloutStyle || "label";
     const step = action.calloutStep;
 
-    // Modern: calloutPanels with positioned text regions
     const panels = action.calloutPanels;
     if (panels && panels.length > 0) {
       emit(`  Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s (${panels.length} panel${panels.length > 1 ? "s" : ""})`);
@@ -272,7 +253,6 @@ function applyCalloutPass(
       continue;
     }
 
-    // Legacy fallback: single calloutText with calloutPosition
     const text = action.calloutText;
     if (!text) continue;
 
@@ -309,8 +289,6 @@ function applyCalloutPass(
     return;
   }
 
-  // Use filter_complex with semicolons between drawtext filters chained on [0:v]
-  // Each filter takes the previous output as input
   let chain = "";
   let lastLabel = "0:v";
   for (let i = 0; i < filters.length; i++) {
@@ -331,14 +309,8 @@ function applyCalloutPass(
 }
 
 // ═════════════════════════════════════════════════════════════
-// Pass 2: Segment-based pass (zoom, pause, narrate, speed, skip, mute)
-// These change the timeline duration, so they're handled together
-// using the segment cut/concat approach
+// Pass: Skip/Cut — removes sections from the video
 // ═════════════════════════════════════════════════════════════
-
-type SegmentPlan =
-  | { kind: "clip"; start: number; end: number; speed?: number; muted?: boolean }
-  | { kind: "insert"; ts: number; action: Action; insertType: "zoom" | "pause" | "narrate" };
 
 function getSkipRanges(actions: Action[]): Array<{ start: number; end: number }> {
   return actions
@@ -347,6 +319,57 @@ function getSkipRanges(actions: Action[]): Array<{ start: number; end: number }>
     .sort((a, b) => a.start - b.start);
 }
 
+function applySkipPass(
+  inputPath: string,
+  skipRanges: Array<{ start: number; end: number }>,
+  outputPath: string,
+  tempDir: string,
+  emit: (msg: string) => void,
+): void {
+  const totalDuration = probeDuration(inputPath);
+  emit(`\n[Pass: Skip] Removing ${skipRanges.length} section(s)...`);
+
+  const segments: string[] = [];
+  let cursor = 0;
+  let segIdx = 0;
+
+  for (const range of skipRanges) {
+    if (cursor < range.start - 0.05) {
+      emit(`  Keep ${cursor.toFixed(1)}s-${range.start.toFixed(1)}s`);
+      const clipPath = path.join(tempDir, `keep_${String(segIdx).padStart(3, "0")}.mp4`);
+      cutClip(inputPath, cursor, range.start, clipPath);
+      if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
+        segments.push(clipPath);
+        segIdx++;
+      }
+    }
+    emit(`  Skip ${range.start.toFixed(1)}s-${range.end.toFixed(1)}s`);
+    cursor = range.end;
+  }
+
+  if (cursor < totalDuration - 0.05) {
+    const clipPath = path.join(tempDir, `keep_${String(segIdx).padStart(3, "0")}.mp4`);
+    cutClip(inputPath, cursor, totalDuration, clipPath);
+    if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
+      segments.push(clipPath);
+    }
+  }
+
+  if (segments.length === 0) {
+    fs.copyFileSync(inputPath, outputPath);
+    return;
+  }
+
+  emit(`  Normalizing ${segments.length} segments...`);
+  const normalized = segments.map((seg) => normalizeSegmentAudio(seg, seg.replace(".mp4", "_norm.mp4")));
+  const concatList = path.join(tempDir, "skip_concat.txt");
+  concatSegments(normalized, outputPath, concatList);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Pass: Speed — applies speed ramps to sections
+// ═════════════════════════════════════════════════════════════
+
 function getSpeedRanges(actions: Action[]): Array<{ start: number; end: number; factor: number }> {
   return actions
     .filter((a) => a.type === "speed" && a.speedEndTimestamp && a.speedFactor)
@@ -354,139 +377,151 @@ function getSpeedRanges(actions: Action[]): Array<{ start: number; end: number; 
     .sort((a, b) => a.start - b.start);
 }
 
-function getMuteRanges(actions: Action[]): Array<{ start: number; end: number }> {
-  return actions
-    .filter((a) => a.type === "mute" && a.muteEndTimestamp)
-    .map((a) => ({ start: a.timestamp, end: a.muteEndTimestamp as number }))
-    .sort((a, b) => a.start - b.start);
-}
-
-function isRangeSkipped(start: number, end: number, skipRanges: Array<{ start: number; end: number }>): boolean {
-  return skipRanges.some((r) => start >= r.start - 0.05 && end <= r.end + 0.05);
-}
-
-function isInSkipRange(time: number, skipRanges: Array<{ start: number; end: number }>): boolean {
-  return skipRanges.some((r) => time >= r.start && time < r.end);
-}
-
-function isInMuteRange(start: number, end: number, muteRanges: Array<{ start: number; end: number }>): boolean {
-  return muteRanges.some((r) => start >= r.start - 0.05 && end <= r.end + 0.05);
-}
-
-function getSpeedForRange(start: number, end: number, speedRanges: Array<{ start: number; end: number; factor: number }>): number | null {
-  const range = speedRanges.find((r) => start >= r.start - 0.1 && end <= r.end + 0.1);
-  return range ? range.factor : null;
-}
-
-function getSplitPoints(
-  from: number,
-  to: number,
-  skipRanges: Array<{ start: number; end: number }>,
+function applySpeedPass(
+  inputPath: string,
   speedRanges: Array<{ start: number; end: number; factor: number }>,
-  muteRanges: Array<{ start: number; end: number }>,
-): number[] {
-  const points = new Set<number>();
-  for (const r of skipRanges) {
-    if (r.start > from + 0.05 && r.start < to - 0.05) points.add(r.start);
-    if (r.end > from + 0.05 && r.end < to - 0.05) points.add(r.end);
-  }
-  for (const r of speedRanges) {
-    if (r.start > from + 0.05 && r.start < to - 0.05) points.add(r.start);
-    if (r.end > from + 0.05 && r.end < to - 0.05) points.add(r.end);
-  }
-  for (const r of muteRanges) {
-    if (r.start > from + 0.05 && r.start < to - 0.05) points.add(r.start);
-    if (r.end > from + 0.05 && r.end < to - 0.05) points.add(r.end);
-  }
-  return [...points].sort((a, b) => a - b);
-}
+  outputPath: string,
+  tempDir: string,
+  emit: (msg: string) => void,
+): void {
+  const totalDuration = probeDuration(inputPath);
+  emit(`\n[Pass: Speed] Applying ${speedRanges.length} speed ramp(s)...`);
 
-function planClipsBetween(
-  from: number,
-  to: number,
-  skipRanges: Array<{ start: number; end: number }>,
-  speedRanges: Array<{ start: number; end: number; factor: number }>,
-  muteRanges: Array<{ start: number; end: number }>,
-): SegmentPlan[] {
-  const plans: SegmentPlan[] = [];
-  const splitPts = getSplitPoints(from, to, skipRanges, speedRanges, muteRanges);
-  const edges = [from, ...splitPts, to];
+  const segments: string[] = [];
+  let cursor = 0;
+  let segIdx = 0;
 
-  for (let i = 0; i < edges.length - 1; i++) {
-    const segStart = edges[i];
-    const segEnd = edges[i + 1];
-    if (segEnd - segStart < 0.1) continue;
-    if (isRangeSkipped(segStart, segEnd, skipRanges)) continue;
-
-    const speedFactor = getSpeedForRange(segStart, segEnd, speedRanges);
-    const muted = isInMuteRange(segStart, segEnd, muteRanges);
-    plans.push({
-      kind: "clip",
-      start: segStart,
-      end: segEnd,
-      speed: (speedFactor && speedFactor !== 1) ? speedFactor : undefined,
-      muted: muted || undefined,
-    });
-  }
-  return plans;
-}
-
-function estimateInsertDuration(action: Action, narration?: NarrationResult): number {
-  let dur = 3;
-  if (narration && narration.audioDuration > 0) dur = narration.audioDuration + 0.5;
-  if (typeof action.resumeAfter === "number") return action.resumeAfter;
-  if (action.type === "zoom") {
-    const rectCount = Math.max(1, (action.zoomRects ?? (action.zoomRect ? [action.zoomRect] : [])).length);
-    const perZoom = (action.zoomDuration ?? 1) * 2 + (action.zoomHold ?? 2);
-    dur = Math.max(dur, perZoom * rectCount);
-  }
-  if (action.type === "pause" && typeof action.resumeAfter === "number") dur = action.resumeAfter;
-  return dur;
-}
-
-function planSegmentPass(
-  insertActions: Action[],
-  skipRanges: Array<{ start: number; end: number }>,
-  speedRanges: Array<{ start: number; end: number; factor: number }>,
-  muteRanges: Array<{ start: number; end: number }>,
-  totalDuration: number,
-  narrations: Map<Action, NarrationResult>,
-): SegmentPlan[] {
-  const sorted = [...insertActions].sort((a, b) => a.timestamp - b.timestamp);
-  const plans: SegmentPlan[] = [];
-  let currentTime = 0;
-
-  for (const action of sorted) {
-    const ts = action.timestamp;
-    if (isInSkipRange(ts, skipRanges)) continue;
-
-    // Clips between currentTime and this insert point
-    if (ts > currentTime + 0.1) {
-      plans.push(...planClipsBetween(currentTime, ts, skipRanges, speedRanges, muteRanges));
+  for (const range of speedRanges) {
+    if (cursor < range.start - 0.05) {
+      const clipPath = path.join(tempDir, `spd_${String(segIdx).padStart(3, "0")}.mp4`);
+      cutClip(inputPath, cursor, range.start, clipPath);
+      if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
+        segments.push(clipPath);
+        segIdx++;
+      }
     }
 
-    const insertType = action.type as "zoom" | "pause" | "narrate";
-    plans.push({ kind: "insert", ts, action, insertType });
+    emit(`  Speed ${range.factor}x: ${range.start.toFixed(1)}s-${range.end.toFixed(1)}s`);
+    const clipPath = path.join(tempDir, `spd_${String(segIdx).padStart(3, "0")}.mp4`);
+    cutSpeedClip(inputPath, range.start, range.end, range.factor, clipPath);
+    if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
+      segments.push(clipPath);
+      segIdx++;
+    }
 
-    // For zoom/pause, video resumes from the same timestamp (freeze frame inserted)
-    // For narrate without freeze, video continues playing during narration
-    if (action.type === "zoom" || action.type === "pause" || action.freeze === true) {
-      currentTime = ts;
-    } else {
-      // narrate without freeze: video plays during narration — use actual narration duration
-      currentTime = Math.min(ts + estimateInsertDuration(action, narrations.get(action)), totalDuration);
+    cursor = range.end;
+  }
+
+  if (cursor < totalDuration - 0.05) {
+    const clipPath = path.join(tempDir, `spd_${String(segIdx).padStart(3, "0")}.mp4`);
+    cutClip(inputPath, cursor, totalDuration, clipPath);
+    if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
+      segments.push(clipPath);
     }
   }
 
-  // Trailing clip after last insert
-  if (currentTime < totalDuration - 0.1) {
-    plans.push(...planClipsBetween(currentTime, totalDuration, skipRanges, speedRanges, muteRanges));
+  if (segments.length === 0) {
+    fs.copyFileSync(inputPath, outputPath);
+    return;
   }
 
-  return plans;
+  emit(`  Normalizing ${segments.length} segments...`);
+  const normalized = segments.map((seg) => normalizeSegmentAudio(seg, seg.replace(".mp4", "_norm.mp4")));
+  const concatList = path.join(tempDir, "speed_concat.txt");
+  concatSegments(normalized, outputPath, concatList);
 }
 
-// ─── Subtitle Utilities ──────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// Timestamp Remapping
+// Maps original timestamps → post-skip/speed coordinates
+// ═════════════════════════════════════════════════════════════
+
+function buildSkipRemap(
+  skipRanges: Array<{ start: number; end: number }>,
+): (ts: number) => number {
+  return (ts: number): number => {
+    let offset = 0;
+    for (const range of skipRanges) {
+      if (range.end <= ts) {
+        offset += range.end - range.start;
+      } else if (range.start < ts) {
+        // Inside a skip range — clamp to the start of the skip
+        return range.start - offset;
+      }
+    }
+    return ts - offset;
+  };
+}
+
+function buildSpeedRemap(
+  speedRanges: Array<{ start: number; end: number; factor: number }>,
+): (ts: number) => number {
+  return (ts: number): number => {
+    let outputTime = 0;
+    let cursor = 0;
+
+    for (const range of speedRanges) {
+      if (ts <= range.start) {
+        return outputTime + (ts - cursor);
+      }
+      outputTime += range.start - cursor;
+      cursor = range.start;
+
+      if (ts <= range.end) {
+        return outputTime + (ts - range.start) / range.factor;
+      }
+      outputTime += (range.end - range.start) / range.factor;
+      cursor = range.end;
+    }
+
+    return outputTime + (ts - cursor);
+  };
+}
+
+function remapRanges<T extends { start: number; end: number }>(
+  ranges: T[],
+  remap: (ts: number) => number,
+): T[] {
+  return ranges
+    .map((r) => ({ ...r, start: remap(r.start), end: remap(r.end) }))
+    .filter((r) => r.end > r.start + 0.05);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Pass: Mute (audio filter)
+// ═════════════════════════════════════════════════════════════
+
+function applyMutePass(
+  inputPath: string,
+  muteRanges: Array<{ start: number; end: number }>,
+  outputPath: string,
+  emit: (msg: string) => void,
+): void {
+  emit(`\n[Pass: Mute] Applying ${muteRanges.length} mute range(s)...`);
+
+  const filters: string[] = [];
+  for (const range of muteRanges) {
+    emit(`  Mute ${range.start.toFixed(1)}s-${range.end.toFixed(1)}s`);
+    filters.push(`volume=enable='between(t,${range.start.toFixed(3)},${range.end.toFixed(3)})':volume=0`);
+  }
+
+  if (filters.length === 0 || !hasAudioStream(inputPath)) {
+    fs.copyFileSync(inputPath, outputPath);
+    return;
+  }
+
+  ffmpegSync([
+    "-y", "-i", inputPath,
+    "-af", filters.join(","),
+    "-c:v", "copy",
+    "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
+    outputPath,
+  ]);
+}
+
+// ═════════════════════════════════════════════════════════════
+// Subtitle Utilities
+// ═════════════════════════════════════════════════════════════
 
 function secToAssTs(sec: number): string {
   const h = Math.floor(sec / 3600);
@@ -568,7 +603,9 @@ function burnSubtitles(videoPath: string, subtitlePath: string, outputPath: stri
   return fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0;
 }
 
-// ─── Insert Segment Builders ─────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+// Insert Effect Builders (zoom, pause, narrate)
+// ═════════════════════════════════════════════════════════════
 
 function buildSingleZoom(
   zoomRect: [number, number, number, number],
@@ -629,7 +666,6 @@ function buildSingleZoom(
   return paths;
 }
 
-/** Find narration from a zoom target's own narration fields */
 function findZoomTargetNarration(
   target: { narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string },
 ): { text: string; lang: string; audioPath?: string } | null {
@@ -652,7 +688,6 @@ function findZoomTargetNarration(
   return null;
 }
 
-/** Prepare TTS audio for a zoom target's narration */
 function prepareZoomTargetAudio(
   target: { narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string },
   audioOutputPath: string,
@@ -684,15 +719,15 @@ function prepareZoomTargetAudio(
 
 function buildZoomInsert(
   action: Action,
-  recordingPath: string,
+  videoPath: string,
   tempDir: string,
   segIdx: number,
   res: { width: number; height: number },
   narration: NarrationResult | undefined,
   project: Record<string, unknown>,
   emit: (msg: string) => void,
+  frameTs: number,
 ): string[] {
-  // Merge legacy formats into zoom targets
   type ZoomTarget = { rect: [number, number, number, number]; narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string };
   let targets: ZoomTarget[];
   if (action.zoomTargets?.length) {
@@ -709,25 +744,22 @@ function buildZoomInsert(
   const holdDuration = action.zoomHold ?? 2;
 
   const framePath = path.join(tempDir, `frame_${String(segIdx).padStart(3, "0")}.png`);
-  extractFrame(recordingPath, action.timestamp, framePath);
+  extractFrame(videoPath, frameTs, framePath);
 
-  emit(`  Zoom at ${action.timestamp.toFixed(1)}s (${targets.length} target${targets.length > 1 ? "s" : ""})`);
+  emit(`  Zoom at ${frameTs.toFixed(1)}s (${targets.length} target${targets.length > 1 ? "s" : ""})`);
 
   const allPaths: string[] = [];
 
   for (let i = 0; i < targets.length; i++) {
     const target = targets[i];
 
-    // Resolve narration: per-target narration takes priority, then fall back to action-level (only for first target in legacy mode)
     let narrForThis: NarrationResult | undefined;
     const hasTargetNarration = findZoomTargetNarration(target) !== null;
 
     if (hasTargetNarration) {
-      // Per-target narration — generate TTS for this target
       const audioPath = path.join(tempDir, `zoomnarr_${String(segIdx).padStart(3, "0")}_z${i}.wav`);
       narrForThis = prepareZoomTargetAudio(target, audioPath, project, emit, `zoom target ${i + 1}`);
     } else if (i === 0 && narration) {
-      // Legacy: action-level narration on first zoom only
       narrForThis = narration;
     }
 
@@ -736,16 +768,8 @@ function buildZoomInsert(
     emit(`    Target ${i + 1}: ${target.rect[2]}x${target.rect[3]} hold=${thisHold.toFixed(1)}s${narrForThis ? " (with narration)" : ""}`);
 
     const paths = buildSingleZoom(
-      target.rect,
-      framePath,
-      tempDir,
-      segIdx,
-      i,
-      res,
-      zoomDuration,
-      thisHold,
-      narrForThis,
-      emit,
+      target.rect, framePath, tempDir, segIdx, i, res,
+      zoomDuration, thisHold, narrForThis, emit,
     );
     allPaths.push(...paths);
   }
@@ -755,21 +779,22 @@ function buildZoomInsert(
 
 function buildPauseInsert(
   action: Action,
-  recordingPath: string,
+  videoPath: string,
   tempDir: string,
   segIdx: number,
   res: { width: number; height: number },
   narration: NarrationResult | undefined,
   emit: (msg: string) => void,
+  frameTs: number,
 ): string[] {
   const framePath = path.join(tempDir, `frame_${String(segIdx).padStart(3, "0")}.png`);
-  extractFrame(recordingPath, action.timestamp, framePath);
+  extractFrame(videoPath, frameTs, framePath);
 
   let duration = 3;
   if (narration && narration.audioDuration > 0) duration = narration.audioDuration + 0.5;
   if (typeof action.resumeAfter === "number") duration = action.resumeAfter;
 
-  emit(`  Pause at ${action.timestamp.toFixed(1)}s (${duration.toFixed(1)}s)`);
+  emit(`  Pause at ${frameTs.toFixed(1)}s (${duration.toFixed(1)}s)`);
 
   const { width, height } = res;
   const vf = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`;
@@ -788,37 +813,35 @@ function buildPauseInsert(
 
 function buildNarrateInsert(
   action: Action,
-  recordingPath: string,
+  videoPath: string,
   tempDir: string,
   segIdx: number,
   res: { width: number; height: number },
   totalDuration: number,
   narration: NarrationResult | undefined,
   emit: (msg: string) => void,
+  frameTs: number,
 ): string[] {
-  const ts = action.timestamp;
-
   // If freeze requested, build a freeze frame
   if (action.freeze === true || action.type === "pause") {
-    return buildPauseInsert(action, recordingPath, tempDir, segIdx, res, narration, emit);
+    return buildPauseInsert(action, videoPath, tempDir, segIdx, res, narration, emit, frameTs);
   }
 
   // Otherwise, play video with narration overlay
   let duration = narration ? narration.audioDuration + 0.5 : 3;
   if (typeof action.resumeAfter === "number") duration = action.resumeAfter;
-  const clipEnd = Math.min(ts + duration, totalDuration);
+  const clipEnd = Math.min(frameTs + duration, totalDuration);
 
-  emit(`  Narrate at ${ts.toFixed(1)}s (${duration.toFixed(1)}s)`);
+  emit(`  Narrate at ${frameTs.toFixed(1)}s (${duration.toFixed(1)}s)`);
 
   const playPath = path.join(tempDir, `play_${String(segIdx).padStart(3, "0")}.mp4`);
-  cutClip(recordingPath, ts, clipEnd, playPath);
+  cutClip(videoPath, frameTs, clipEnd, playPath);
 
   if (narration) {
     const withAudioPath = path.join(tempDir, `playaudio_${String(segIdx).padStart(3, "0")}.mp4`);
     const clipHasAudio = hasAudioStream(playPath);
 
     if (clipHasAudio) {
-      // Mix: duck original audio to 20% and overlay narration at full volume
       emit(`    Mixing narration with original audio (ducking original to 20%)`);
       ffmpegSync([
         "-y", "-i", playPath, "-i", narration.audioPath,
@@ -828,7 +851,6 @@ function buildNarrateInsert(
         withAudioPath,
       ]);
     } else {
-      // No original audio — just add narration
       ffmpegSync([
         "-y", "-i", playPath, "-i", narration.audioPath,
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
@@ -844,95 +866,68 @@ function buildNarrateInsert(
   return [playPath];
 }
 
-function executeSegmentPass(
+// ═════════════════════════════════════════════════════════════
+// Pass: Insert Effects (zoom, pause, narrate)
+// Walks forward through the video, cutting clips and inserting effects
+// ═════════════════════════════════════════════════════════════
+
+function executeInsertPass(
   inputPath: string,
   insertActions: Action[],
-  skipActions: Action[],
-  speedActions: Action[],
-  muteActions: Action[],
+  narrations: Map<Action, NarrationResult>,
   outputPath: string,
   tempDir: string,
   res: { width: number; height: number },
   project: Record<string, unknown>,
   emit: (msg: string) => void,
+  remapTs: (ts: number) => number,
 ): { narrationTimestamps: Array<{ start: number; end: number }> } {
   const totalDuration = probeDuration(inputPath);
-  const skipRanges = getSkipRanges(skipActions);
-  const speedRanges = getSpeedRanges(speedActions);
-  const muteRanges = getMuteRanges(muteActions);
 
-  // Log what this pass includes
-  const parts: string[] = [];
-  if (insertActions.length > 0) parts.push(`${insertActions.length} insert(s)`);
-  if (speedActions.length > 0) parts.push(`${speedActions.length} speed ramp(s)`);
-  if (skipActions.length > 0) parts.push(`${skipActions.length} skip/cut(s)`);
-  if (muteActions.length > 0) parts.push(`${muteActions.length} mute(s)`);
-  emit(`\n[Pass: Segments] Processing ${parts.join(", ")}...`);
+  // Sort inserts by their remapped timestamp
+  const sorted = insertActions
+    .map((a) => ({ action: a, mappedTs: remapTs(a.timestamp) }))
+    .filter((a) => a.mappedTs >= 0 && a.mappedTs < totalDuration)
+    .sort((a, b) => a.mappedTs - b.mappedTs);
 
-  // Pre-generate narration audio for all insert actions BEFORE planning
-  // so planSegmentPass can use actual narration durations for narrate-without-freeze
-  const narrations = new Map<Action, NarrationResult>();
-  for (let i = 0; i < insertActions.length; i++) {
-    const action = insertActions[i];
-    const narr = findNarration(action);
-    if (!narr) continue;
+  emit(`\n[Pass: Inserts] Processing ${sorted.length} insert(s)...`);
 
-    const audioPath = path.join(tempDir, `narr_${String(i).padStart(3, "0")}.wav`);
-    const { hasAudio, audioDuration } = prepareNarrationAudio(action, audioPath, project, emit, action.timestamp);
-    if (hasAudio) {
-      narrations.set(action, { audioPath, audioDuration, text: narr.text || "", lang: narr.lang || "en" });
-    }
-  }
-
-  const plans = planSegmentPass(insertActions, skipRanges, speedRanges, muteRanges, totalDuration, narrations);
-  emit(`  Planned ${plans.length} segments`);
-
-  // Build all segments
   const segments: string[] = [];
   const narrationTimestamps: Array<{ start: number; end: number }> = [];
+  let cursor = 0;
   let segIdx = 0;
   let runningDuration = 0;
 
-  for (let i = 0; i < plans.length; i++) {
-    const plan = plans[i];
-
-    if (plan.kind === "clip") {
-      const clipPath = path.join(tempDir, `clip_${String(segIdx).padStart(3, "0")}.mp4`);
-      if (plan.speed) {
-        emit(`  Speed ramp ${plan.speed}x: ${plan.start.toFixed(1)}s-${plan.end.toFixed(1)}s`);
-        cutSpeedClip(inputPath, plan.start, plan.end, plan.speed, clipPath);
-      } else if (plan.muted) {
-        emit(`  Muted clip ${plan.start.toFixed(1)}s-${plan.end.toFixed(1)}s`);
-        cutClipMuted(inputPath, plan.start, plan.end, clipPath);
-      } else {
-        cutClip(inputPath, plan.start, plan.end, clipPath);
-      }
+  for (const { action, mappedTs } of sorted) {
+    // Clip before this insert
+    if (mappedTs > cursor + 0.05) {
+      const clipPath = path.join(tempDir, `ins_clip_${String(segIdx).padStart(3, "0")}.mp4`);
+      cutClip(inputPath, cursor, mappedTs, clipPath);
       if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
         runningDuration += probeDuration(clipPath);
         segments.push(clipPath);
         segIdx++;
       }
-      continue;
     }
 
-    // Insert plan
-    const narration = narrations.get(plan.action);
+    // Build the insert effect
+    const narration = narrations.get(action);
     let insertPaths: string[];
 
-    if (plan.insertType === "zoom" && (plan.action.zoomRect || (plan.action.zoomRects && plan.action.zoomRects.length > 0) || (plan.action.zoomTargets && plan.action.zoomTargets.length > 0))) {
-      insertPaths = buildZoomInsert(plan.action, inputPath, tempDir, segIdx, res, narration, project, emit);
-    } else if (plan.insertType === "pause") {
-      insertPaths = buildPauseInsert(plan.action, inputPath, tempDir, segIdx, res, narration, emit);
+    if (action.type === "zoom" && (action.zoomRect || action.zoomRects?.length || action.zoomTargets?.length)) {
+      insertPaths = buildZoomInsert(action, inputPath, tempDir, segIdx, res, narration, project, emit, mappedTs);
+    } else if (action.type === "pause" || action.freeze === true) {
+      insertPaths = buildPauseInsert(action, inputPath, tempDir, segIdx, res, narration, emit, mappedTs);
     } else {
-      insertPaths = buildNarrateInsert(plan.action, inputPath, tempDir, segIdx, res, totalDuration, narration, emit);
+      insertPaths = buildNarrateInsert(action, inputPath, tempDir, segIdx, res, totalDuration, narration, emit, mappedTs);
     }
 
     // Apply subtitles if narration has text
-    if (narration?.text && plan.action.showSubtitles !== false && insertPaths.length > 0) {
+    if (narration?.text && action.showSubtitles !== false && insertPaths.length > 0) {
       const lastPath = insertPaths[insertPaths.length - 1];
       const subPath = path.join(tempDir, `sub_${String(segIdx).padStart(3, "0")}.ass`);
       const subOutPath = path.join(tempDir, `subseg_${String(segIdx).padStart(3, "0")}.mp4`);
-      generateSubtitleFile(narration.text, narration.audioDuration, subPath, res, plan.action.subtitleSize ?? 28);
+      generateSubtitleFile(narration.text, narration.audioDuration, subPath, res, action.subtitleSize ?? 28);
       if (burnSubtitles(lastPath, subPath, subOutPath)) {
         insertPaths[insertPaths.length - 1] = subOutPath;
       }
@@ -949,10 +944,28 @@ function executeSegmentPass(
       segments.push(p);
       segIdx++;
     }
+
+    // Advance cursor — freeze inserts resume from same point, narrate-without-freeze advances
+    if (action.type === "zoom" || action.type === "pause" || action.freeze === true) {
+      cursor = mappedTs;
+    } else {
+      // Narrate without freeze — video played during narration, so skip past that section
+      const narrDur = narration ? narration.audioDuration + 0.5 : 3;
+      const dur = typeof action.resumeAfter === "number" ? action.resumeAfter : narrDur;
+      cursor = Math.min(mappedTs + dur, totalDuration);
+    }
+  }
+
+  // Trailing clip after last insert
+  if (cursor < totalDuration - 0.05) {
+    const clipPath = path.join(tempDir, `ins_clip_${String(segIdx).padStart(3, "0")}.mp4`);
+    cutClip(inputPath, cursor, totalDuration, clipPath);
+    if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
+      segments.push(clipPath);
+    }
   }
 
   if (segments.length === 0) {
-    // No segments — just copy input
     fs.copyFileSync(inputPath, outputPath);
     return { narrationTimestamps };
   }
@@ -965,49 +978,24 @@ function executeSegmentPass(
   });
 
   emit("  Concatenating...");
-  const concatList = path.join(tempDir, "concat_list.txt");
+  const concatList = path.join(tempDir, "insert_concat.txt");
   concatSegments(normalized, outputPath, concatList);
 
   return { narrationTimestamps };
 }
 
 // ═════════════════════════════════════════════════════════════
-// Pass 3: Mute pass (audio filter)
-// ═════════════════════════════════════════════════════════════
-
-function applyMutePass(
-  inputPath: string,
-  muteActions: Action[],
-  outputPath: string,
-  emit: (msg: string) => void,
-): void {
-  emit(`\n[Pass: Mute] Applying ${muteActions.length} mute range(s)...`);
-
-  const filters: string[] = [];
-  for (const action of muteActions) {
-    if (!action.muteEndTimestamp) continue;
-    const start = action.timestamp;
-    const end = action.muteEndTimestamp;
-    emit(`  Mute ${start.toFixed(1)}s-${end.toFixed(1)}s`);
-    filters.push(`volume=enable='between(t,${start.toFixed(3)},${end.toFixed(3)})':volume=0`);
-  }
-
-  if (filters.length === 0 || !hasAudioStream(inputPath)) {
-    fs.copyFileSync(inputPath, outputPath);
-    return;
-  }
-
-  ffmpegSync([
-    "-y", "-i", inputPath,
-    "-af", filters.join(","),
-    "-c:v", "copy",
-    "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
-    outputPath,
-  ]);
-}
-
-// ═════════════════════════════════════════════════════════════
-// Main Orchestrator — Multi-Pass Pipeline
+// Main Orchestrator — N-Pass Pipeline
+//
+// Order of passes:
+// 1. Trim (pre-cut source)
+// 2. Overlay passes (blur → spotlight → callout) — original timestamps
+// 3. Skip pass — removes skipped sections
+// 4. Speed pass — applies speed ramps (remapped timestamps)
+// 5. Mute pass — silences audio ranges (remapped timestamps)
+// 6. Insert pass — zoom/pause/narrate (remapped timestamps)
+// 7. Music pass — background music mixing
+// 8. Final re-encode — resolution/CRF
 // ═════════════════════════════════════════════════════════════
 
 export async function produceTimelineVideo(
@@ -1080,7 +1068,7 @@ export async function produceTimelineVideo(
   const muteActions = allActions.filter((a) => a.type === "mute" && a.muteEndTimestamp);
   const musicAction = allActions.find((a) => a.type === "music" && a.musicPath);
 
-  // Track intermediate files for cleanup
+  // Track intermediate files
   let currentInput = effectiveRecording;
   let passIdx = 0;
 
@@ -1089,14 +1077,16 @@ export async function produceTimelineVideo(
     return path.join(tempDir, `pass_${passIdx}.mp4`);
   };
 
+  const effectiveTotalDuration = probeDuration(effectiveRecording);
+
   // ═══════════════════════════════════════════════════════════
-  // Pass 1: Overlay Effects (applied on full video, no duration change)
-  // Order: blur → spotlight → callout
+  // Pass 1: Overlay Effects (blur → spotlight → callout)
+  // Applied on original timestamps — no duration change
   // ═══════════════════════════════════════════════════════════
 
   if (blurActions.length > 0) {
     const out = nextOutput();
-    applyBlurPass(currentInput, blurActions, out, res, totalDuration, emit);
+    applyBlurPass(currentInput, blurActions, out, res, effectiveTotalDuration, emit);
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
@@ -1106,7 +1096,7 @@ export async function produceTimelineVideo(
 
   if (spotlightActions.length > 0) {
     const out = nextOutput();
-    applySpotlightPass(currentInput, spotlightActions, out, res, totalDuration, emit);
+    applySpotlightPass(currentInput, spotlightActions, out, res, effectiveTotalDuration, emit);
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
@@ -1116,7 +1106,7 @@ export async function produceTimelineVideo(
 
   if (calloutActions.length > 0) {
     const out = nextOutput();
-    applyCalloutPass(currentInput, calloutActions, out, totalDuration, emit);
+    applyCalloutPass(currentInput, calloutActions, out, effectiveTotalDuration, emit);
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
@@ -1125,46 +1115,102 @@ export async function produceTimelineVideo(
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Pass 2: Segment pass (zoom, pause, narrate, speed, skip, mute-as-clip)
-  // All time-altering effects handled together to avoid timestamp remapping
-  // Skip/cut is inherently last in the segment planner (skipped ranges excluded)
+  // Pass 2: Skip/Cut — remove skipped sections
+  // ═══════════════════════════════════════════════════════════
+
+  const skipRanges = getSkipRanges(skipActions);
+  const skipRemap = buildSkipRemap(skipRanges);
+
+  if (skipRanges.length > 0) {
+    const out = nextOutput();
+    applySkipPass(currentInput, skipRanges, out, tempDir, emit);
+    if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+      currentInput = out;
+    } else {
+      emit("  Warning: Skip pass produced no output, skipping");
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Pass 3: Speed — apply speed ramps (remapped through skip)
+  // ═══════════════════════════════════════════════════════════
+
+  const rawSpeedRanges = getSpeedRanges(speedActions);
+  const postSkipSpeedRanges = remapRanges(rawSpeedRanges, skipRemap);
+  const speedRemap = buildSpeedRemap(postSkipSpeedRanges);
+
+  if (postSkipSpeedRanges.length > 0) {
+    const out = nextOutput();
+    applySpeedPass(currentInput, postSkipSpeedRanges, out, tempDir, emit);
+    if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+      currentInput = out;
+    } else {
+      emit("  Warning: Speed pass produced no output, skipping");
+    }
+  }
+
+  // Combined remap: original → post-skip → post-speed
+  const remapTs = (ts: number) => speedRemap(skipRemap(ts));
+
+  // ═══════════════════════════════════════════════════════════
+  // Pass 4: Mute — silence audio ranges (remapped timestamps)
+  // Applied BEFORE inserts so muted audio stays muted in clips
+  // ═══════════════════════════════════════════════════════════
+
+  if (muteActions.length > 0) {
+    const rawMuteRanges = muteActions
+      .filter((a) => a.muteEndTimestamp)
+      .map((a) => ({ start: a.timestamp, end: a.muteEndTimestamp! }))
+      .sort((a, b) => a.start - b.start);
+    const remappedMuteRanges = remapRanges(rawMuteRanges, remapTs);
+
+    if (remappedMuteRanges.length > 0) {
+      const out = nextOutput();
+      applyMutePass(currentInput, remappedMuteRanges, out, emit);
+      if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+        currentInput = out;
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Pass 5: Insert Effects (zoom, pause, narrate)
+  // Uses remapped timestamps for cutting the processed video
   // ═══════════════════════════════════════════════════════════
 
   const insertActions = [...zoomActions, ...pauseActions, ...narrateActions];
-  const hasSegmentWork = insertActions.length > 0 || speedActions.length > 0 || skipActions.length > 0;
-
   let narrationTimestamps: Array<{ start: number; end: number }> = [];
 
-  if (hasSegmentWork) {
+  if (insertActions.length > 0) {
+    // Pre-generate narration audio
+    const narrations = new Map<Action, NarrationResult>();
+    for (let i = 0; i < insertActions.length; i++) {
+      const action = insertActions[i];
+      const narr = findNarration(action);
+      if (!narr) continue;
+
+      const audioPath = path.join(tempDir, `narr_${String(i).padStart(3, "0")}.wav`);
+      const { hasAudio, audioDuration } = prepareNarrationAudio(action, audioPath, project, emit, action.timestamp);
+      if (hasAudio) {
+        narrations.set(action, { audioPath, audioDuration, text: narr.text || "", lang: narr.lang || "en" });
+      }
+    }
+
     const out = nextOutput();
-    const result = executeSegmentPass(
-      currentInput, insertActions, skipActions, speedActions, muteActions,
-      out, tempDir, res, project, emit,
+    const result = executeInsertPass(
+      currentInput, insertActions, narrations,
+      out, tempDir, res, project, emit, remapTs,
     );
     narrationTimestamps = result.narrationTimestamps;
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
-      emit("  Warning: Segment pass produced no output, skipping");
+      emit("  Warning: Insert pass produced no output, skipping");
     }
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Pass 3: Mute (audio filter — only if no segment pass handled it)
-  // If segment pass ran, mute was already applied via muted clips
-  // If no segment pass, apply mute as a standalone audio filter
-  // ═══════════════════════════════════════════════════════════
-
-  if (muteActions.length > 0 && !hasSegmentWork) {
-    const out = nextOutput();
-    applyMutePass(currentInput, muteActions, out, emit);
-    if (fs.existsSync(out) && fs.statSync(out).size > 0) {
-      currentInput = out;
-    }
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  // Pass 4: Music
+  // Pass 6: Music — mix background music
   // ═══════════════════════════════════════════════════════════
 
   const versionLabel = version || computeVersionLabel(videoDir);
@@ -1175,18 +1221,16 @@ export async function produceTimelineVideo(
     mixBackgroundMusic(currentInput, musicAction, narrationTimestamps, finalPath, emit);
     currentInput = finalPath;
   } else if (currentInput === effectiveRecording) {
-    // No effects applied at all — just copy the recording
     emit("\nNo effects to apply, copying original recording...");
     fs.copyFileSync(currentInput, finalPath);
     currentInput = finalPath;
   } else {
-    // Move the last intermediate to final
     fs.renameSync(currentInput, finalPath);
     currentInput = finalPath;
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Final pass: Resolution scaling + CRF re-encode (if needed)
+  // Pass 7: Final — Resolution scaling + CRF re-encode
   // ═══════════════════════════════════════════════════════════
 
   const needsScale = resolution && (resolution.width !== nativeRes.width || resolution.height !== nativeRes.height);
