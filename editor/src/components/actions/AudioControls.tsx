@@ -6,18 +6,18 @@ import type { TimelineAction } from "../../types";
 const api = window.electronAPI;
 
 /** Kokoro lang codes for each language */
-const LANG_CODES: Record<string, string> = {
+export const LANG_CODES: Record<string, string> = {
   en: "a", "en-gb": "b", hi: "h", es: "e", fr: "f", ja: "j", zh: "z",
   pt: "p", it: "i",
 };
 
-const LANG_LABELS: Record<string, string> = {
+export const LANG_LABELS: Record<string, string> = {
   en: "English", "en-gb": "British English", hi: "Hindi", es: "Spanish",
   fr: "French", ja: "Japanese", zh: "Chinese", pt: "Brazilian Portuguese", it: "Italian",
 };
 
 /** Default voices per language (Kokoro voice IDs) */
-const DEFAULT_VOICES: Record<string, string[]> = {
+export const DEFAULT_VOICES: Record<string, string[]> = {
   en: ["af_heart", "af_bella", "af_alloy", "af_aoede", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa"],
   "en-gb": ["bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
   hi: ["hf_alpha", "hf_beta", "hm_omega", "hm_psi"],

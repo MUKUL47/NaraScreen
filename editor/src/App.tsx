@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toolbar } from "./components/Toolbar";
 import { CaptureToolbar } from "./components/CaptureToolbar";
 import { VideoPlayer } from "./components/VideoPlayer";
@@ -165,6 +165,37 @@ function App() {
     [selectedActionId, selectedAction, updateAction, setDrawingZoom],
   );
 
+  // Resizable timeline height
+  const [timelineHeight, setTimelineHeight] = useState(192); // default h-48 = 192px
+  const resizingRef = useRef(false);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    resizingRef.current = true;
+    const startY = e.clientY;
+    const startHeight = timelineHeight;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const delta = startY - ev.clientY; // dragging up = more timeline
+      const newHeight = Math.max(100, Math.min(600, startHeight + delta));
+      setTimelineHeight(newHeight);
+    };
+
+    const onUp = () => {
+      resizingRef.current = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+  }, [timelineHeight]);
+
   const handleDurationChange = useCallback(
     (duration: number) => {
       if (project && project.recordingDuration === 0) {
@@ -203,7 +234,7 @@ function App() {
           <>
             <div className="flex-1 flex flex-col overflow-hidden">
               {/* Video player */}
-              <div className="flex-1 min-h-0">
+              <div className="min-h-0" style={{ flex: `1 1 0`, maxHeight: `calc(100% - ${timelineHeight}px)` }}>
                 <VideoPlayer
                   videoPath={project.recordingPath}
                   currentTime={playheadTime}
@@ -217,8 +248,24 @@ function App() {
                 />
               </div>
 
+              {/* Resize handle — tall hit area with visible grip */}
+              <div
+                className="relative shrink-0 cursor-row-resize group"
+                style={{ height: 10 }}
+                onMouseDown={handleResizeStart}
+              >
+                {/* Visible bar */}
+                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-zinc-700/80 group-hover:bg-violet-500/60 group-active:bg-violet-500/80 transition-colors" />
+                {/* Center grip dots */}
+                <div className="absolute inset-0 flex items-center justify-center gap-1 pointer-events-none">
+                  <div className="w-1 h-1 rounded-full bg-zinc-500 group-hover:bg-violet-300" />
+                  <div className="w-1 h-1 rounded-full bg-zinc-500 group-hover:bg-violet-300" />
+                  <div className="w-1 h-1 rounded-full bg-zinc-500 group-hover:bg-violet-300" />
+                </div>
+              </div>
+
               {/* Timeline */}
-              <div className="h-48 shrink-0">
+              <div className="shrink-0 overflow-hidden" style={{ height: timelineHeight }}>
                 <Timeline />
               </div>
             </div>

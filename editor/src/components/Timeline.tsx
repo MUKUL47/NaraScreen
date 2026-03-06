@@ -229,17 +229,22 @@ export function Timeline() {
         }
         // Clamp
         finalTime = Math.max(0, Math.min(duration - actionDuration, finalTime));
-        updateAction(pillDrag.actionId, { timestamp: finalTime });
+        // Move both start AND end for absolute-end-timestamp types (mute, speed, skip, music)
+        const action = actions.find((a) => a.id === pillDrag.actionId);
+        const newEnd = finalTime + actionDuration;
+        const endUpdate = action ? setActionEndTime(action, newEnd) : {};
+        updateAction(pillDrag.actionId, { timestamp: finalTime, ...endUpdate });
+        // Update playhead to follow the start of the pill
+        setPlayhead(finalTime);
       } else if (pillDrag.mode === "resize-left") {
         const rawTime = Math.max(0, Math.min(pillDrag.origEndTime - 0.5, pillDrag.origTimestamp + deltaTime));
         const snapped = snapTime(rawTime);
         setSnapLine(snapped !== rawTime ? snapped : null);
-        const newDuration = pillDrag.origEndTime - snapped;
-        const endUpdate = setActionEndTime(
-          actions.find((a) => a.id === pillDrag.actionId)!,
-          pillDrag.origEndTime,
-        );
+        const action = actions.find((a) => a.id === pillDrag.actionId)!;
+        const endUpdate = setActionEndTime(action, pillDrag.origEndTime);
         updateAction(pillDrag.actionId, { timestamp: snapped, ...endUpdate });
+        // Update playhead to follow the left edge
+        setPlayhead(snapped);
       } else if (pillDrag.mode === "resize-right") {
         const rawEnd = Math.max(pillDrag.origTimestamp + 0.5, Math.min(duration, pillDrag.origEndTime + deltaTime));
         const snapped = snapTime(rawEnd);
@@ -248,6 +253,8 @@ export function Timeline() {
         if (action) {
           updateAction(pillDrag.actionId, setActionEndTime(action, snapped));
         }
+        // Update playhead to follow the right edge
+        setPlayhead(snapped);
       }
     };
 
