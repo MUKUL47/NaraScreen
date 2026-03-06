@@ -8,7 +8,7 @@ Free. Local. Open source. No cloud, no subscriptions, no watermarks.
 
 ## Demo
 
-https://github.com/MUKUL47/NaraScreen/raw/a3c127465fed4f1a518ea26e039828784c687fb3/preview.mp4
+https://github.com/user-attachments/assets/b18bfce7-28d0-4e3d-98d9-2f63f9cf6d45
 
 ---
 
