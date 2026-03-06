@@ -6,6 +6,12 @@ Free. Local. Open source. No cloud, no subscriptions, no watermarks.
 
 ---
 
+## Demo
+
+https://github.com/MUKUL47/NaraScreen/raw/a3c127465fed4f1a518ea26e039828784c687fb3/preview.mp4
+
+---
+
 ## What is this?
 
 NaraScreen is a desktop app that turns raw screen recordings into polished product demos with voiceover narration. Record yourself clicking through any app, then use the visual timeline editor to add zoom effects, narration in 9 languages, spotlights, speed ramps, text callouts, and background music. Hit produce and get a finished MP4.
