@@ -90,21 +90,53 @@ function computeVersionLabel(videoDir: string): string {
 // These apply timed filters on the full video — no duration change
 // ═════════════════════════════════════════════════════════════
 
-function applyBlurPass(
+function getOverlayTimeRange(action: Action): { start: number; end: number } {
+  const start = action.timestamp;
+  switch (action.type) {
+    case "blur": return { start, end: start + (action.blurDuration ?? 3) };
+    case "spotlight": return { start, end: start + (action.spotlightDuration ?? 3) };
+    case "callout": return { start, end: start + (action.calloutDuration ?? 3) };
+    default: return { start, end: start };
+  }
+}
+
+/** Group overlay actions into batches where no two in the same batch overlap in time. */
+function batchNonOverlapping(actions: Action[]): Action[][] {
+  if (actions.length === 0) return [];
+  const sorted = [...actions].sort((a, b) => a.timestamp - b.timestamp);
+  const batches: Action[][] = [];
+
+  for (const action of sorted) {
+    const range = getOverlayTimeRange(action);
+    let placed = false;
+    for (const batch of batches) {
+      const lastRange = getOverlayTimeRange(batch[batch.length - 1]);
+      if (range.start >= lastRange.end) {
+        batch.push(action);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      batches.push([action]);
+    }
+  }
+  return batches;
+}
+
+function applyBlurBatch(
   inputPath: string,
-  blurActions: Action[],
+  actions: Action[],
   outputPath: string,
   res: { width: number; height: number },
   totalDuration: number,
   emit: (msg: string) => void,
 ): void {
-  emit(`\n[Pass: Blur] Applying ${blurActions.length} blur effect(s)...`);
-
   let filterChain = "";
   let lastLabel = "0:v";
   let idx = 0;
 
-  for (const action of blurActions) {
+  for (const action of actions) {
     const rects = action.blurRects ?? [];
     if (rects.length === 0) continue;
 
@@ -113,7 +145,7 @@ function applyBlurPass(
     const end = start + (action.blurDuration ?? 3);
     const enableExpr = `between(t,${start.toFixed(3)},${Math.min(end, totalDuration).toFixed(3)})`;
 
-    emit(`  Blur at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
+    emit(`    Blur at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
 
     for (const [bx, by, bw, bh] of rects) {
       const x = Math.max(0, Math.min(bx, res.width - 1));
@@ -131,10 +163,7 @@ function applyBlurPass(
     }
   }
 
-  if (!filterChain) {
-    fs.copyFileSync(inputPath, outputPath);
-    return;
-  }
+  if (!filterChain) { fs.copyFileSync(inputPath, outputPath); return; }
 
   const args = ["-y", "-i", inputPath, "-filter_complex", filterChain];
   args.push("-map", `[${lastLabel}]`);
@@ -146,21 +175,21 @@ function applyBlurPass(
   ffmpegSync(args);
 }
 
-function applySpotlightPass(
+function applySpotlightBatch(
   inputPath: string,
-  spotActions: Action[],
+  actions: Action[],
   outputPath: string,
   res: { width: number; height: number },
   totalDuration: number,
   emit: (msg: string) => void,
 ): void {
-  emit(`\n[Pass: Spotlight] Applying ${spotActions.length} spotlight effect(s)...`);
-
+  // Each spotlight action builds: split → darken → crop bright regions → overlay enabled by time
+  // We chain them sequentially — output of one feeds into the next
   let filterChain = "";
   let lastLabel = "0:v";
-  let idx = 0;
+  let ai = 0;
 
-  for (const action of spotActions) {
+  for (const action of actions) {
     const rects = action.spotlightRects ?? (action.spotlightRect ? [action.spotlightRect] : []);
     if (rects.length === 0) continue;
 
@@ -169,33 +198,31 @@ function applySpotlightPass(
     const end = start + (action.spotlightDuration ?? 3);
     const enableExpr = `between(t,${start.toFixed(3)},${Math.min(end, totalDuration).toFixed(3)})`;
 
-    emit(`  Spotlight at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
+    emit(`    Spotlight at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
 
-    const sep = filterChain ? ";" : "";
     const splitCount = 2 + rects.length;
-    const splitLabels = [`pass${idx}`, `dark${idx}`, ...rects.map((_, ri) => `crop${idx}_${ri}`)];
+    const splitLabels = [`pass${ai}`, `dark${ai}`, ...rects.map((_, ri) => `crop${ai}_${ri}`)];
+    const sep = filterChain ? ";" : "";
     filterChain += `${sep}[${lastLabel}]split=${splitCount}${splitLabels.map((l) => `[${l}]`).join("")}`;
 
-    filterChain += `;[dark${idx}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill[dimmed${idx}]`;
+    filterChain += `;[dark${ai}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill[dimmed${ai}]`;
 
-    let compositeLabel = `dimmed${idx}`;
+    let compositeLabel = `dimmed${ai}`;
     for (let ri = 0; ri < rects.length; ri++) {
       const [sx, sy, sw, sh] = rects[ri];
-      filterChain += `;[crop${idx}_${ri}]crop=${sw}:${sh}:${sx}:${sy}[bright${idx}_${ri}]`;
-      const outLabel = ri < rects.length - 1 ? `comp${idx}_${ri}` : `spotlight${idx}`;
-      filterChain += `;[${compositeLabel}][bright${idx}_${ri}]overlay=${sx}:${sy}[${outLabel}]`;
+      filterChain += `;[crop${ai}_${ri}]crop=${sw}:${sh}:${sx}:${sy}[bright${ai}_${ri}]`;
+      const outLabel = ri < rects.length - 1 ? `comp${ai}_${ri}` : `spotlight${ai}`;
+      filterChain += `;[${compositeLabel}][bright${ai}_${ri}]overlay=${sx}:${sy}[${outLabel}]`;
       compositeLabel = outLabel;
     }
 
-    filterChain += `;[pass${idx}][spotlight${idx}]overlay=0:0:enable='${enableExpr}'[out${idx}]`;
-    lastLabel = `out${idx}`;
-    idx++;
+    const outLabel = `out${ai}`;
+    filterChain += `;[pass${ai}][spotlight${ai}]overlay=0:0:enable='${enableExpr}'[${outLabel}]`;
+    lastLabel = outLabel;
+    ai++;
   }
 
-  if (!filterChain) {
-    fs.copyFileSync(inputPath, outputPath);
-    return;
-  }
+  if (!filterChain) { fs.copyFileSync(inputPath, outputPath); return; }
 
   const args = ["-y", "-i", inputPath, "-filter_complex", filterChain];
   args.push("-map", `[${lastLabel}]`);
@@ -215,18 +242,17 @@ function escapeDrawtext(text: string): string {
     .replace(/;/g, "\\;");
 }
 
-function applyCalloutPass(
+function applyCalloutBatch(
   inputPath: string,
-  calloutActions: Action[],
+  actions: Action[],
   outputPath: string,
   totalDuration: number,
   emit: (msg: string) => void,
 ): void {
-  emit(`\n[Pass: Callout] Applying ${calloutActions.length} callout(s)...`);
-
+  // Callouts are all drawtext filters — they can be stacked in one chain trivially
   const filters: string[] = [];
 
-  for (const action of calloutActions) {
+  for (const action of actions) {
     const start = action.timestamp;
     const end = start + (action.calloutDuration ?? 3);
     const enableExpr = `between(t,${start.toFixed(3)},${Math.min(end, totalDuration).toFixed(3)})`;
@@ -235,7 +261,7 @@ function applyCalloutPass(
 
     const panels = action.calloutPanels;
     if (panels && panels.length > 0) {
-      emit(`  Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s (${panels.length} panel${panels.length > 1 ? "s" : ""})`);
+      emit(`    Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s (${panels.length} panel${panels.length > 1 ? "s" : ""})`);
       for (const panel of panels) {
         if (!panel.text) continue;
         let displayText = panel.text;
@@ -250,44 +276,40 @@ function applyCalloutPass(
           `drawtext=text='${displayText}':fontsize=${fontSize}:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=black@0.7:boxborderw=10:enable='${enableExpr}'`,
         );
       }
-      continue;
-    }
-
-    const text = action.calloutText;
-    if (!text) continue;
-
-    emit(`  Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s: "${text.slice(0, 30)}..."`);
-
-    let displayText = text;
-    if (style === "step-counter" && step) {
-      displayText = `Step ${step}: ${text}`;
-    }
-    displayText = escapeDrawtext(displayText);
-
-    const position = action.calloutPosition as [number, number] | undefined;
-    if (style === "lower-third") {
-      filters.push(
-        `drawtext=text='${displayText}':fontsize=36:fontcolor=white:x=(w-text_w)/2:y=h-80:box=1:boxcolor=black@0.7:boxborderw=15:enable='${enableExpr}'`,
-      );
-    } else if (style === "step-counter") {
-      const x = position ? position[0] : 100;
-      const y = position ? position[1] : 100;
-      filters.push(
-        `drawtext=text='${displayText}':fontsize=28:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=0x2563EB@0.9:boxborderw=12:enable='${enableExpr}'`,
-      );
     } else {
-      const x = position ? position[0] : 100;
-      const y = position ? position[1] : 100;
-      filters.push(
-        `drawtext=text='${displayText}':fontsize=28:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=black@0.8:boxborderw=10:enable='${enableExpr}'`,
-      );
+      const text = action.calloutText;
+      if (!text) continue;
+
+      emit(`    Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s: "${text.slice(0, 30)}..."`);
+
+      let displayText = text;
+      if (style === "step-counter" && step) {
+        displayText = `Step ${step}: ${text}`;
+      }
+      displayText = escapeDrawtext(displayText);
+
+      const position = action.calloutPosition as [number, number] | undefined;
+      if (style === "lower-third") {
+        filters.push(
+          `drawtext=text='${displayText}':fontsize=36:fontcolor=white:x=(w-text_w)/2:y=h-80:box=1:boxcolor=black@0.7:boxborderw=15:enable='${enableExpr}'`,
+        );
+      } else if (style === "step-counter") {
+        const x = position ? position[0] : 100;
+        const y = position ? position[1] : 100;
+        filters.push(
+          `drawtext=text='${displayText}':fontsize=28:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=0x2563EB@0.9:boxborderw=12:enable='${enableExpr}'`,
+        );
+      } else {
+        const x = position ? position[0] : 100;
+        const y = position ? position[1] : 100;
+        filters.push(
+          `drawtext=text='${displayText}':fontsize=28:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=black@0.8:boxborderw=10:enable='${enableExpr}'`,
+        );
+      }
     }
   }
 
-  if (filters.length === 0) {
-    fs.copyFileSync(inputPath, outputPath);
-    return;
-  }
+  if (filters.length === 0) { fs.copyFileSync(inputPath, outputPath); return; }
 
   let chain = "";
   let lastLabel = "0:v";
@@ -1080,37 +1102,48 @@ export async function produceTimelineVideo(
   const effectiveTotalDuration = probeDuration(effectiveRecording);
 
   // ═══════════════════════════════════════════════════════════
-  // Pass 1: Overlay Effects (blur → spotlight → callout)
+  // Pass 1: Overlay Effects — batched per type, split only on overlap
   // Applied on original timestamps — no duration change
   // ═══════════════════════════════════════════════════════════
 
-  if (blurActions.length > 0) {
-    const out = nextOutput();
-    applyBlurPass(currentInput, blurActions, out, res, effectiveTotalDuration, emit);
-    if (fs.existsSync(out) && fs.statSync(out).size > 0) {
-      currentInput = out;
-    } else {
-      emit("  Warning: Blur pass produced no output, skipping");
+  // Validate: no overlapping spotlights (use multiple rects on one spotlight instead)
+  if (spotlightActions.length > 1) {
+    const sorted = [...spotlightActions].sort((a, b) => a.timestamp - b.timestamp);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const endI = sorted[i].timestamp + (sorted[i].spotlightDuration ?? 3);
+      const startNext = sorted[i + 1].timestamp;
+      if (startNext < endI) {
+        throw new Error(
+          `Overlapping spotlights: one at ${sorted[i].timestamp.toFixed(1)}s-${endI.toFixed(1)}s overlaps with another at ${startNext.toFixed(1)}s. ` +
+          `Use multiple regions on a single spotlight action instead (click "Add Another Region" in the spotlight editor).`,
+        );
+      }
     }
   }
 
-  if (spotlightActions.length > 0) {
-    const out = nextOutput();
-    applySpotlightPass(currentInput, spotlightActions, out, res, effectiveTotalDuration, emit);
-    if (fs.existsSync(out) && fs.statSync(out).size > 0) {
-      currentInput = out;
-    } else {
-      emit("  Warning: Spotlight pass produced no output, skipping");
-    }
-  }
+  const overlayGroups: Array<{ type: string; actions: Action[]; apply: (input: string, actions: Action[], output: string, res: { width: number; height: number }, dur: number, emit: (msg: string) => void) => void }> = [
+    { type: "blur", actions: blurActions, apply: applyBlurBatch },
+    { type: "spotlight", actions: spotlightActions, apply: applySpotlightBatch },
+    { type: "callout", actions: calloutActions, apply: (i, a, o, _r, d, e) => applyCalloutBatch(i, a, o, d, e) },
+  ];
 
-  if (calloutActions.length > 0) {
-    const out = nextOutput();
-    applyCalloutPass(currentInput, calloutActions, out, effectiveTotalDuration, emit);
-    if (fs.existsSync(out) && fs.statSync(out).size > 0) {
-      currentInput = out;
-    } else {
-      emit("  Warning: Callout pass produced no output, skipping");
+  for (const { type, actions: typeActions, apply } of overlayGroups) {
+    if (typeActions.length === 0) continue;
+    const batches = batchNonOverlapping(typeActions);
+    const totalActions = typeActions.length;
+    emit(`\n[Overlay: ${type}] ${totalActions} action(s) → ${batches.length} pass(es)`);
+
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      const out = nextOutput();
+      emit(`  Pass ${bi + 1}/${batches.length} (${batch.length} ${type}${batch.length > 1 ? "s" : ""}):`);
+      apply(currentInput, batch, out, res, effectiveTotalDuration, emit);
+
+      if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+        currentInput = out;
+      } else {
+        emit(`    Warning: ${type} batch pass produced no output, skipping`);
+      }
     }
   }
 
