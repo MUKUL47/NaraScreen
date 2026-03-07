@@ -44,16 +44,16 @@ export const ACTION_TEXT_COLORS: Record<string, string> = {
 
 /** Action type → semi-transparent pill background for timeline lanes */
 export const ACTION_BG_COLORS: Record<string, string> = {
-  pause: "bg-amber-500/30",
-  zoom: "bg-blue-500/30",
-  narrate: "bg-green-500/30",
-  spotlight: "bg-purple-500/30",
-  speed: "bg-orange-500/30",
-  skip: "bg-red-500/30",
-  callout: "bg-cyan-500/30",
-  music: "bg-pink-500/30",
-  blur: "bg-indigo-500/30",
-  mute: "bg-rose-500/30",
+  pause: "bg-amber-500/15",
+  zoom: "bg-blue-500/15",
+  narrate: "bg-green-500/15",
+  spotlight: "bg-purple-500/15",
+  speed: "bg-orange-500/15",
+  skip: "bg-red-500/15",
+  callout: "bg-cyan-500/15",
+  music: "bg-pink-500/15",
+  blur: "bg-indigo-500/15",
+  mute: "bg-rose-500/15",
 };
 
 /** Action type → border color for selected pills */

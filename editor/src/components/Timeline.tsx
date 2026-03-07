@@ -338,17 +338,17 @@ export function Timeline() {
     >
       <style dangerouslySetInnerHTML={{ __html: `
         .timeline-scroll::-webkit-scrollbar { height: 10px !important; }
-        .timeline-scroll::-webkit-scrollbar-track { background: #0a0a0b; border-top: 1px solid #27272a30; }
-        .timeline-scroll::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #3f3f46, #27272a); border-radius: 5px; border: 2px solid #0a0a0b; }
-        .timeline-scroll::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #52525b, #3f3f46); }
+        .timeline-scroll::-webkit-scrollbar-track { background: #0a0a0b; border-top: 1px solid #27272a; }
+        .timeline-scroll::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 5px; border: 2px solid #0a0a0b; }
+        .timeline-scroll::-webkit-scrollbar-thumb:hover { background: #52525b; }
       `}} />
 
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-zinc-800/40 shrink-0 bg-zinc-950/80">
+      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-zinc-800 shrink-0 bg-zinc-950">
         <div className="relative" ref={addBtnRef}>
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-linear-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-xs font-semibold rounded-lg shadow-lg shadow-violet-500/20 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-md transition-colors"
           >
             <PlusIcon size={12} />
             Add Action
@@ -358,14 +358,14 @@ export function Timeline() {
         {/* Play controls */}
         <button
           onClick={togglePlay}
-          className="w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-white transition-colors"
+          className="w-7 h-7 flex items-center justify-center rounded-md bg-zinc-800 hover:bg-zinc-700 text-white transition-colors"
           title="Play/Pause (Space)"
         >
           {isPlaying ? <Pause size={13} /> : <Play size={13} />}
         </button>
         <button
           onClick={cyclePlaybackRate}
-          className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md transition-colors ${playbackRate === 1 ? "text-zinc-500 bg-zinc-800/40" : "text-violet-400 bg-violet-500/15"}`}
+          className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors ${playbackRate === 1 ? "text-zinc-500 bg-zinc-800" : "text-zinc-200 bg-zinc-700"}`}
           title="Cycle speed"
         >
           {playbackRate}x
@@ -375,12 +375,12 @@ export function Timeline() {
 
         {/* Drag selection info */}
         {selectionRange && (
-          <span className="text-[10px] text-violet-400 font-mono bg-violet-500/10 px-2 py-0.5 rounded-md">
+          <span className="text-[10px] text-zinc-300 font-mono bg-zinc-800 px-2 py-0.5 rounded">
             {formatTime(selectionRange.startTime)} — {formatTime(selectionRange.endTime)}
           </span>
         )}
 
-        <span className="text-[11px] text-zinc-400 font-mono tabular-nums bg-zinc-900/50 px-2 py-0.5 rounded-md">
+        <span className="text-[11px] text-zinc-400 font-mono tabular-nums bg-zinc-900 px-2 py-0.5 rounded">
           {formatTime(playheadTime)} / {formatTime(duration)}
         </span>
       </div>
@@ -388,17 +388,17 @@ export function Timeline() {
       {/* Main timeline area: sidebar + scrollable content */}
       <div ref={scrollContainerRef} className="flex-1 flex overflow-auto timeline-scroll">
         {/* Track label sidebar */}
-        <div className="shrink-0 border-r border-zinc-800/40 bg-zinc-950/90" style={{ width: SIDEBAR_W }}>
-          <div className="border-b border-zinc-800/20 flex items-center justify-center bg-zinc-900/30" style={{ height: RULER_H }}>
-            <span className="text-[8px] text-zinc-500 uppercase tracking-widest font-bold">Time</span>
+        <div className="shrink-0 border-r border-zinc-800 bg-zinc-950" style={{ width: SIDEBAR_W }}>
+          <div className="border-b border-zinc-800/50 flex items-center justify-center" style={{ height: RULER_H }}>
+            <span className="text-[9px] text-zinc-600 font-medium">Time</span>
           </div>
-          <div className="border-b border-zinc-800/20 flex items-center justify-center bg-zinc-900/20" style={{ height: FILMSTRIP_H }}>
+          <div className="border-b border-zinc-800/50 flex items-center justify-center" style={{ height: FILMSTRIP_H }}>
             <Video size={14} className="text-zinc-400" />
           </div>
           {activeLanes.map((type, i) => (
             <div
               key={type}
-              className={`border-b border-zinc-800/20 flex items-center justify-center ${i % 2 === 0 ? "bg-zinc-900/15" : "bg-transparent"}`}
+              className={`border-b border-zinc-800/50 flex items-center justify-center ${i % 2 === 0 ? "bg-zinc-900/10" : "bg-transparent"}`}
               style={{ height: LANE_H }}
               title={ACTION_DISPLAY_NAMES[type] || type}
             >
@@ -415,7 +415,7 @@ export function Timeline() {
           onMouseDown={handleMouseDown}
         >
           {/* --- Time ruler --- */}
-          <div className="absolute top-0 left-0 right-0 border-b border-zinc-800/30 bg-linear-to-b from-zinc-900/40 to-transparent" style={{ height: RULER_H }}>
+          <div className="absolute top-0 left-0 right-0 border-b border-zinc-800/50" style={{ height: RULER_H }}>
             {Array.from({ length: Math.ceil(duration / tickInterval) + 1 }, (_, i) => {
               const t = i * tickInterval;
               if (t > duration) return null;
@@ -442,7 +442,7 @@ export function Timeline() {
 
           {/* --- Filmstrip track --- */}
           <div
-            className="absolute left-0 right-0 border-b border-zinc-800/30 bg-zinc-900/20"
+            className="absolute left-0 right-0 border-b border-zinc-800/50"
             style={{ top: RULER_H, height: FILMSTRIP_H }}
           >
             {thumbPositions.map(({ path, left, width }, i) => (
@@ -465,7 +465,7 @@ export function Timeline() {
             return (
               <div
                 key={laneType}
-                className={`absolute left-0 right-0 border-b border-zinc-800/20 ${laneIdx % 2 === 0 ? "bg-zinc-900/10" : "bg-transparent"}`}
+                className={`absolute left-0 right-0 border-b border-zinc-800/30 ${laneIdx % 2 === 0 ? "bg-zinc-900/10" : "bg-transparent"}`}
                 style={{ top: laneTop, height: LANE_H }}
               >
                 {laneActions.map((action) => {
@@ -483,7 +483,7 @@ export function Timeline() {
                       className={`absolute flex items-center rounded-md overflow-hidden group
                         ${ACTION_BG_COLORS[laneType] || "bg-zinc-500/20"}
                         ${isSelected
-                          ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-125 z-20 shadow-md shadow-black/30`
+                          ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-110 z-20`
                           : isActive
                             ? `border ${ACTION_BORDER_COLORS[laneType] || "border-zinc-400"} brightness-110 z-10`
                             : "border border-white/5 hover:border-white/15 hover:brightness-110"
@@ -550,7 +550,7 @@ export function Timeline() {
           {/* --- Drag selection highlight --- */}
           {selectionRange && (
             <div
-              className="absolute bg-violet-500/15 border-l-2 border-r-2 border-violet-400/50 pointer-events-none"
+              className="absolute bg-zinc-400/10 border-l border-r border-zinc-500/50 pointer-events-none"
               style={{ left: selectionRange.left, width: selectionRange.width, top: RULER_H + FILMSTRIP_H, height: activeLanes.length * LANE_H }}
             />
           )}
@@ -576,7 +576,7 @@ export function Timeline() {
               </svg>
             </div>
             <div
-              className="absolute top-0 w-px bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"
+              className="absolute top-0 w-px bg-red-500"
               style={{ left: 0, height: totalContentHeight }}
             />
           </div>
@@ -585,12 +585,12 @@ export function Timeline() {
 
       {/* Range action menu — frosted glass overlay */}
       {showRangeMenu && selectionRange && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={clearDragSelection}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={clearDragSelection}>
           <div
-            className="bg-zinc-900/95 backdrop-blur-xl border border-zinc-600/30 rounded-2xl shadow-2xl shadow-black/60 min-w-60 py-2"
+            className="bg-zinc-900 border border-zinc-700 rounded-md shadow-sm min-w-56 py-1"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-4 py-2.5 text-xs text-violet-400 border-b border-zinc-700/30 text-center font-mono font-semibold">
+            <div className="px-4 py-2 text-xs text-zinc-300 border-b border-zinc-800 text-center font-mono">
               {formatTime(selectionRange.startTime)} — {formatTime(selectionRange.endTime)}
             </div>
             <div className="py-1">
@@ -607,7 +607,7 @@ export function Timeline() {
             </div>
             <button
               onClick={clearDragSelection}
-              className="w-full px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300 border-t border-zinc-700/30 transition-colors"
+              className="w-full px-4 py-2 text-[11px] text-zinc-500 hover:text-zinc-300 border-t border-zinc-800 transition-colors"
             >
               Cancel
             </button>
@@ -622,7 +622,7 @@ export function Timeline() {
           <>
             <div className="fixed inset-0 z-999" onClick={() => setShowAddMenu(false)} />
             <div
-              className="fixed bg-zinc-900/95 backdrop-blur-xl border border-zinc-600/30 rounded-2xl shadow-2xl shadow-black/60 z-1000 min-w-52 py-1.5"
+              className="fixed bg-zinc-900 border border-zinc-700 rounded-md shadow-sm z-1000 min-w-52 py-1"
               style={{ left: r.left, bottom: window.innerHeight - r.top + 6 }}
             >
               {(["narrate", "zoom", "spotlight", "blur", "mute", "speed", "callout", "music"] as const).map((t) => (

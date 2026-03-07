@@ -111,7 +111,7 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
           type="checkbox"
           checked={action.freeze ?? false}
           onChange={(e) => onUpdate({ freeze: e.target.checked })}
-          className="w-3 h-3 rounded border-zinc-700/50 bg-zinc-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+          className="w-3 h-3 rounded border-zinc-700 bg-zinc-900 accent-zinc-400"
         />
         <span className="text-[10px] text-zinc-400">Freeze video during spotlight</span>
       </label>

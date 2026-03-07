@@ -35,11 +35,9 @@ export function ActionPanel() {
 
   if (!action) {
     return (
-      <div className="w-72 bg-zinc-950/80 border-l border-zinc-800/40 p-6 flex items-center justify-center shrink-0">
-        <p className="text-zinc-500 text-xs text-center leading-relaxed">
-          Select an action on the timeline to edit,
-          <br />
-          or click "+ Add Action" to create one.
+      <div className="w-72 bg-zinc-950 border-l border-zinc-800 p-6 flex items-center justify-center shrink-0">
+        <p className="text-zinc-600 text-xs text-center">
+          Select an action to edit.
         </p>
       </div>
     );
@@ -48,13 +46,13 @@ export function ActionPanel() {
   const textColor = ACTION_TEXT_COLORS[action.type] || "text-zinc-400";
 
   return (
-    <div className="w-72 bg-zinc-950/80 border-l border-zinc-800/40 flex flex-col shrink-0 max-h-full">
+    <div className="w-72 bg-zinc-950 border-l border-zinc-800 flex flex-col shrink-0 max-h-full">
       <div className="overflow-y-auto flex-1 p-3 space-y-3">
         {/* Header */}
-        <div className={`flex items-center justify-between rounded-lg px-2.5 py-2 ${ACTION_BG_COLORS[action.type] || "bg-zinc-800/30"}`}>
+        <div className="flex items-center justify-between px-2.5 py-2 bg-zinc-900 border border-zinc-800 rounded-md">
           <div className="flex items-center gap-2 min-w-0">
-            <ActionIcon type={action.type} size={16} className={textColor} />
-            <h2 className={`text-xs font-bold uppercase tracking-wide truncate ${textColor}`}>
+            <ActionIcon type={action.type} size={14} className={textColor} />
+            <h2 className={`text-xs font-semibold truncate ${textColor}`}>
               {ACTION_DISPLAY_NAMES[action.type] || action.type}
             </h2>
           </div>
@@ -69,7 +67,7 @@ export function ActionPanel() {
 
         {/* Name */}
         <div>
-          <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase tracking-wider">
+          <label className="block text-[10px] text-zinc-500 font-medium mb-1">
             Name
           </label>
           <input
@@ -77,13 +75,13 @@ export function ActionPanel() {
             value={action.name ?? ""}
             onChange={(e) => handleUpdate({ name: e.target.value || undefined })}
             placeholder={`${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${action.timestamp.toFixed(1)}s`}
-            className="w-full bg-zinc-900/80 border border-zinc-700/30 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 transition-colors"
+            className="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
           />
         </div>
 
         {/* Timestamp */}
         <div>
-          <label className="block text-[10px] text-zinc-500 font-semibold mb-1 uppercase tracking-wider">
+          <label className="block text-[10px] text-zinc-500 font-medium mb-1">
             Timestamp (s)
           </label>
           <input
@@ -95,7 +93,7 @@ export function ActionPanel() {
             min={0}
             max={project?.recordingDuration ?? 999}
             step={0.1}
-            className="w-full bg-zinc-900/80 border border-zinc-700/30 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 transition-colors"
+            className="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500 transition-colors"
           />
         </div>
 

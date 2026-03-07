@@ -227,13 +227,7 @@ function App() {
                 onMouseDown={handleResizeStart}
               >
                 {/* Visible bar */}
-                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-zinc-700/80 group-hover:bg-violet-500/60 group-active:bg-violet-500/80 transition-colors" />
-                {/* Center grip dots */}
-                <div className="absolute inset-0 flex items-center justify-center gap-1 pointer-events-none">
-                  <div className="w-1 h-1 rounded-full bg-zinc-500 group-hover:bg-violet-300" />
-                  <div className="w-1 h-1 rounded-full bg-zinc-500 group-hover:bg-violet-300" />
-                  <div className="w-1 h-1 rounded-full bg-zinc-500 group-hover:bg-violet-300" />
-                </div>
+                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-zinc-700 group-hover:bg-zinc-500 transition-colors" />
               </div>
 
               {/* Timeline */}
@@ -247,19 +241,14 @@ function App() {
           </>
         ) : (
           /* Welcome screen */
-          <div className="flex-1 flex items-center justify-center bg-linear-to-b from-zinc-950 via-zinc-900 to-zinc-950">
-            <div className="text-center space-y-4">
-              <div className="flex justify-center">
-                <Monitor size={48} className="text-zinc-600" />
-              </div>
-              <h1 className="text-3xl font-bold text-zinc-100 tracking-tight">
+          <div className="flex-1 flex items-center justify-center bg-zinc-950">
+            <div className="text-center space-y-3">
+              <Monitor size={32} className="text-zinc-600 mx-auto" />
+              <h1 className="text-lg font-semibold text-zinc-200">
                 NaraScreen
               </h1>
-              <p className="text-zinc-500 text-sm max-w-sm leading-relaxed">
-                Record your screen, add narration, zooms, and effects — then produce polished demo videos.
-              </p>
-              <p className="text-zinc-600 text-xs pt-2">
-                Click <span className="text-red-400 font-medium">Record Screen</span> to begin
+              <p className="text-zinc-500 text-xs">
+                Record, annotate, and produce demo videos.
               </p>
             </div>
           </div>
@@ -268,20 +257,20 @@ function App() {
 
       {/* Global loading overlay */}
       {isLoading && (
-        <div className="fixed inset-0 z-9999 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-          <div className="bg-zinc-900 border border-zinc-700/50 rounded-xl px-8 py-6 flex flex-col items-center gap-3 shadow-2xl max-w-lg w-full mx-4">
-            <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm text-zinc-300 font-medium">{loadingMessage}</span>
+        <div className="fixed inset-0 z-9999 bg-black/60 flex items-center justify-center">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-md px-6 py-5 flex flex-col items-center gap-3 max-w-lg w-full mx-4">
+            <div className="w-5 h-5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm text-zinc-300">{loadingMessage}</span>
             {produceLog && (
-              <div className="w-full max-h-48 overflow-auto rounded-lg bg-black/60 border border-zinc-800/50 p-3 mt-1">
-                <pre className="text-[11px] font-mono text-green-400/80 whitespace-pre-wrap leading-relaxed">{produceLog}</pre>
+              <div className="w-full max-h-48 overflow-auto rounded bg-zinc-950 border border-zinc-800 p-3 mt-1">
+                <pre className="text-[11px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed">{produceLog}</pre>
                 <div ref={loadingLogRef} />
               </div>
             )}
             {isProducing && (
               <button
                 onClick={cancelProduce}
-                className="mt-2 px-4 py-1.5 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 rounded-lg transition-colors"
+                className="mt-2 px-4 py-1.5 text-xs text-red-400 hover:text-white hover:bg-red-600 border border-zinc-700 rounded-md transition-colors"
               >
                 Cancel Production
               </button>

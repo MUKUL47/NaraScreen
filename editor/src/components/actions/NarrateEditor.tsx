@@ -67,7 +67,7 @@ export function LanguageAudioSection({
         <select
           value={currentLang}
           onChange={(e) => handleAddLang(e.target.value)}
-          className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-500"
+          className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
         >
           {/* Active languages first */}
           {languages.map((lang) => {
@@ -259,7 +259,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
             type="checkbox"
             checked={action.freeze ?? false}
             onChange={(e) => updateAction(action.id, { freeze: e.target.checked })}
-            className="w-3 h-3 rounded border-zinc-700/50 bg-zinc-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+            className="w-3 h-3 rounded border-zinc-700 bg-zinc-900 accent-zinc-400"
           />
           <span className="text-[10px] text-zinc-400">Freeze video during narration</span>
         </label>
@@ -269,7 +269,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
             type="checkbox"
             checked={action.showSubtitles !== false}
             onChange={(e) => updateAction(action.id, { showSubtitles: e.target.checked })}
-            className="w-3 h-3 rounded border-zinc-700/50 bg-zinc-900 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+            className="w-3 h-3 rounded border-zinc-700 bg-zinc-900 accent-zinc-400"
           />
           <span className="text-[10px] text-zinc-400">Show subtitles</span>
         </label>

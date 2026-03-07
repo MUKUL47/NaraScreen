@@ -122,10 +122,10 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
     <div className="relative">
       {/* Loading overlay */}
       {ttsLoading && (
-        <div className="absolute inset-0 z-10 bg-zinc-950/70 rounded flex items-center justify-center backdrop-blur-sm">
+        <div className="absolute inset-0 z-10 bg-zinc-950/80 rounded flex items-center justify-center">
           <div className="flex flex-col items-center gap-2">
-            <div className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs text-emerald-400">Generating audio...</span>
+            <div className="w-5 h-5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-zinc-400">Generating audio...</span>
           </div>
         </div>
       )}

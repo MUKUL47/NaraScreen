@@ -202,7 +202,7 @@ function ZoomTargetItem({
         >
           {showNarration && <span className="text-[8px]">{expanded ? "\u25BC" : "\u25B6"}</span>}
           #{index + 1}: {r[0]},{r[1]} {r[2]}x{r[3]}
-          {zoomScale && <span className="text-violet-400">{zoomScale}x</span>}
+          {zoomScale && <span className="text-blue-400">{zoomScale}x</span>}
           {showNarration && hasAnyNarration && <span className="text-emerald-400 ml-1">narration</span>}
           {showNarration && hasAnyAudio && <span className="text-blue-400 ml-1">audio</span>}
         </button>
@@ -222,7 +222,7 @@ function ZoomTargetItem({
             <select
               value={currentLang}
               onChange={(e) => handleAddLang(e.target.value)}
-              className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded px-2 py-0.5 text-[10px] text-zinc-300 focus:outline-none focus:border-violet-500"
+              className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded px-2 py-0.5 text-[10px] text-zinc-300 focus:outline-none focus:border-zinc-500"
             >
               {/* Active languages */}
               {languages.map((lang) => {
@@ -358,10 +358,10 @@ function ZoomTargetAudioControls({
   return (
     <div className="relative">
       {ttsLoading && (
-        <div className="absolute inset-0 z-10 bg-zinc-950/70 rounded flex items-center justify-center backdrop-blur-sm">
+        <div className="absolute inset-0 z-10 bg-zinc-950/80 rounded flex items-center justify-center">
           <div className="flex flex-col items-center gap-2">
-            <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-            <span className="text-[10px] text-emerald-400">Generating...</span>
+            <div className="w-5 h-5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
+            <span className="text-[10px] text-zinc-400">Generating...</span>
           </div>
         </div>
       )}
