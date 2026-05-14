@@ -8,7 +8,7 @@ import { ActionPanel } from "./components/ActionPanel";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { ACTION_DISPLAY_NAMES, ACTION_OVERLAY_COLORS } from "./lib/constants";
-import { getActionEndTime, getActionRects } from "./lib/actions";
+import { getActionEndTime, getActionRects, updateActionRect } from "./lib/actions";
 import type { LabeledOverlay } from "./types";
 
 function App() {
@@ -97,13 +97,24 @@ function App() {
 
       const label = action.name || `${ACTION_DISPLAY_NAMES[action.type] || action.type} @ ${action.timestamp.toFixed(1)}s`;
 
-      for (const rect of rects) {
-        overlays.push({ rect, label, color, selected: isSelected, actionId: action.id });
-      }
+      rects.forEach((rect, rectIndex) => {
+        overlays.push({ rect, label, color, selected: isSelected, actionId: action.id, rectIndex });
+      });
     }
 
     return overlays;
   }, [project, selectedActionId, playheadTime]);
+
+  const handleMoveRect = useCallback(
+    (actionId: string, rectIndex: number, newRect: [number, number, number, number]) => {
+      const target = useProjectStore.getState().project?.actions.find((a) => a.id === actionId);
+      if (!target) return;
+      const partial = updateActionRect(target, rectIndex, newRect);
+      if (Object.keys(partial).length === 0) return;
+      updateAction(actionId, partial);
+    },
+    [updateAction],
+  );
 
   // Callout panels for text preview overlay (only for selected callout action)
   const calloutPanels =
@@ -248,6 +259,8 @@ function App() {
                   labeledOverlays={labeledOverlays}
                   calloutPanels={calloutPanels}
                   onSelectAction={useProjectStore.getState().setSelectedAction}
+                  onMoveRect={handleMoveRect}
+                  selectedActionId={selectedActionId}
                 />
               </div>
 

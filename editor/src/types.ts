@@ -107,6 +107,7 @@ export interface LabeledOverlay {
   color: string; // CSS border/bg color (e.g. "blue", "purple")
   selected: boolean; // whether this belongs to the currently selected action
   actionId: string; // ID of the owning action
+  rectIndex: number; // index into the owning action's rect array
 }
 
 /** Project file saved as demo-project.json */

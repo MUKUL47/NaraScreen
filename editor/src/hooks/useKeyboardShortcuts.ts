@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
+import { nudgeActionRects } from "../lib/actions";
 import type { TimelineAction } from "../types";
 
 const ACTION_TYPE_BY_NUMBER: Record<string, TimelineAction["type"]> = {
@@ -73,6 +74,26 @@ export function useKeyboardShortcuts() {
       if (!ctrl && !e.shiftKey && !e.altKey && ACTION_TYPE_BY_NUMBER[e.key]) {
         e.preventDefault();
         addAction(ACTION_TYPE_BY_NUMBER[e.key], playheadTime);
+        return;
+      }
+
+      // Alt+Arrow: nudge all rects of the selected action by 1px (Shift = 10px).
+      // Clamped to the project's known viewport.
+      if (
+        e.altKey && !ctrl && selectedActionId &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown")
+      ) {
+        const state = useProjectStore.getState();
+        const action = state.project?.actions.find((a) => a.id === selectedActionId);
+        if (!action) return;
+        const step = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+        const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+        const bounds = state.project?.viewport ?? { width: 1920, height: 1080 };
+        const partial = nudgeActionRects(action, dx, dy, bounds);
+        if (Object.keys(partial).length === 0) return;
+        e.preventDefault();
+        state.updateAction(selectedActionId, partial);
         return;
       }
 

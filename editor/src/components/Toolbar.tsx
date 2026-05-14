@@ -2,8 +2,9 @@ import { useCallback, useState, useEffect, useRef } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
 import { pickSessionDir, defaultRecordingName, defaultRecordingParentDir } from "../lib/fileOps";
 import { OpenIcon, SaveIcon, ProduceIcon, VersionsIcon } from "./ActionIcon";
-import { Monitor, Mic, MicOff, Terminal, X, FileVideo, Undo2, Redo2 } from "lucide-react";
+import { Monitor, Mic, MicOff, Terminal, X, FileVideo, Undo2, Redo2, HelpCircle } from "lucide-react";
 import { ProduceDialog, type ProduceSettings } from "./ProduceDialog";
+import { HelpPanel } from "./HelpPanel";
 
 export function Toolbar() {
   const sessionDir = useProjectStore((s) => s.sessionDir);
@@ -27,6 +28,7 @@ export function Toolbar() {
   const [showLog, setShowLog] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [showProduceDialog, setShowProduceDialog] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [versions, setVersions] = useState<{ name: string; path: string; size: number; created: string }[]>([]);
   const [showScreenPicker, setShowScreenPicker] = useState(false);
   const [screens, setScreens] = useState<{ id: string; name: string; x: number; y: number; width: number; height: number }[]>([]);
@@ -355,7 +357,17 @@ export function Toolbar() {
           {kokoroStatus === "connected" ? <Mic size={11} /> : kokoroStatus === "disconnected" ? <MicOff size={11} /> : <Mic size={11} />}
           {kokoroStatus === "connected" ? "Voice" : kokoroStatus === "disconnected" ? "No Voice" : "..."}
         </span>
+
+        <button
+          onClick={() => setShowHelp(true)}
+          title="Help — what each feature does"
+          className="p-1.5 text-zinc-500 hover:text-zinc-200 transition-colors"
+        >
+          <HelpCircle size={14} />
+        </button>
       </div>
+
+      {showHelp && <HelpPanel onClose={() => setShowHelp(false)} />}
 
       {/* Kokoro not detected banner */}
       {showKokoroBanner && (
