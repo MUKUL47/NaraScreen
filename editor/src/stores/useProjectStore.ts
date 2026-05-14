@@ -63,8 +63,9 @@ interface ProjectState {
   setIsRecording: (v: boolean) => void;
 
   // Screen capture
-  startScreenCapture: (displayId?: string) => Promise<void>;
+  startScreenCapture: (displayId?: string, options?: { parentDir?: string; name?: string }) => Promise<void>;
   stopScreenCapture: () => Promise<void>;
+  discardScreenCapture: () => Promise<void>;
 
   // Import
   importVideo: () => Promise<void>;
@@ -349,8 +350,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // ---- Screen Capture ----
 
-  startScreenCapture: async (displayId?: string) => {
-    const sessionDir = await createSession("screen-recording");
+  startScreenCapture: async (displayId?: string, options?: { parentDir?: string; name?: string }) => {
+    const sessionDir = await createSession("screen-recording", options);
     if (!sessionDir) return; // user cancelled save dialog
 
     // Get display info for the selected monitor
@@ -401,14 +402,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const result = await api.stopScreenRecording();
       console.log("[stopScreenCapture] Recording result:", result);
 
-      // Generate filmstrip
-      await api.generateFilmstrip(sessionDir);
+      try {
+        await api.generateFilmstrip(sessionDir);
+      } catch (err) {
+        console.error("Filmstrip generation failed:", err);
+        alert(`Filmstrip generation failed — timeline thumbnails will be missing.\n\n${err instanceof Error ? err.message : String(err)}`);
+      }
 
       // Get actual video duration
       let duration = result.duration;
       try {
         duration = await api.getVideoDuration(result.videoPath);
-      } catch { /* use elapsed */ }
+      } catch (err) {
+        console.warn("Probing video duration failed, using elapsed:", err);
+      }
 
       // Load filmstrip
       const filmstripPaths = await loadFilmstrip(sessionDir);
@@ -437,8 +444,60 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (err) {
       console.error("Stop screen capture failed:", err);
-      set({ captureMode: false, isRecording: false, isLoading: false, loadingMessage: "" });
+      alert(`Failed to finalize recording: ${err instanceof Error ? err.message : String(err)}`);
+      set({
+        sessionDir: null,
+        project: null,
+        filmstripPaths: [],
+        captureMode: false,
+        isRecording: false,
+        isLoading: false,
+        loadingMessage: "",
+      });
     }
+  },
+
+  discardScreenCapture: async () => {
+    const { sessionDir } = get();
+    if (!sessionDir) return;
+
+    set({ isLoading: true, loadingMessage: "Discarding recording..." });
+
+    // Stop ffmpeg first so the file handle is released before we trash the folder.
+    try {
+      await api.stopScreenRecording();
+    } catch (err) {
+      console.warn("[discardScreenCapture] stopScreenRecording failed (continuing):", err);
+    }
+
+    try {
+      await api.trashItem(sessionDir);
+    } catch (err) {
+      console.error("[discardScreenCapture] trashItem failed:", err);
+      alert(`Failed to discard recording folder. You may want to delete it manually.\n\n${sessionDir}\n\n${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Don't leave the last-opened cache pointing at a folder we just trashed.
+    try {
+      const last = await api.cacheGet("lastSessionDir");
+      if (last === sessionDir) await api.cacheSet("lastSessionDir", null);
+    } catch { /* cache best-effort */ }
+
+    set({
+      sessionDir: null,
+      project: null,
+      filmstripPaths: [],
+      selectedActionId: null,
+      playheadTime: 0,
+      captureMode: false,
+      isRecording: false,
+      isLoading: false,
+      loadingMessage: "",
+      produceLog: "",
+      _actionsHistory: [],
+      _actionsFuture: [],
+      isDirty: false,
+    });
   },
 
   // ---- Import Video ----
@@ -481,6 +540,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await api.generateFilmstrip(sessionDir);
     } catch (err) {
       console.error("Filmstrip generation failed:", err);
+      alert(`Filmstrip generation failed — timeline thumbnails will be missing.\n\n${err instanceof Error ? err.message : String(err)}`);
     }
 
     // 7. Create project

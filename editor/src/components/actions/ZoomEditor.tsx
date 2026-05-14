@@ -79,9 +79,11 @@ export function ZoomEditor({ action, onUpdate }: ZoomEditorProps) {
               />
             ))}
             <button
-              onClick={() =>
-                onUpdate({ zoomTargets: undefined, zoomRect: undefined, zoomRects: undefined })
-              }
+              onClick={() => {
+                if (confirm("Clear all zoom targets?")) {
+                  onUpdate({ zoomTargets: undefined, zoomRect: undefined, zoomRects: undefined });
+                }
+              }}
               className="text-[10px] text-red-400 hover:text-red-300"
             >
               Clear All
@@ -318,6 +320,8 @@ function ZoomTargetAudioControls({
     if (!text?.trim() || !sessionDir) return;
     setTtsLoading(true);
     try {
+      // Persist project so the main process reads fresh narration text + tts.speed
+      await useProjectStore.getState().save();
       const langCode = LANG_CODES[lang] || "a";
       // Use a unique ID: actionId_zoom_targetIndex_lang
       const audioId = `${actionId}_zoom${targetIndex}_${lang}`;
@@ -328,7 +332,7 @@ function ZoomTargetAudioControls({
       setAudioDuration(result.duration);
     } catch (err) {
       console.error("TTS generation failed:", err);
-      alert(`TTS failed: ${err}`);
+      alert(`TTS failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setTtsLoading(false);
     }

@@ -57,7 +57,10 @@ export function ActionPanel() {
             </h2>
           </div>
           <button
-            onClick={() => deleteAction(action.id)}
+            onClick={() => {
+              const label = action.name || ACTION_DISPLAY_NAMES[action.type] || action.type;
+              if (confirm(`Delete "${label}"?`)) deleteAction(action.id);
+            }}
             className="flex items-center gap-1 text-[10px] text-red-400/70 hover:text-red-300 px-1.5 py-0.5 rounded-md hover:bg-red-400/10 transition-colors shrink-0"
           >
             <TrashIcon size={11} />

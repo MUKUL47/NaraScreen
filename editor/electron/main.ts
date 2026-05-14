@@ -111,6 +111,10 @@ ipcMain.handle("fs:homeDir", async () => {
   return os.homedir();
 });
 
+ipcMain.handle("fs:trashItem", async (_event, targetPath: string) => {
+  await shell.trashItem(targetPath);
+});
+
 // ---- Dialog IPC Handlers ----
 
 ipcMain.handle("dialog:openDirectory", async () => {

@@ -6,6 +6,7 @@ interface ElectronAPI {
   exists: (filePath: string) => Promise<boolean>;
   mkdir: (dirPath: string, options?: { recursive?: boolean }) => Promise<void>;
   homeDir: () => Promise<string>;
+  trashItem: (targetPath: string) => Promise<void>;
 
   writeBinaryFile: (filePath: string, data: ArrayBuffer) => Promise<void>;
 

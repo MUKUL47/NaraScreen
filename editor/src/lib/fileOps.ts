@@ -38,20 +38,43 @@ export async function loadFilmstrip(sessionDir: string): Promise<string[]> {
     .sort();
 }
 
-/** Create a new session directory — prompts user to pick save location */
-export async function createSession(baseUrl: string): Promise<string | null> {
+/** Default timestamp string used when the user hasn't named their recording */
+export function defaultRecordingName(): string {
+  const now = new Date();
+  return now.toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
+}
+
+/** Default parent directory for new recordings (~/NaraScreen). Created if missing. */
+export async function defaultRecordingParentDir(): Promise<string> {
   const home = (await api.homeDir()).replace(/\/?$/, "/");
   const defaultDir = `${home}NaraScreen`;
-
-  // Ensure default directory exists so the dialog can open to it
   await api.mkdir(defaultDir, { recursive: true });
+  return defaultDir;
+}
 
-  const chosenDir = await api.pickSaveDirectory(defaultDir);
-  if (!chosenDir) return null; // user cancelled
+function sanitizeFolderName(name: string): string {
+  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim() || defaultRecordingName();
+}
 
-  const now = new Date();
-  const ts = now.toISOString().replace(/T/, "_").replace(/:/g, "-").slice(0, 19);
-  const sessionDir = `${chosenDir}/${ts}`;
+/**
+ * Create a new session directory.
+ * If `parentDir` is omitted, prompts the user via the system save-directory dialog.
+ * If `name` is omitted, falls back to a timestamp.
+ */
+export async function createSession(
+  baseUrl: string,
+  options?: { parentDir?: string; name?: string },
+): Promise<string | null> {
+  let parentDir = options?.parentDir;
+  if (!parentDir) {
+    const defaultDir = await defaultRecordingParentDir();
+    const chosen = await api.pickSaveDirectory(defaultDir);
+    if (!chosen) return null; // user cancelled
+    parentDir = chosen;
+  }
+
+  const folderName = sanitizeFolderName(options?.name ?? defaultRecordingName());
+  const sessionDir = `${parentDir}/${folderName}`;
 
   await api.mkdir(sessionDir, { recursive: true });
   await api.mkdir(`${sessionDir}/recordings`, { recursive: true });

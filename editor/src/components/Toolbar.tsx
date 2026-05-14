@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useRef } from "react";
 import { useProjectStore } from "../stores/useProjectStore";
-import { pickSessionDir } from "../lib/fileOps";
+import { pickSessionDir, defaultRecordingName, defaultRecordingParentDir } from "../lib/fileOps";
 import { OpenIcon, SaveIcon, ProduceIcon, VersionsIcon } from "./ActionIcon";
 import { Monitor, Mic, MicOff, Terminal, X, FileVideo, Undo2, Redo2 } from "lucide-react";
 import { ProduceDialog, type ProduceSettings } from "./ProduceDialog";
@@ -30,6 +30,11 @@ export function Toolbar() {
   const [versions, setVersions] = useState<{ name: string; path: string; size: number; created: string }[]>([]);
   const [showScreenPicker, setShowScreenPicker] = useState(false);
   const [screens, setScreens] = useState<{ id: string; name: string; x: number; y: number; width: number; height: number }[]>([]);
+  const [showNamePrompt, setShowNamePrompt] = useState(false);
+  const [pendingDisplayId, setPendingDisplayId] = useState<string | undefined>(undefined);
+  const [recordingName, setRecordingName] = useState("");
+  const [recordingParentDir, setRecordingParentDir] = useState("");
+  const recordingNameInputRef = useRef<HTMLInputElement>(null);
   const [kokoroStatus, setKokoroStatus] = useState<"checking" | "connected" | "disconnected">("checking");
   const [showKokoroBanner, setShowKokoroBanner] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -70,12 +75,20 @@ export function Toolbar() {
   }, [produceLog]);
 
   const handleOpen = useCallback(async () => {
-    const dir = await pickSessionDir();
-    if (dir) await openSession(dir);
+    try {
+      const dir = await pickSessionDir();
+      if (dir) await openSession(dir);
+    } catch (err) {
+      alert(`Failed to open project: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }, [openSession]);
 
   const handleSave = useCallback(async () => {
-    await save();
+    try {
+      await save();
+    } catch (err) {
+      alert(`Failed to save project: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }, [save]);
 
   const handleProduce = useCallback(() => {
@@ -93,20 +106,70 @@ export function Toolbar() {
     }
   }, [produce, sessionDir]);
 
+  const openNamePrompt = useCallback(async (displayId?: string) => {
+    const cached = (await window.electronAPI.cacheGet("lastRecordingParentDir")) as string | null;
+    let parent = cached ?? null;
+    if (parent && !(await window.electronAPI.exists(parent))) {
+      parent = null;
+    }
+    if (!parent) parent = await defaultRecordingParentDir();
+    setPendingDisplayId(displayId);
+    setRecordingName(defaultRecordingName());
+    setRecordingParentDir(parent);
+    setShowNamePrompt(true);
+  }, []);
+
   const handleRecordScreen = useCallback(async () => {
     const sources = await window.electronAPI.getScreenSources();
     if (sources.length === 1) {
-      await startScreenCapture(sources[0].id);
+      await openNamePrompt(sources[0].id);
     } else {
       setScreens(sources);
       setShowScreenPicker(true);
     }
-  }, [startScreenCapture]);
+  }, [openNamePrompt]);
 
   const handlePickScreen = useCallback(async (displayId: string) => {
     setShowScreenPicker(false);
-    await startScreenCapture(displayId);
-  }, [startScreenCapture]);
+    await openNamePrompt(displayId);
+  }, [openNamePrompt]);
+
+  const handleChangeRecordingDir = useCallback(async () => {
+    const dir = await window.electronAPI.pickSaveDirectory(recordingParentDir);
+    if (dir) setRecordingParentDir(dir);
+  }, [recordingParentDir]);
+
+  const handleConfirmRecording = useCallback(async () => {
+    setShowNamePrompt(false);
+    await window.electronAPI.cacheSet("lastRecordingParentDir", recordingParentDir);
+    await startScreenCapture(pendingDisplayId, {
+      parentDir: recordingParentDir,
+      name: recordingName.trim(),
+    });
+  }, [pendingDisplayId, recordingName, recordingParentDir, startScreenCapture]);
+
+  const handleCancelRecording = useCallback(() => {
+    setShowNamePrompt(false);
+    setPendingDisplayId(undefined);
+  }, []);
+
+  // Auto-focus + select the name input when the modal opens
+  useEffect(() => {
+    if (showNamePrompt) {
+      const t = setTimeout(() => recordingNameInputRef.current?.select(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [showNamePrompt]);
+
+  // Esc closes the screen picker dropdown
+  useEffect(() => {
+    if (!showScreenPicker) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowScreenPicker(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showScreenPicker]);
 
   const handleShowVersions = useCallback(async () => {
     if (!sessionDir) return;
@@ -116,12 +179,20 @@ export function Toolbar() {
     setShowLog(false);
   }, [sessionDir]);
 
-  const handleOpenVersion = useCallback((filePath: string) => {
-    window.electronAPI.openVersion(filePath);
+  const handleOpenVersion = useCallback(async (filePath: string) => {
+    try {
+      await window.electronAPI.openVersion(filePath);
+    } catch (err) {
+      alert(`Could not open version: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }, []);
 
-  const handleShowInFolder = useCallback((filePath: string) => {
-    window.electronAPI.showInFolder(filePath);
+  const handleShowInFolder = useCallback(async (filePath: string) => {
+    try {
+      await window.electronAPI.showInFolder(filePath);
+    } catch (err) {
+      alert(`Could not show in folder: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }, []);
 
   // Don't render during capture mode
@@ -143,6 +214,7 @@ export function Toolbar() {
           <button
             onClick={handleRecordScreen}
             disabled={isLoading}
+            title="Start a new screen recording"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md transition-colors"
           >
             <Monitor size={13} />
@@ -176,6 +248,7 @@ export function Toolbar() {
         <button
           onClick={handleOpen}
           disabled={isLoading}
+          title="Open an existing project folder"
           className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
         >
           <OpenIcon size={13} />
@@ -185,6 +258,7 @@ export function Toolbar() {
         <button
           onClick={importVideo}
           disabled={isLoading}
+          title="Import an existing video file"
           className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
         >
           <FileVideo size={13} />
@@ -196,10 +270,15 @@ export function Toolbar() {
         <button
           onClick={handleSave}
           disabled={!sessionDir || isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-white text-xs rounded-md transition-colors"
+          title={isDirty ? "Unsaved changes — Save (Ctrl+S)" : "Save project (Ctrl+S)"}
+          className={`flex items-center gap-1.5 px-3 py-1.5 disabled:opacity-30 disabled:pointer-events-none text-xs rounded-md transition-colors ${
+            isDirty
+              ? "bg-amber-600 hover:bg-amber-500 text-white font-medium"
+              : "bg-zinc-800 hover:bg-zinc-700 text-white"
+          }`}
         >
           <SaveIcon size={13} />
-          {isDirty ? "Save *" : "Save"}
+          {isDirty ? "Save •" : "Save"}
         </button>
 
         <button
@@ -224,6 +303,7 @@ export function Toolbar() {
         <button
           onClick={handleProduce}
           disabled={!sessionDir || actionCount === 0 || isProducing || isLoading}
+          title="Render the final video"
           className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded-md transition-colors"
         >
           <ProduceIcon size={13} />
@@ -233,6 +313,7 @@ export function Toolbar() {
         <button
           onClick={handleShowVersions}
           disabled={!sessionDir}
+          title="Show produced versions"
           className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-30 disabled:pointer-events-none text-zinc-300 text-xs rounded-md transition-colors"
         >
           <VersionsIcon size={13} />
@@ -314,6 +395,75 @@ export function Toolbar() {
           onConfirm={handleProduceConfirm}
           onCancel={() => setShowProduceDialog(false)}
         />
+      )}
+
+      {/* Name your recording dialog */}
+      {showNamePrompt && (
+        <div
+          className="fixed inset-0 z-9999 bg-black/60 flex items-center justify-center"
+          onClick={handleCancelRecording}
+          onKeyDown={(e) => { if (e.key === "Escape") handleCancelRecording(); }}
+        >
+          <div
+            className="bg-zinc-900 border border-zinc-800 rounded-md w-md max-w-[90vw] shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-zinc-800">
+              <h2 className="text-sm font-semibold text-zinc-200">Name your recording</h2>
+              <p className="text-[11px] text-zinc-500 mt-1">
+                Pick a name for this session folder. Leave the default to use a timestamp.
+              </p>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="block text-[11px] text-zinc-400 mb-1">Recording name</label>
+                <input
+                  ref={recordingNameInputRef}
+                  type="text"
+                  value={recordingName}
+                  onChange={(e) => setRecordingName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleConfirmRecording();
+                    else if (e.key === "Escape") handleCancelRecording();
+                  }}
+                  className="w-full px-2.5 py-1.5 bg-zinc-950 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-zinc-400 mb-1">Save in</label>
+                <div className="flex items-center gap-2">
+                  <span
+                    className="flex-1 truncate px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-[11px] text-zinc-400 font-mono"
+                    title={recordingParentDir}
+                  >
+                    {recordingParentDir}
+                  </span>
+                  <button
+                    onClick={handleChangeRecordingDir}
+                    className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] rounded"
+                  >
+                    Change…
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-zinc-800 flex justify-end gap-2">
+              <button
+                onClick={handleCancelRecording}
+                className="px-3 py-1.5 text-zinc-400 hover:text-zinc-200 text-xs rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRecording}
+                disabled={!recordingParentDir}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-30 disabled:pointer-events-none text-white text-xs font-medium rounded"
+              >
+                Start Recording
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Versions — overlay, doesn't push content */}

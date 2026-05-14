@@ -20,14 +20,33 @@ function App() {
   useEffect(() => {
     (async () => {
       const lastDir = await window.electronAPI.cacheGet("lastSessionDir") as string | null;
-      if (lastDir) {
-        const exists = await window.electronAPI.exists(lastDir + "/demo-project.json");
-        if (exists) {
-          await openSession(lastDir);
-        }
+      if (!lastDir) return;
+      const exists = await window.electronAPI.exists(lastDir + "/demo-project.json");
+      if (!exists) {
+        await window.electronAPI.cacheSet("lastSessionDir", null);
+        return;
+      }
+      try {
+        await openSession(lastDir);
+      } catch (err) {
+        await window.electronAPI.cacheSet("lastSessionDir", null);
+        useProjectStore.setState({ isLoading: false, loadingMessage: "" });
+        alert(`Could not reopen last project at:\n${lastDir}\n\n${err instanceof Error ? err.message : String(err)}`);
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Warn before closing if there are unsaved changes
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (useProjectStore.getState().isDirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
   const project = useProjectStore((s) => s.project);
   const captureMode = useProjectStore((s) => s.captureMode);
   const playheadTime = useProjectStore((s) => s.playheadTime);
@@ -137,20 +156,31 @@ function App() {
     [selectedActionId, selectedAction, updateAction, setDrawingZoom],
   );
 
-  // Resizable timeline height
+  // Resizable timeline height — restored from cache on mount
   const [timelineHeight, setTimelineHeight] = useState(192); // default h-48 = 192px
   const resizingRef = useRef(false);
+
+  useEffect(() => {
+    (async () => {
+      const cached = await window.electronAPI.cacheGet("timelineHeight");
+      if (typeof cached === "number" && cached >= 100 && cached <= 600) {
+        setTimelineHeight(cached);
+      }
+    })();
+  }, []);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     resizingRef.current = true;
     const startY = e.clientY;
     const startHeight = timelineHeight;
+    let lastHeight = startHeight;
 
     const onMove = (ev: MouseEvent) => {
       if (!resizingRef.current) return;
       const delta = startY - ev.clientY; // dragging up = more timeline
       const newHeight = Math.max(100, Math.min(600, startHeight + delta));
+      lastHeight = newHeight;
       setTimelineHeight(newHeight);
     };
 
@@ -160,6 +190,7 @@ function App() {
       document.removeEventListener("mouseup", onUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      window.electronAPI.cacheSet("timelineHeight", lastHeight);
     };
 
     document.addEventListener("mousemove", onMove);
@@ -193,11 +224,11 @@ function App() {
                 Recording...
               </h1>
               <p className="text-zinc-500 text-sm max-w-md">
-                Navigate the target website in the capture window.
-                Click "Stop & Edit" when finished.
+                Perform your demo on the selected display.
+                Click "Stop & Edit" when finished, or "Discard" to throw the recording away.
               </p>
               <p className="text-zinc-600 text-xs">
-                Your screen is being recorded. Click "Stop & Edit" when done.
+                Your screen is being recorded.
               </p>
             </div>
           </div>

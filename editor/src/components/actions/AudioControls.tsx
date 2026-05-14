@@ -83,6 +83,8 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
     if (!text?.trim() || !sessionDir) return;
     setTtsLoading(true);
     try {
+      // Persist project (incl. tts.speed and narration text) so the main process reads fresh values
+      await useProjectStore.getState().save();
       const langCode = LANG_CODES[lang] || "a";
       const result = await api.generateTTS(sessionDir, action.id, text, lang, currentVoice, langCode);
       updateAction(action.id, {
@@ -91,7 +93,7 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
       setAudioDuration(result.duration);
     } catch (err) {
       console.error("TTS generation failed:", err);
-      alert(`TTS failed: ${err}`);
+      alert(`TTS failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setTtsLoading(false);
     }
@@ -118,6 +120,16 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
 
   const langLabel = LANG_LABELS[lang] || lang.toUpperCase();
 
+  const ttsSpeed = project?.tts?.speed ?? 1;
+  const handleSpeedChange = useCallback((speed: number) => {
+    const proj = useProjectStore.getState().project;
+    if (!proj) return;
+    useProjectStore.setState({
+      project: { ...proj, tts: { ...proj.tts, speed } },
+      isDirty: true,
+    });
+  }, []);
+
   return (
     <div className="relative">
       {/* Loading overlay */}
@@ -142,20 +154,33 @@ export function AudioControls({ action, lang, label }: AudioControlsProps) {
         className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-blue-400 resize-none"
       />
 
-      {/* Voice selector */}
-      {voices.length > 1 && (
-        <div className="mt-1">
+      {/* Voice + speed selectors */}
+      <div className="mt-1 flex gap-1.5">
+        {voices.length > 1 && (
           <select
             value={currentVoice}
             onChange={(e) => setSelectedVoice(e.target.value)}
-            className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-2 py-1 text-[11px] text-zinc-300 focus:outline-none focus:border-blue-400"
+            title="Voice"
+            className="flex-1 bg-zinc-950 border border-zinc-700/50 rounded px-2 py-1 text-[11px] text-zinc-300 focus:outline-none focus:border-blue-400"
           >
             {voices.map((v) => (
               <option key={v} value={v}>{v}</option>
             ))}
           </select>
-        </div>
-      )}
+        )}
+        <select
+          value={ttsSpeed}
+          onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
+          title="Narration speed (applies to next regeneration)"
+          className="bg-zinc-950 border border-zinc-700/50 rounded px-2 py-1 text-[11px] text-zinc-300 focus:outline-none focus:border-blue-400"
+        >
+          <option value={0.75}>0.75x</option>
+          <option value={1}>1x</option>
+          <option value={1.25}>1.25x</option>
+          <option value={1.5}>1.5x</option>
+          <option value={2}>2x</option>
+        </select>
+      </div>
 
       <div className="flex gap-2 mt-2">
         <button

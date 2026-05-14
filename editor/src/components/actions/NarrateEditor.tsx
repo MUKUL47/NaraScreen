@@ -153,6 +153,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
       setRecording(true);
     } catch (err) {
       console.error("Microphone access denied:", err);
+      alert(`Microphone access was denied or unavailable.\n\nCheck your system microphone permissions and try again.\n\n${err instanceof Error ? err.message : String(err)}`);
     }
   }, [sessionDir, action.id, updateAction]);
 
@@ -176,6 +177,7 @@ export function NarrateEditor({ action }: NarrateEditorProps) {
   }, []);
 
   const handleClearRecording = useCallback(() => {
+    if (!confirm("Remove recorded narration?")) return;
     updateAction(action.id, { customAudioPath: undefined });
     setRecordedUrl(null);
     setRecordedDuration(null);

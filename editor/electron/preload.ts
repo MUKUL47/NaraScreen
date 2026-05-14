@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   mkdir: (dirPath: string, options?: { recursive?: boolean }) =>
     ipcRenderer.invoke("fs:mkdir", dirPath, options),
   homeDir: () => ipcRenderer.invoke("fs:homeDir"),
+  trashItem: (targetPath: string) =>
+    ipcRenderer.invoke("fs:trashItem", targetPath),
 
   // Dialog
   openDirectory: () => ipcRenderer.invoke("dialog:openDirectory"),

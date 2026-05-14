@@ -57,7 +57,11 @@ export function SpotlightEditor({ action, onUpdate }: SpotlightEditorProps) {
               </div>
             ))}
             <button
-              onClick={() => onUpdate({ spotlightRects: undefined, spotlightRect: undefined })}
+              onClick={() => {
+                if (confirm("Clear all spotlight regions?")) {
+                  onUpdate({ spotlightRects: undefined, spotlightRect: undefined });
+                }
+              }}
               className="text-[10px] text-red-400 hover:text-red-300"
             >
               Clear All

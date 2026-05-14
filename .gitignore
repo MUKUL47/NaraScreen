@@ -43,3 +43,6 @@ npm-debug.log*
 dist-ssr
 release
 kokoro-venv
+translate-venv/
+editor/piper/
+dist-web/

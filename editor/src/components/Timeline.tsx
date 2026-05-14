@@ -625,16 +625,28 @@ export function Timeline() {
               className="fixed bg-zinc-900 border border-zinc-700 rounded-md shadow-sm z-1000 min-w-52 py-1"
               style={{ left: r.left, bottom: window.innerHeight - r.top + 6 }}
             >
-              {(["narrate", "zoom", "spotlight", "blur", "mute", "speed", "callout", "music"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => handleAddAction(t)}
-                  className={`flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-left hover:bg-white/5 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
-                >
-                  <ActionIcon type={t} size={15} />
-                  <span className="font-medium">{ACTION_DISPLAY_NAMES[t] || t}</span>
-                </button>
-              ))}
+              {(["narrate", "zoom", "spotlight", "blur", "mute", "speed", "callout", "music"] as const).map((t) => {
+                const shortcut: Partial<Record<typeof t, string>> = {
+                  zoom: "1", narrate: "2", spotlight: "3", blur: "4",
+                  mute: "5", speed: "6", callout: "7", music: "8",
+                };
+                return (
+                  <button
+                    key={t}
+                    onClick={() => handleAddAction(t)}
+                    title={shortcut[t] ? `${ACTION_DISPLAY_NAMES[t] || t} (${shortcut[t]})` : ACTION_DISPLAY_NAMES[t] || t}
+                    className={`flex items-center gap-2.5 w-full px-4 py-2.5 text-sm text-left hover:bg-white/5 transition-colors ${ACTION_TEXT_COLORS[t] || "text-zinc-300"}`}
+                  >
+                    <ActionIcon type={t} size={15} />
+                    <span className="font-medium flex-1">{ACTION_DISPLAY_NAMES[t] || t}</span>
+                    {shortcut[t] && (
+                      <kbd className="text-[10px] text-zinc-500 font-mono bg-zinc-800/50 px-1.5 py-0.5 rounded">
+                        {shortcut[t]}
+                      </kbd>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </>
         );

@@ -148,6 +148,15 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
     [trimDuration, selectedCount, resolution, quality],
   );
 
+  // Esc closes the dialog
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
   return (
     <div className="fixed inset-0 z-9999 bg-black/60 flex items-center justify-center" onClick={onCancel}>
       <div
@@ -412,6 +421,7 @@ export function ProduceDialog({ onConfirm, onCancel }: ProduceDialogProps) {
             Cancel
           </button>
           <button
+            autoFocus
             onClick={() => onConfirm({
               selectedIds: Array.from(selected),
               resolution,

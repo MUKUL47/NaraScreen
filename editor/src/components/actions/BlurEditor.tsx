@@ -53,7 +53,11 @@ export function BlurEditor({ action, onUpdate }: BlurEditorProps) {
               </div>
             ))}
             <button
-              onClick={() => onUpdate({ blurRects: undefined })}
+              onClick={() => {
+                if (confirm("Clear all blur regions?")) {
+                  onUpdate({ blurRects: undefined });
+                }
+              }}
               className="text-[10px] text-red-400 hover:text-red-300"
             >
               Clear All
