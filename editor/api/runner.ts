@@ -372,6 +372,7 @@ function describeEntry(e: Beat["beat"][number]): string {
       e.act === "press" ? ` ${e.key}` :
       e.act === "select" ? ` "${e.option}"` :
       e.act === "useSession" ? ` ${e.storageState}` :
+      e.act === "upload" ? ` ${uploadList(e).map((f) => path.basename(f)).join(", ")}` :
       e.act === "scroll" && !sel ? ` y=${e.y}` : "";
     return `${e.act}${sel ? ` ${describeSelector(sel)}` : ""}${extra}`;
   }
@@ -536,6 +537,7 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       hint: "Add one of role(+name) | label | text | placeholder | testId | css. Run `narascreen validate` first.",
     });
   }
+  if (e.act === "upload") return uploadFiles(env, e, sel, where, d, timeout);
   const loc = await resolveTarget(env, sel, where, timeout);
   const rect = await reveal(env, loc, sel, where, d, timeout);
 
@@ -565,6 +567,102 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   // The act may have moved the element (layout change, textarea growing, an
   // auto-scroll): fx that inherit it use where it is NOW; if it is gone, where it was.
   return { rect, focus: (await currentRect(loc)) ?? rect };
+}
+
+function uploadList(e: ActEntry): string[] {
+  return e.files == null ? [] : Array.isArray(e.files) ? e.files : [e.files];
+}
+
+const UPLOAD_TARGET_HINT =
+  "target is neither a file input nor something that opens a file picker — point at the input, or at the button that opens the picker";
+
+/**
+ * upload: a file input (even hidden) gets the files directly; anything else is
+ * clicked and the file picker it opens is answered (no OS dialog on camera).
+ * The effect box is the target, or for a hidden input its visible label / clickable ancestor.
+ */
+async function uploadFiles(env: Env, e: ActEntry, sel: Selector, where: ErrorWhere, d: DemoDefaults, timeout: number): Promise<ActResult> {
+  const files = uploadList(e);
+  const names = files.map((f) => path.basename(f)).join(", ");
+  let loc = await resolveTarget(env, sel, where, timeout, { attached: true });
+  const info = await loc
+    .evaluate((el) => {
+      // "Shown" = a viewer can see it: sr-only inputs (1px, opacity 0) count as hidden.
+      const r = el.getBoundingClientRect();
+      let op = 1;
+      for (let a: Element | null = el; a; a = a.parentElement) op *= Number(getComputedStyle(a).opacity) || 0;
+      return {
+        fileInput: el instanceof HTMLInputElement && el.type === "file",
+        multiple: el instanceof HTMLInputElement && el.multiple,
+        shown: r.width >= 8 && r.height >= 8 && op > 0.1,
+      };
+    })
+    .catch(() => ({ fileInput: false, multiple: false, shown: false }));
+  const tooMany = (multiple: boolean) =>
+    failure(env, "ACTION_FAILED", `${label(where)}: ${files.length} files given but ${describeSelector(sel)} accepts only one`, {
+      where,
+      selector: sel,
+      hint: "Pass a single file, or target an input that has the `multiple` attribute.",
+      details: { files, multiple },
+    });
+
+  if (info.fileInput) {
+    if (files.length > 1 && !info.multiple) throw await tooMany(false);
+    const rect = info.shown && (await loc.isVisible().catch(() => false))
+      ? await reveal(env, loc, sel, where, d, timeout)
+      : await revealUploadProxy(env, loc, sel, where, d, timeout);
+    await attempt(env, where, sel, `choose ${names} in`, () => loc.setInputFiles(files, { timeout }));
+    return { ...(rect ? { rect } : {}), focus: rect };
+  }
+
+  // Not an input: it must be visible to be clicked (this also gives the usual errors).
+  if (!(await loc.isVisible().catch(() => false))) loc = await resolveTarget(env, sel, where, timeout);
+  const rect = await reveal(env, loc, sel, where, d, timeout);
+  const chooser = env.page.waitForEvent("filechooser", { timeout }).catch((err: unknown) => err as Error);
+  await attempt(env, where, sel, "click", () => loc.click({ timeout }));
+  const fc = await chooser;
+  if (fc instanceof Error) {
+    throw await failure(env, "ACTION_FAILED", `${label(where)}: clicking ${describeSelector(sel)} did not open a file picker (waited ${timeout}ms)`, {
+      where,
+      selector: sel,
+      hint: UPLOAD_TARGET_HINT,
+    });
+  }
+  if (files.length > 1 && !fc.isMultiple()) throw await tooMany(false);
+  await attempt(env, where, sel, `choose ${names} in`, () => fc.setFiles(files, { timeout }));
+  return { rect, focus: (await currentRect(loc)) ?? rect };
+}
+
+/** Box for a hidden file input: its nearest visible <label> or clickable ancestor, revealed on camera. Null if none. */
+async function revealUploadProxy(env: Env, input: Locator, sel: Selector, where: ErrorWhere, d: DemoDefaults, timeout: number): Promise<Rect | null> {
+  const key = `u${Date.now().toString(36)}`;
+  const found = await input
+    .evaluate((el, k) => {
+      // No named inner functions: tsx would wrap them in a __name() helper the page lacks.
+      const input = el as HTMLInputElement;
+      const cands: Element[] = [];
+      if (input.id) cands.push(...Array.from(document.querySelectorAll(`label[for="${CSS.escape(input.id)}"]`)));
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        if (a.matches("label, button, a, [role=button], [tabindex], [onclick]") || getComputedStyle(a).cursor === "pointer") cands.push(a);
+      }
+      const hit = cands.find((x) => {
+        const r = x.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && (typeof x.checkVisibility !== "function" || x.checkVisibility());
+      });
+      if (!hit) return false;
+      hit.setAttribute("data-narascreen-upload", k);
+      return true;
+    }, key)
+    .catch(() => false);
+  if (!found) return null;
+  const proxy = env.page.locator(`[data-narascreen-upload="${key}"]`).first();
+  try {
+    return await reveal(env, proxy, sel, where, d, timeout);
+  } catch {
+    return null;
+  } finally {
+    await proxy.evaluate((el) => el.removeAttribute("data-narascreen-upload")).catch(() => {});
+  }
 }
 
 async function gotoChecked(env: Env, target: string, where: ErrorWhere, timeoutMs: number): Promise<void> {
@@ -835,11 +933,12 @@ async function resolveTarget(
   sel: Selector,
   where: ErrorWhere,
   timeout: number,
-  opts: { waitFor?: boolean } = {},
+  opts: { waitFor?: boolean; attached?: boolean } = {},
 ): Promise<Locator> {
   const loc = locate(env.page, sel);
   try {
-    await loc.waitFor({ state: "visible", timeout });
+    // attached: upload targets are often hidden <input type=file>s.
+    await loc.waitFor({ state: opts.attached ? "attached" : "visible", timeout });
   } catch (err) {
     throw await diagnoseMissing(env, sel, where, timeout, err, !!opts.waitFor);
   }

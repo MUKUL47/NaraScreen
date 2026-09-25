@@ -153,6 +153,11 @@ export interface InspectElement {
   options?: string[];
   checked?: boolean;
   disabled?: boolean;
+  /** "file" for <input type=file> — a target for the `upload` act, listed even when hidden. */
+  inputType?: "file";
+  /** File inputs: the accept attribute and whether several files may be chosen. */
+  accept?: string;
+  multiple?: boolean;
 }
 
 /** Roles listed even without an accessible name. */
@@ -238,6 +243,7 @@ interface DomInfo {
   options?: string[];
   checked?: boolean;
   disabled?: boolean;
+  fileInput?: { accept?: string; multiple: boolean };
   labels: string[];
   placeholder?: string;
   testId?: string;
@@ -281,6 +287,7 @@ const DOM_INFO = pageFn<(el: Element, arg: { key: string; containers: string }) 
   } else if (tag === "input" && !["password", "checkbox", "radio", "file", "hidden", "submit", "button", "reset", "image"].includes(type)) {
     out.value = el.value;
   }
+  if (tag === "input" && type === "file") out.fileInput = { accept: el.getAttribute("accept") || undefined, multiple: !!el.multiple };
   if (tag === "input" && (type === "checkbox" || type === "radio")) out.checked = !!el.checked;
   else if (el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-checked") === "false") out.checked = el.getAttribute("aria-checked") === "true";
   else if (el.getAttribute("aria-pressed") === "true" || el.getAttribute("aria-pressed") === "false") out.checked = el.getAttribute("aria-pressed") === "true";
@@ -421,6 +428,7 @@ export async function collectElementsDetailed(page: Page, opts: { limit?: number
       return best ? toElement(n, info, best) : null;
     });
     const elements = built.filter((e): e is InspectElement => e !== null);
+    elements.push(...(await hiddenFileInputs(page, key)));
     // Visible first (stable: document order within each group).
     elements.sort((a, b) => Number(b.visible) - Number(a.visible));
     return { elements, total: nodes.length };
@@ -454,7 +462,44 @@ function toElement(n: SnapNode, info: DomInfo, best: { selector: Selector; match
   if (info.options) el.options = info.options;
   if (info.checked != null) el.checked = info.checked;
   if (info.disabled) el.disabled = true;
+  if (info.fileInput) {
+    el.inputType = "file";
+    if (info.fileInput.accept) el.accept = info.fileInput.accept;
+    el.multiple = info.fileInput.multiple;
+  }
   return el;
+}
+
+/**
+ * File inputs the accessibility snapshot left out (display:none / hidden behind a
+ * styled button). Without them an agent would never learn the page takes uploads.
+ */
+async function hiddenFileInputs(page: Page, key: string): Promise<InspectElement[]> {
+  const all = page.locator("input[type=file]");
+  const n = await all.count().catch(() => 0);
+  const out: InspectElement[] = [];
+  for (let i = 0; i < Math.min(n, 20); i++) {
+    const loc = all.nth(i);
+    const known = await loc
+      .evaluate((el, k) => ((window as unknown as Record<string, Element[]>)[k] ?? []).includes(el), key)
+      .catch(() => true);
+    if (known) continue;
+    const info = await loc.evaluate(DOM_INFO, { key, containers: SCOPE_CONTAINERS.join(", ") }, { timeout: 2000 }).catch(() => null);
+    if (!info) continue;
+    // A label that finds exactly this input reads best; else the (unique) CSS path.
+    let selector: Selector = { css: info.cssPath };
+    for (const l of info.labels) {
+      const byLabel = page.getByLabel(l, { exact: true });
+      if ((await byLabel.count().catch(() => 0)) === 1 && (await byLabel.evaluate((el, k) => (window as unknown as Record<string, Element[]>)[k].at(-1) === el, key).catch(() => false))) {
+        selector = { label: l };
+        break;
+      }
+    }
+    if (!selector.label && info.testId) selector = { testId: info.testId };
+    const el = toElement({ role: "input", name: info.labels[0] ?? "" } as SnapNode, info, { selector, matches: 1 });
+    out.push(el);
+  }
+  return out;
 }
 
 // ─── selector building ───────────────────────────────────────────────

@@ -57,7 +57,8 @@ export type ActVerb =
   | "hover"
   | "press"
   | "scroll"
-  | "useSession";
+  | "useSession"
+  | "upload";
 
 export type FxVerb =
   | "zoom"
@@ -77,10 +78,10 @@ export type Rect = [number, number, number, number];
 export const SELECTOR_KEYS = ["role", "label", "text", "placeholder", "testId", "css"] as const;
 
 /** Verbs that act on an element (need a selector). */
-export const TARGETED_ACTS: ActVerb[] = ["waitFor", "click", "fill", "select", "hover"];
+export const TARGETED_ACTS: ActVerb[] = ["waitFor", "click", "fill", "select", "hover", "upload"];
 /** Verbs whose element's box becomes the default target of following fx
  *  (when they have a selector; the box is measured after the act). */
-export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll", "waitFor", "press"];
+export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll", "waitFor", "press", "upload"];
 /** fx that need an element box (anchor or inherited from the previous act). */
 export const RECT_FX: FxVerb[] = ["zoom", "spotlight", "blur"];
 /** fx that draw over the video for a time window (duration may be "auto"). */
@@ -128,6 +129,8 @@ export interface ActEntry extends Selector {
   y?: number;
   /** useSession: Playwright storageState file to switch to mid-run. */
   storageState?: string;
+  /** upload: file(s) to choose. Relative to the script; absolute after validation. */
+  files?: string | string[];
   /** waitFor: override defaults.timeoutMs. */
   timeoutMs?: number;
   note?: string;
@@ -350,6 +353,12 @@ export const ActEntrySchema = z.discriminatedUnion("act", [
     storageState: str().describe("Path to a Playwright storageState JSON (cookies + localStorage)."),
     path: str().optional().describe("Where to navigate after switching (default: reload current page)."),
   }, "Switch to another logged-in session mid-demo (e.g. a second user)."),
+  act("upload", {
+    ...selectorShape,
+    files: z
+      .union([str(), z.array(str()).min(1)])
+      .describe("File path, or a list for a multi-file input. Relative to the script file (inline HTTP scripts: relative to the workspace — upload with PUT /v1/files first)."),
+  }, "Choose file(s) for an upload. Target the <input type=file> itself (it may be hidden) or the button/dropzone that opens the file picker. No OS dialog is shown."),
 ]);
 
 const NarrationSchema = z

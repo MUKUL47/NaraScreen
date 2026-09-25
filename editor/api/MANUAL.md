@@ -75,8 +75,9 @@ curl -s -X POST $BASE/v1/runs -H 'Content-Type: application/json' \
   -d '{"command":"make","scriptPath":"<scriptPath>","job":"my-demo"}'
 curl -N $BASE/v1/runs/<runId>/events              # Server-Sent Events; the last one is `end`
 
-# Need your own files (a voiceover, music, a video to edit, a saved login)? Upload them first,
-# then refer to them in the script by the returned relativePath, e.g. "audio": "uploads/intro.mp3".
+# Need your own files (a voiceover, music, a video to edit, a saved login, a file the demo uploads
+# into the site)? Upload them first (any file type), then refer to them in the script by the returned
+# relativePath, e.g. "audio": "uploads/intro.mp3" or {"act": "upload", …, "files": "uploads/sheet.xlsx"}.
 curl -s -T intro.mp3 "$BASE/v1/files?path=uploads/intro.mp3"
 
 # 6. Fetch the results (any path from a result works here)
@@ -138,6 +139,9 @@ Run `inspect` on every page the demo visits. The result lists elements like:
 Copy `selector` into your script as-is — it is already unique on the page when `matches` is 1.
 `screenshot` is a PNG of the page; look at it.
 
+File inputs are listed even when hidden (most sites hide them behind a styled button), flagged
+`"inputType": "file"` with `accept` and `multiple`. They are what the `upload` act targets (see *Uploading files*).
+
 Pages behind a login, or states that only exist after some clicks (an open dialog, a created item):
 write those steps into your script first, then `inspect --script my.demo-script.json --until <step-id>`
 (HTTP: `{"command":"inspect","scriptPath":…,"options":{"until":"<step-id>"}}`). NaraScreen runs the
@@ -163,6 +167,11 @@ all, validate again, repeat until `ok: true`. Read `warnings` too — they flag 
 - `error.details.screenshot` — what the page looked like at that moment (look at it!)
 
 Fix the entry and check again until it passes.
+
+> **`check` and `inspect --until` really do everything the script says** — they click Save, create
+> records, send forms and upload files, exactly like `make`. Those changes stay in the site. If a demo
+> creates data (a new task, an imported sheet), reset the site's data (or use a fresh test account)
+> before `make`, or the recording will show duplicates and "already exists" errors.
 
 ### 7. Make
 
@@ -282,7 +291,34 @@ A complete example (a task-manager web app):
 - **Wait for the screen, not the clock:** after navigation or anything asynchronous, add a `waitFor`
   on something that only appears when the page is ready. Use `wait` only for pure animations.
 - **Use `setup` for anything the viewer shouldn't see** (logging in, resetting data). It runs before recording starts.
-- **Blur secrets** (API keys, emails, balances) with `{"fx": "blur", "anchor": …}` placed as soon as they appear. A blur lasts until its step ends by default; add `"duration": "end"` to keep it hidden for the rest of the video. A blur lasts until its step ends by default; add `"duration": "end"` to keep it hidden for the rest of the video.
+- **Upload files on camera** with the `upload` act (see *Uploading files* below) — no OS file dialog appears.
+- **Blur secrets** (API keys, emails, balances) with `{"fx": "blur", "anchor": …}` placed as soon as they appear. A blur lasts until its step ends by default; add `"duration": "end"` to keep it hidden for the rest of the video.
+
+### Uploading files
+
+`upload` chooses file(s) in the page, the way a user picking from the file dialog would — but the dialog
+never opens, so nothing of your desktop is on camera.
+
+```json
+{ "act": "upload", "role": "button", "name": "Choose file", "files": "uploads/comp-sheet.xlsx" }
+{ "act": "upload", "css": "input[type=file]", "files": ["uploads/a.pdf", "uploads/b.pdf"] }
+```
+
+- **Selector** (required): either the `<input type=file>` itself — it may be hidden, as it usually is —
+  or whatever the user clicks to open the file picker (a button, a label, a dropzone that opens a picker).
+  `inspect` lists file inputs even when hidden (`"inputType": "file"`).
+- **`files`**: one path or a list. Any file type. Paths are relative to the script file; in a script sent
+  inline over HTTP, relative to the workspace. Over HTTP, upload the file first:
+  `curl -T comp-sheet.xlsx "$BASE/v1/files?path=uploads/comp-sheet.xlsx"` → use `result.relativePath`.
+  A missing file is a `SCRIPT_INVALID` issue at `…files[k]` (found by `validate`, before any browser starts).
+- **Several files** only work when the input accepts several (`multiple`); otherwise `ACTION_FAILED`.
+- **Effects after it** (spotlight, zoom…) use the target's box; for a hidden input, its visible label or
+  clickable ancestor. If there is none (e.g. you targeted a hidden input directly), give the fx an `anchor`
+  — or target the visible button instead, which is usually the better shot anyway.
+- Add a `waitFor` on something that proves the upload was accepted (the file name, "Upload complete").
+- Replacing the file's content (same name) makes `make` re-record: the page would show different data.
+- Not supported: drag-and-drop-only dropzones that never open a file picker; capturing downloads
+  (clicking a download link works, the file is just not kept).
 
 ---
 
@@ -522,6 +558,9 @@ From the CLI, `--events json` prints the same events as JSON lines on stderr.
 | `SELECTOR_NOT_FOUND` | Use a selector from `error.details.candidates`, or `inspect --script … --until <previous step>` to see the page at that point. |
 | `WAIT_TIMEOUT` | The step before didn't lead where you expected. Look at `error.details.screenshot`. |
 | `TARGET_NOT_VISIBLE` | Open the menu/tab/dialog that contains it first, or it's covered by something (close the popup). |
+| `ACTION_FAILED` on an `upload`: "neither a file input nor something that opens a file picker" | Point at the `<input type=file>` (listed by `inspect` with `"inputType": "file"`, even when hidden), or at the button that opens the picker. Drag-and-drop-only zones are not supported. |
+| `ACTION_FAILED` on an `upload`: "accepts only one" | The input has no `multiple`: pass one file, or use the site's multi-file input. |
+| Duplicates / "already exists" in the video | `check` and `inspect --until` really performed the steps. Reset the site's data before `make`. |
 | `TTS_UNAVAILABLE` | The speech engine is down: run `doctor` and apply its fix. |
 | `SCRIPT_STRUCTURE_CHANGED` | You changed browser steps; run `make` (re-records) instead of `produce`. |
 | Highlight ends too early / too late | Leave `duration` unset (`auto`), or put the narration right after the effect in the same step. |

@@ -538,6 +538,19 @@ function checkAct(e: ActEntry, ep: string, dir: string, issues: ScriptIssue[], w
     e.storageState = p;
   }
 
+  if (e.act === "upload" && e.files != null) {
+    const list = Array.isArray(e.files) ? e.files : [e.files];
+    e.files = list.map((f, k) => {
+      const abs = resolveFile(f, dir);
+      if (!fs.existsSync(abs)) {
+        issues.push({ path: `${ep}.files[${k}]`, message: `file not found: ${abs}`, hint: "Paths are relative to the script file (inline HTTP scripts: to the workspace — upload it with PUT /v1/files first)." });
+      } else if (!fs.statSync(abs).isFile()) {
+        issues.push({ path: `${ep}.files[${k}]`, message: `not a file: ${abs}` });
+      }
+      return abs;
+    });
+  }
+
   if (e.act === "wait" && e.ms != null && e.ms > 10_000) {
     warnings.push(`${ep}: waits ${e.ms}ms on camera — consider a shorter wait.`);
   }

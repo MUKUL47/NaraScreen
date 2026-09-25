@@ -52,6 +52,7 @@ const SCRIPT = {
   starter: path.join(RUN, "starter.demo-script.json"),
   imported: path.join(RUN, "imported.demo-script.json"),
   badRect: path.join(RUN, "bad-rect.demo-script.json"),
+  upload: path.join(RUN, "upload.demo-script.json"),
 };
 const JOB = path.join(RUN, "job");
 const VIDEO_JOB = path.join(RUN, "job-video");
@@ -515,6 +516,86 @@ describe("narascreen CLI, end to end", () => {
       cands.some((c) => c.name === "New task"),
       `candidates for "Add task" should include the real "New task" button; got ${JSON.stringify(cands.map((c) => `${c.role} "${c.name}"`))}`,
     );
+  });
+
+  // ── upload act (fixture page #/import) ──
+
+  /** The acme login + a goto to #/import, then `beat` as step "choose". */
+  const uploadScript = (beat: Rec[], extra: Rec = {}): Rec => ({
+    version: 1,
+    scope: "Upload act",
+    baseUrl: server.url,
+    setup: clone(acmeRaw.setup),
+    ...extra,
+    steps: [
+      { id: "open", beat: [{ act: "goto", path: "/#/import" }, { act: "waitFor", role: "heading", name: "Import", exact: true }] },
+      { id: "choose", beat },
+    ],
+  });
+  const uploadFiles = () => {
+    fs.mkdirSync(path.join(RUN, "uploads"), { recursive: true });
+    for (const f of ["comp-sheet.xlsx", "a.pdf", "b.pdf"]) fs.writeFileSync(path.join(RUN, "uploads", f), `fixture ${f}`);
+  };
+
+  test("upload: a visible input, a hidden input behind a button, a multi-file input — names render, effects frame the label; inspect lists hidden inputs", { timeout: 10 * MIN }, async () => {
+    uploadFiles();
+    writeJson(
+      SCRIPT.upload,
+      uploadScript([
+        { act: "upload", label: "Task sheet file", files: "uploads/comp-sheet.xlsx" },
+        { act: "waitFor", text: "Chosen: comp-sheet.xlsx" },
+        { act: "upload", role: "button", name: "Choose file", files: ["uploads/a.pdf"] },
+        { act: "waitFor", testId: "imp-hidden-out", note: "hidden input → its button opened the picker" },
+        { act: "waitFor", text: "Chosen: a.pdf" },
+        { act: "upload", css: "#imp-multi", files: ["uploads/a.pdf", "uploads/b.pdf"] },
+        { fx: "spotlight", note: "inherits the hidden input's visible label" },
+        { act: "waitFor", text: "Chosen: a.pdf, b.pdf" },
+      ]),
+    );
+    expectOk(await cli(["validate", SCRIPT.upload]), "validate");
+    const r = await cli(["check", SCRIPT.upload, "--out", path.join(RUN, "check-upload")], { timeoutMs: 5 * MIN });
+    const res = expectOk(r, "check");
+    assert.equal(res.slots, 10, `every entry ran\n${describeRun(r)}`);
+    assert.ok(
+      r.events.some((e) => e.type === "log" && /upload .*comp-sheet\.xlsx/.test(e.message)),
+      `the progress log names the uploaded files\n${describeRun(r)}`,
+    );
+
+    // Recorded, effects after an upload get a real box: the hidden multi input's visible label, not its 1px self.
+    const rec = await cli(["record", SCRIPT.upload, "--out", path.join(RUN, "job-upload")], { timeoutMs: 4 * MIN });
+    expectOk(rec, "record");
+    const spot = readTrace(path.join(RUN, "job-upload")).find((e) => e.fx === "spotlight");
+    assert.ok(spot?.rect && spot.rect[2] >= 40 && spot.rect[3] >= 20, `spotlight after the hidden multi-file input should frame its label: ${JSON.stringify(spot)}\n${describeRun(rec)}`);
+
+    const ins = await cli(["inspect", "--script", SCRIPT.upload, "--until", "open", "--out", path.join(RUN, "inspect-upload")], { timeoutMs: 4 * MIN });
+    const els = expectOk(ins, "inspect").elements as Rec[];
+    const files = els.filter((e) => e.inputType === "file");
+    assert.equal(files.length, 3, `all three file inputs are listed (hidden too):\n${summarizeElements(els)}`);
+    const hidden = files.find((e) => e.visible === false && e.multiple === false);
+    assert.ok(hidden?.selector, `the hidden input comes with a selector: ${JSON.stringify(files)}`);
+    assert.ok(files.some((e) => e.multiple === true), `the multi-file input is flagged multiple: ${JSON.stringify(files)}`);
+  });
+
+  test("upload: a target that opens no file picker → ACTION_FAILED with the hint", { timeout: 4 * MIN }, async () => {
+    uploadFiles();
+    writeJson(SCRIPT.upload, uploadScript([{ act: "upload", text: "Drop files here", files: "uploads/a.pdf" }], { defaults: { timeoutMs: 3000 } }));
+    const r = await cli(["check", SCRIPT.upload, "--out", path.join(RUN, "check-upload-bad")], { timeoutMs: 3 * MIN });
+    const err = expectError(r, "check", "ACTION_FAILED");
+    assert.equal(err.where?.path, "steps[1].beat[0]", `error.where\n${describeRun(r)}`);
+    assert.match(String(err.hint), /neither a file input nor something that opens a file picker/, describeRun(r));
+  });
+
+  test("upload: two files into a single-file input → ACTION_FAILED; a missing file → SCRIPT_INVALID at files[k]", { timeout: 4 * MIN }, async () => {
+    uploadFiles();
+    writeJson(SCRIPT.upload, uploadScript([{ act: "upload", label: "Task sheet file", files: ["uploads/a.pdf", "uploads/b.pdf"] }]));
+    const many = await cli(["check", SCRIPT.upload, "--out", path.join(RUN, "check-upload-many")], { timeoutMs: 3 * MIN });
+    expectError(many, "check", "ACTION_FAILED");
+
+    writeJson(SCRIPT.upload, uploadScript([{ act: "upload", label: "Task sheet file", files: ["uploads/nope.xlsx"] }]));
+    const r = await cli(["validate", SCRIPT.upload]);
+    const err = expectError(r, "validate", "SCRIPT_INVALID");
+    const paths = (err.details?.issues as Rec[]).map((i) => i.path);
+    assert.ok(paths.includes("steps[1].beat[0].files[0]"), `expected an issue at files[0]; got ${JSON.stringify(paths)}`);
   });
 
   // ── the job lifecycle (ordered; later tests reuse this job) ──

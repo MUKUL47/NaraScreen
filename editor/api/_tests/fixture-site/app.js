@@ -240,6 +240,7 @@
     "/dashboard": { title: "Dashboard", render: renderDashboard },
     "/tasks": { title: "Tasks", render: renderTasks },
     "/settings": { title: "Settings", render: renderSettings },
+    "/import": { title: "Import", render: renderImport },
   };
 
   function parseHash() {
@@ -967,6 +968,61 @@
       save(KEYS.settings, { ...getSettings(session), apiKey: draft.apiKey });
       toast("New API key generated", "The old key stops working right away.");
     });
+  }
+
+  // ─── #/import (upload act fixture; not in the nav) ──────────────────
+  //
+  // Three real-world upload UIs, each printing the chosen file names:
+  // a visible input, a hidden input behind a styled button, a multi-file input.
+  // "Drop files here" is a plain div that opens no picker (the failure case).
+
+  function renderImport(_params, session) {
+    mountShell(
+      "/import",
+      session,
+      html`
+        <div class="page-header">
+          <div>
+            <h1 tabindex="-1">Import</h1>
+            <p class="subtitle">Bring tasks in from a file.</p>
+          </div>
+        </div>
+        <div class="stack">
+          <section class="card card-pad" aria-labelledby="imp-visible-title">
+            <h2 id="imp-visible-title">Task sheet</h2>
+            <div class="field">
+              <label for="imp-visible">Task sheet file</label>
+              <input type="file" id="imp-visible" accept=".xlsx,.csv" />
+            </div>
+            <p class="hint" data-testid="imp-visible-out">No file chosen</p>
+          </section>
+          <section class="card card-pad" aria-labelledby="imp-hidden-title">
+            <h2 id="imp-hidden-title">Attachment</h2>
+            <input type="file" id="imp-hidden" hidden />
+            <button type="button" class="btn btn-secondary" id="imp-hidden-btn">Choose file</button>
+            <p class="hint" data-testid="imp-hidden-out">No file chosen</p>
+          </section>
+          <section class="card card-pad" aria-labelledby="imp-multi-title">
+            <h2 id="imp-multi-title">Receipts</h2>
+            <label class="btn btn-secondary">Add receipts<input type="file" id="imp-multi" multiple style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" /></label>
+            <p class="hint" data-testid="imp-multi-out">No file chosen</p>
+          </section>
+          <section class="card card-pad">
+            <div class="hint" id="imp-drop" style="border:2px dashed #ccc;padding:24px;text-align:center">Drop files here</div>
+          </section>
+        </div>`,
+    );
+    const show = (inputId, outId) => {
+      const input = document.getElementById(inputId);
+      input.addEventListener("change", () => {
+        const names = Array.from(input.files).map((f) => f.name);
+        document.querySelector(`[data-testid="${outId}"]`).textContent = names.length ? `Chosen: ${names.join(", ")}` : "No file chosen";
+      });
+    };
+    show("imp-visible", "imp-visible-out");
+    show("imp-hidden", "imp-hidden-out");
+    show("imp-multi", "imp-multi-out");
+    document.getElementById("imp-hidden-btn").addEventListener("click", () => document.getElementById("imp-hidden").click());
   }
 
   router();

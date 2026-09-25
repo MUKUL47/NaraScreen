@@ -212,6 +212,8 @@ const RECORD_DEFAULT_KEYS = ["dwellMs", "revealMs", "center", "typeDelayMs"] as 
 function entryShape(e: BeatEntry): unknown {
   if (isAct(e)) {
     const { note: _note, ...rest } = e;
+    // Same file name, new bytes → the page shows something else: re-record.
+    if (e.act === "upload" && e.files != null) return { ...rest, files: (Array.isArray(e.files) ? e.files : [e.files]).map(fileFingerprint) };
     return rest;
   }
   return {
@@ -270,6 +272,18 @@ export function assertSameStructure(job: JobState, script: DemoScript): void {
     details: { changedSteps, addedSteps, removedSteps, otherChanges: !changedSteps.length && !addedSteps.length && !removedSteps.length },
   };
   throw new AgentError("SCRIPT_STRUCTURE_CHANGED", "The script no longer matches this job's recording", init);
+}
+
+/** Content hash for files up to 64 MB; size + mtime above that (hashing GBs on every run is too slow). */
+function fileFingerprint(file: string): unknown {
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    return { file, missing: true };
+  }
+  if (st.size <= 64 * 1024 * 1024) return { file, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") };
+  return { file, size: st.size, mtimeMs: Math.round(st.mtimeMs) };
 }
 
 // ─── trace I/O ───────────────────────────────────────────────────────

@@ -38,8 +38,9 @@ export const DEFAULT_HOST = "127.0.0.1";
 export const MAX_BODY_BYTES = 5 * 1024 * 1024;
 /** PUT /v1/files: largest upload, streamed to disk. */
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
-/** File types an agent may upload (media for audio/music/source.video, JSON storage states). */
-export const UPLOAD_EXTENSIONS = [".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm", ".png", ".jpg", ".jpeg", ".json"];
+/** Uploaded files of these types are served inline; everything else under uploads/
+ *  (spreadsheets, PDFs, HTML, SVG… for the `upload` act) is served as an attachment. */
+export const INLINE_UPLOAD_EXTENSIONS = [".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm", ".png", ".jpg", ".jpeg", ".gif", ".webp"];
 export const MAX_WAIT_SEC = 300;
 export const HEARTBEAT_SEC = 15;
 /** SIGTERM → wait this long → SIGKILL. */
@@ -173,9 +174,9 @@ export const ROUTES: RouteDoc[] = [
   {
     method: "PUT",
     path: "/v1/files?path=<relative path>",
-    summary: "Uploads a file into `<workspace>/uploads/` (raw request body, e.g. `curl -T clip.mp3`). Use the returned `relativePath` in scripts (`audio`, `music.path`, `source.video`, `storageState`). Replaces an existing file.",
-    body: "The raw file bytes (not JSON), up to 2 GB. Allowed extensions: " + UPLOAD_EXTENSIONS.join(" ") + ".",
-    response: "`{ path, relativePath, bytes }` — `path` absolute, `relativePath` relative to the workspace (e.g. `uploads/clip.mp3`); `400` for absolute paths, `..`, symlinks or other extensions; `413` over the size limit.",
+    summary: "Uploads a file of any type into `<workspace>/uploads/` (raw request body, e.g. `curl -T clip.mp3`). Use the returned `relativePath` in scripts (`audio`, `music.path`, `source.video`, `storageState`, and the files an `upload` act chooses on the page). Replaces an existing file.",
+    body: "The raw file bytes (not JSON), up to 2 GB. Any file type.",
+    response: "`{ path, relativePath, bytes }` — `path` absolute, `relativePath` relative to the workspace (e.g. `uploads/clip.mp3`); `400` for absolute paths, `..`, hidden names or symlinks; `413` over the size limit. Downloaded back with GET /v1/files; anything that is not audio/video/image comes back as an attachment (`application/octet-stream`).",
   },
   {
     method: "GET",
@@ -1466,7 +1467,10 @@ class NaraServer {
       sendEnvelope(res, 200, success("files", { path: abs, entries }));
       return;
     }
-    sendFile(req, res, real, st);
+    // Uploads are agent-supplied: only media/images are rendered, the rest downloads.
+    const uploadsDir = path.join(this.ws, "uploads");
+    const inUploads = fs.existsSync(uploadsDir) && isInside(real, fs.realpathSync(uploadsDir));
+    sendFile(req, res, real, st, inUploads && !INLINE_UPLOAD_EXTENSIONS.includes(path.extname(real).toLowerCase()));
   }
 
   /** PUT /v1/files: stream the raw body into <workspace>/uploads/<path>. */
@@ -1480,8 +1484,6 @@ class NaraServer {
     if (!parts.length || parts.some((p) => p === ".." || p.startsWith(".") || !/^[A-Za-z0-9._-]+$/.test(p))) {
       throw usage(`Invalid upload path: ${raw}`, `${hint} Use letters, digits, ".", "_" and "-" in names; no "..".`);
     }
-    const ext = path.extname(parts[parts.length - 1]).toLowerCase();
-    if (!UPLOAD_EXTENSIONS.includes(ext)) throw usage(`Cannot upload "${ext || "(no extension)"}" files`, `Allowed: ${UPLOAD_EXTENSIONS.join(" ")}.`);
     const tooBig = () => usage(`Upload larger than ${MAX_UPLOAD_BYTES / 1024 ** 3} GB`, undefined, 413);
     if (Number(req.headers["content-length"] ?? 0) > MAX_UPLOAD_BYTES) {
       req.resume();
@@ -1521,7 +1523,7 @@ class NaraServer {
     fs.renameSync(tmp, dest); // replaces a previous upload (a symlink at dest is replaced, never followed)
     const relativePath = path.relative(this.ws, dest).split(path.sep).join("/");
     sendEnvelope(res, 200, success("files.upload", { path: dest, relativePath, bytes }, {
-      next: [`Reference it in a script as "${relativePath}" (e.g. "music": {"path": "${relativePath}"}), then POST /v1/scripts`],
+      next: [`Reference it in a script as "${relativePath}" (e.g. "music": {"path": "${relativePath}"}, or {"act": "upload", …, "files": "${relativePath}"}), then POST /v1/scripts`],
     }));
   }
 
@@ -1630,17 +1632,17 @@ const CONTENT_TYPES: Record<string, string> = {
   ".vtt": "text/vtt; charset=utf-8",
 };
 
-function sendFile(req: http.IncomingMessage, res: http.ServerResponse, file: string, st: fs.Stats) {
+function sendFile(req: http.IncomingMessage, res: http.ServerResponse, file: string, st: fs.Stats, attachment = false) {
   const size = st.size;
   const headers: http.OutgoingHttpHeaders = {
-    "Content-Type": CONTENT_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream",
+    "Content-Type": (!attachment && CONTENT_TYPES[path.extname(file).toLowerCase()]) || "application/octet-stream",
     "Accept-Ranges": "bytes",
     "Last-Modified": st.mtime.toUTCString(),
     "Cache-Control": "no-cache",
     "X-Content-Type-Options": "nosniff",
     // Job files are data, never an app: neutralize scripts in served HTML/SVG.
     "Content-Security-Policy": "sandbox",
-    "Content-Disposition": `inline; filename="${path.basename(file).replace(/[^\w.-]/g, "_")}"`,
+    "Content-Disposition": `${attachment ? "attachment" : "inline"}; filename="${path.basename(file).replace(/[^\w.-]/g, "_")}"`,
   };
   let start = 0;
   let end = size - 1;
@@ -1780,7 +1782,7 @@ function mediaPaths(env: Envelope): string[] {
 }
 
 /** Call `fn` on every file path a script references (storageState, useSession,
- *  source.video, music.path, narration audio incl. zoom targets); `fn` returns the
+ *  upload files, source.video, music.path, narration audio incl. zoom targets); `fn` returns the
  *  (possibly rewritten) path. Non-string values are left for validation to report. */
 function mapScriptFiles(script: Record<string, unknown>, fn: (p: string, at: string) => string) {
   const one = (o: Record<string, unknown>, key: string, at: string) => {
@@ -1802,6 +1804,10 @@ function mapScriptFiles(script: Record<string, unknown>, fn: (p: string, at: str
   }
   for (const [e, at] of entries) {
     if (e.act === "useSession") one(e, "storageState", `${at}.storageState`);
+    if (e.act === "upload") {
+      if (Array.isArray(e.files)) e.files.forEach((_, k) => one(e.files as Record<string, unknown>, String(k), `${at}.files[${k}]`));
+      else one(e, "files", `${at}.files[0]`);
+    }
     audio(e, at);
     if (Array.isArray(e.targets)) e.targets.forEach((t, k) => isObject(t) && audio(t, `${at}.targets[${k}]`));
   }

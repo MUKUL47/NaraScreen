@@ -925,9 +925,52 @@ describe("uploads (PUT /v1/files)", () => {
     assert.equal((await request(`${base}/v1/files?path=uploads/tone.mp3`)).status, 200);
   });
 
-  it("rejects absolute paths, traversal, dotfiles, other extensions, symlink escapes and oversize bodies", async () => {
+  it("accepts any file type; non-media downloads back as an attachment", async () => {
+    const bytes = Buffer.from("PK\x03\x04 fake spreadsheet");
+    const up = await put("uploads/comp-sheet.xlsx", bytes);
+    assert.equal(up.status, 200, up.text);
+    assert.equal(up.json.result.relativePath, "uploads/comp-sheet.xlsx");
+    const got = await request(`${base}/v1/files?path=uploads/comp-sheet.xlsx`);
+    assert.equal(got.status, 200);
+    assert.equal(got.headers["content-type"], "application/octet-stream");
+    assert.match(String(got.headers["content-disposition"]), /^attachment; filename="comp-sheet.xlsx"/);
+    assert.equal(got.text, bytes.toString("utf-8"));
+    // HTML/SVG uploads are never rendered on the API's origin
+    assert.equal((await put("page.html", "<script>alert(1)</script>")).status, 200);
+    const html = await request(`${base}/v1/files?path=uploads/page.html`);
+    assert.equal(html.headers["content-type"], "application/octet-stream");
+    assert.match(String(html.headers["content-disposition"]), /^attachment/);
+    assert.equal((await put("noext", "x")).status, 200, "no extension is fine too");
+  });
+
+  it("an inline script's upload files resolve against the workspace; missing → files[k]; outside → rejected", async () => {
+    await put("uploads/comp-sheet.xlsx", "data");
+    const upStep = (files: unknown) => ({
+      ...VALID,
+      scope: "upload-demo",
+      steps: [{ id: "intro", beat: [{ act: "goto", path: "/" }, { act: "upload", css: "input[type=file]", files }] }],
+    });
+    const ok = await request(`${base}/v1/validate`, { body: { script: upStep("uploads/comp-sheet.xlsx") } });
+    assert.equal(ok.status, 200, ok.text);
+    const saved = await request(`${base}/v1/scripts`, { body: { name: "upload-demo", script: upStep(["uploads/comp-sheet.xlsx"]) } });
+    assert.equal(saved.status, 200, saved.text);
+    const onDisk = JSON.parse(fs.readFileSync(saved.json.result.scriptPath, "utf-8"));
+    assert.deepEqual(onDisk.steps[0].beat[1].files, [path.join(WS, "uploads", "comp-sheet.xlsx")]);
+    const missing = await request(`${base}/v1/validate`, { body: { script: upStep(["uploads/comp-sheet.xlsx", "uploads/nope.pdf"]) } });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.json.error.code, "SCRIPT_INVALID");
+    assert.ok(JSON.stringify(missing.json.error).includes("steps[0].beat[1].files[1]"), missing.text);
+    for (const bad of ["../outside.xlsx", "uploads/../../x.xlsx", "/etc/passwd"]) {
+      const r = await request(`${base}/v1/validate`, { body: { script: upStep(bad) } });
+      assert.equal(r.status, 400, `${bad} → ${r.status}`);
+      assert.equal(r.json.error.code, "SCRIPT_INVALID");
+      assert.ok(JSON.stringify(r.json.error).includes("files[0]"), r.text);
+    }
+  });
+
+  it("rejects absolute paths, traversal, dotfiles, symlink escapes and oversize bodies", async () => {
     fs.symlinkSync(OUTSIDE, path.join(WS, "uploads", "evil"));
-    const bad = ["/tmp/x.mp3", "../x.mp3", "uploads/../../x.mp3", "a/../../x.mp3", ".hidden.mp3", "x.sh", "noext", "evil/x.mp3", "C:/x.mp3", ""];
+    const bad = ["/tmp/x.mp3", "../x.mp3", "uploads/../../x.mp3", "a/../../x.mp3", ".hidden.mp3", "evil/x.mp3", "C:/x.mp3", ""];
     for (const p of bad) {
       const r = await put(p, "data");
       assert.equal(r.status, 400, `${p} → ${r.status}`);

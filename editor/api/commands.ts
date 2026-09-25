@@ -123,7 +123,7 @@ export const COMMANDS: CommandDoc[] = [
       out("Folder for screenshots and the accessibility tree (default ./narascreen-out/inspect/<time>)."),
       headed,
     ],
-    output: "{ url, title, screenshot, headings, elements: [{ role, name, selector, matches, visible, rect }], ariaSnapshotPath }",
+    output: "{ url, title, screenshot, headings, elements: [{ role, name, selector, matches, visible, rect, inputType? }], ariaSnapshotPath } — file inputs are listed even when hidden, with inputType \"file\"",
     heavy: true,
   },
   {
