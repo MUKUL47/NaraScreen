@@ -140,21 +140,50 @@ export function createJob(jobDir: string, loaded: LoadedScript, opts: { force?: 
 export async function withJobLock<T>(jobDir: string, fn: () => Promise<T>): Promise<T> {
   const p = jobPaths(jobDir);
   fs.mkdirSync(p.root, { recursive: true });
-  if (fs.existsSync(p.lock)) {
-    const pid = Number(fs.readFileSync(p.lock, "utf-8").trim());
-    if (pid && pid !== process.pid && isAlive(pid)) {
-      throw new AgentError("JOB_LOCKED", `Job ${p.root} is in use by another NaraScreen process (pid ${pid})`, {
+  acquireLock(p.lock, p.root);
+  try {
+    return await fn();
+  } finally {
+    // Only remove the lock if it is still ours.
+    try {
+      if (fs.readFileSync(p.lock, "utf-8").trim() === lockToken()) fs.rmSync(p.lock, { force: true });
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/** "<pid>:<process start time>" — a reused pid does not look like the old owner. */
+function lockToken(pid = process.pid): string {
+  return `${pid}:${pid === process.pid ? Math.round(Date.now() / 1000 - process.uptime()) : "?"}`;
+}
+
+/** Create the lock file atomically (O_EXCL); take over only provably stale locks. */
+function acquireLock(lockPath: string, root: string): void {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      fs.writeSync(fd, lockToken());
+      fs.closeSync(fd);
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    const owner = fs.existsSync(lockPath) ? fs.readFileSync(lockPath, "utf-8").trim() : "";
+    const pid = Number(owner.split(":")[0]);
+    if (pid && isAlive(pid)) {
+      throw new AgentError("JOB_LOCKED", `Job ${root} is in use by another NaraScreen process (pid ${pid})`, {
         hint: "Wait for it to finish (`narascreen status <job>`), or use a different --out for parallel work.",
         details: { pid },
       });
     }
+    // Stale (owner exited). Remove and retry once; a racing process that wins
+    // the retry makes us fail with JOB_LOCKED on the next loop.
+    fs.rmSync(lockPath, { force: true });
   }
-  fs.writeFileSync(p.lock, String(process.pid));
-  try {
-    return await fn();
-  } finally {
-    fs.rmSync(p.lock, { force: true });
-  }
+  throw new AgentError("JOB_LOCKED", `Job ${root} is in use by another NaraScreen process`, {
+    hint: "Wait for it to finish, or use a different --out for parallel work.",
+  });
 }
 
 function isAlive(pid: number): boolean {

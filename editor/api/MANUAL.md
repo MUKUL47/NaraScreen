@@ -261,8 +261,9 @@ A complete example (a task-manager web app):
 - An **fx happens at the moment it appears in the list** — put it right after the act it belongs to.
 - **Narration freezes the video** (default) for as long as the speech lasts, so the viewer hears the
   explanation while looking at the frame it describes. Use `"freeze": false` to talk over moving video.
-- `spotlight`, `callout` and `blur` stay on screen **until the next narration in the same step has finished**
-  (`duration: "auto"`, the default), or 3 s if the step has no narration after them. Give a number to override.
+- `spotlight` and `callout` stay on screen **until the next narration in the same step has finished**
+  (`duration: "auto"`, the default), or 3 s if the step has no narration after them. `blur` defaults to the
+  end of its step (`"step-end"`). Any of them accepts seconds, `"step-end"` or `"end"` (rest of the video).
 
 ### Patterns that make good demos
 
@@ -271,7 +272,7 @@ A complete example (a task-manager web app):
 - **Wait for the screen, not the clock:** after navigation or anything asynchronous, add a `waitFor`
   on something that only appears when the page is ready. Use `wait` only for pure animations.
 - **Use `setup` for anything the viewer shouldn't see** (logging in, resetting data). It runs before recording starts.
-- **Blur secrets** (API keys, emails, balances) with `{"fx": "blur", "anchor": …, "duration": "end"}` placed as soon as they appear — `"end"` keeps them hidden for the rest of the video (`"step-end"`: until the step ends).
+- **Blur secrets** (API keys, emails, balances) with `{"fx": "blur", "anchor": …}` placed as soon as they appear. A blur lasts until its step ends by default; add `"duration": "end"` to keep it hidden for the rest of the video. A blur lasts until its step ends by default; add `"duration": "end"` to keep it hidden for the rest of the video.
 
 ---
 
@@ -316,9 +317,9 @@ disappeared before you reached it (act on it sooner or don't target it).
 |---|---|---|---|
 | `narrate` | Voiceover; the frame freezes while it plays (`freeze: false` = video keeps moving) | no | length of the speech + 0.5 s |
 | `zoom` | Smooth zoom into the element on a frozen frame, hold, zoom out. Add `narrate` to talk while zoomed in | yes | `zoomDuration` in + hold + out; hold = speech length when narrated, else `zoomHold` |
-| `spotlight` | Everything except the element is dimmed | yes | `auto` (until the step's next narration ends), `step-end`, `end`, or seconds |
+| `spotlight` | Everything except the element is dimmed | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
 | `callout` | Text label: `label` (at the element), `lower-third` (bottom banner), `step-counter` ("Step N: …") | `label`/`step-counter`: yes | `auto` or seconds |
-| `blur` | The element is blurred (hide secrets) | yes | `auto`, `step-end`, `end` (rest of the video) or seconds |
+| `blur` | The element is blurred (hide secrets) | yes | `step-end` (default), `end` (rest of the video), `auto`, or seconds |
 | `pause` | Frame freezes silently | no | `seconds` (default 3) |
 | `speed` | A stretch plays faster (`factor: 3`) or in slow motion (`factor: 0.5`) | no | a range (below) |
 | `skip` | A stretch is cut out — e.g. waiting for a slow page | no | a range (below) |

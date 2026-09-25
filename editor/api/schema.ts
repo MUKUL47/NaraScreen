@@ -415,7 +415,7 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
     anchors: z.array(SelectorSchema).min(1).max(10).optional().describe("Several elements blurred at once. Use instead of anchor."),
     rect: RectSchema.optional(),
     rects: z.array(RectSchema).min(1).max(10).optional(),
-    duration: DurationSchema.optional(),
+    duration: DurationSchema.optional().describe("How long the blur stays. Default \"step-end\" (until this step ends) so a secret is never unblurred mid-step; use \"end\" to keep it hidden for the rest of the video."),
     radius: z.number().int().min(1).max(100).optional().describe("Blur strength (default 20)."),
   }, "Blur elements (hide secrets)."),
   fx("callout", {
