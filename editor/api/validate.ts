@@ -373,13 +373,17 @@ function checkSemantics(script: DemoScript, dir: string, warnings: string[]): Sc
           message: `${fx.fx} needs ${videoMode ? "a rect (or rects)" : "an element to target"}`,
           hint: videoMode
             ? "Give rect: [x, y, width, height] in source-video pixels (look at `preview --raw` frames)."
-            : "Add an `anchor` selector, or place it right after a click/fill/select/hover/scroll in the same step (it then targets that element).",
+            : "Add an `anchor` selector, or place it right after a click/fill/select/hover/scroll/waitFor in the same step (it then targets that element).",
         });
       }
       if (fx.fx === "callout") {
         const positioned = (fx.style ?? "label") !== "lower-third";
         if (positioned && !ownsRect && (videoMode || !hasRect)) {
           warnings.push(`${ep}: callout has no element to sit next to, so it will be drawn at the top-left. Add an ${videoMode ? "rect" : "anchor"} or use style "lower-third".`);
+        }
+        if (fx.text && typeof fx.text === "object") checkLangMap(fx.text, `${ep}.text`, langs, true, issues);
+        else if (typeof fx.text === "string" && langs.some((l) => l !== "en")) {
+          warnings.push(`${ep}: callout text is the same in every language (${langs.join(", ")}). Use a map like {"en": "…", "hi": "…"}.`);
         }
         if (fx.style === "step-counter" && fx.step == null) {
           warnings.push(`${ep}: step-counter callout has no \`step\` number.`);
@@ -716,7 +720,7 @@ export function scriptSummary(script: DemoScript) {
         acts++;
         if (e.act === "wait") recordMs += e.ms ?? 0;
         if (e.act === "fill") recordMs += (e.value?.length ?? 0) * d.typeDelayMs + d.revealMs;
-        if (RECT_ACTS.includes(e.act)) recordMs += d.revealMs;
+        if (RECT_ACTS.includes(e.act) && e.act !== "waitFor" && e.act !== "press") recordMs += d.revealMs;
         continue;
       }
       const fx = e as FxEntry;

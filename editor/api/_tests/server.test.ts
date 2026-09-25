@@ -83,10 +83,28 @@ const scope = () => { try { return JSON.parse(fs.readFileSync(positional, "utf-8
     ev("stage", "Checking", { stage: "record" });
     return done(true, { result: { slots: 2, durationSec: 0.5 } }, 0);
   }
-  if (cmd === "status") { process.stdout.write("this is not json\n"); process.stderr.write("TypeError: boom\n"); process.exitCode = 4; return; }
-  if (cmd === "doctor") return done(true, { result: { ready: true, checks: [{ id: "node", ok: true, required: true, detail: "fake" }] } }, 0);
+  if (cmd === "status") {
+    if (/slow/.test(positional || "")) await sleep(600);
+    process.stdout.write("this is not json\n"); process.stderr.write("TypeError: boom\n"); process.exitCode = 4; return;
+  }
+  if (cmd === "doctor") { await sleep(400); return done(true, { result: { ready: true, checks: [{ id: "node", ok: true, required: true, detail: "fake" }] } }, 0); }
+  if (cmd === "preview" && /spam/.test(positional || "")) {
+    // A runaway child: far more events than the per-run cap, then one endless line.
+    let chunk = "";
+    for (let i = 1; i <= 51000; i++) { chunk += JSON.stringify({ ts: "t", type: "log", message: "line " + i }) + "\n"; if (i % 1000 === 0) { process.stderr.write(chunk); chunk = ""; } }
+    process.stderr.write(JSON.stringify({ ts: "t", type: "stage", stage: "preview", message: "still reported after the cap" }) + "\n");
+    process.stderr.write("x".repeat(100000));
+    await new Promise((r) => process.stderr.write("", r));
+    return done(true, { result: { spam: true } }, 0);
+  }
   if (cmd === "produce") return done(false, { error: { code: "TTS_UNAVAILABLE", message: "Kokoro down", hint: "run doctor" } }, 2);
-  return done(true, { result: { argv } }, 0); // inspect, preview, validate: echo the arguments
+  if (cmd === "validate") {
+    // Shows what the child received; the secret itself must come back masked.
+    ev("log", "typing " + (process.env.DEMO_PASSWORD || "(none)"));
+    return done(true, { result: { argv, caller: process.env.NARASCREEN_CALLER, workspace: process.env.NARASCREEN_WORKSPACE,
+      gotSecret: process.env.DEMO_PASSWORD === "hunter2-secret", echo: process.env.DEMO_PASSWORD || null } }, 0);
+  }
+  return done(true, { result: { argv } }, 0); // inspect, preview: echo the arguments
 })();
 `;
 
@@ -215,10 +233,15 @@ after(async () => {
 // ─── docs ────────────────────────────────────────────────────────────
 
 describe("docs routes", () => {
-  it("GET / redirects to /docs", async () => {
-    const r = await request(`${base}/`);
-    assert.equal(r.status, 302);
-    assert.equal(r.headers.location, "/docs");
+  it("GET / redirects browsers to /docs and gives everyone else the llms.txt orientation", async () => {
+    const browser = await request(`${base}/`, { headers: { Accept: "text/html,application/xhtml+xml,*/*;q=0.8" } });
+    assert.equal(browser.status, 302);
+    assert.equal(browser.headers.location, "/docs");
+    const agent = await request(`${base}/`);
+    assert.equal(agent.status, 200);
+    assert.match(String(agent.headers["content-type"]), /^text\/plain/);
+    assert.ok(agent.text.includes(`${base}/docs.md`));
+    assert.match(String(agent.headers.vary), /Accept/);
   });
 
   it("GET /docs is a standalone HTML page", async () => {
@@ -555,6 +578,9 @@ describe("runs", () => {
     assert.equal(got.json.result.status, "succeeded");
     assert.equal(got.json.result.exitCode, 0);
     assert.equal(got.json.result.eventCount, live.events.length - 1);
+    assert.equal(got.json.result.ok, true);
+    assert.deepEqual(got.json.result.output, got.json.result.outcome.result, "output = outcome.result");
+    assert.ok(got.json.result.output.videos[0].path.endsWith("final_en.mp4"));
     assert.ok(got.json.next.some((n: string) => n.includes("/v1/files?path=")), "next offers the video download");
     const saved = JSON.parse(fs.readFileSync(path.join(WS, "runs", `${res.runId}.json`), "utf-8"));
     assert.equal(saved.status, "succeeded");
@@ -576,6 +602,8 @@ describe("runs", () => {
     assert.equal(w.json.result.status, "failed");
     assert.equal(w.json.result.exitCode, 1);
     assert.equal(w.json.result.outcome.error.code, "SELECTOR_NOT_FOUND");
+    assert.equal(w.json.result.ok, false);
+    assert.equal(w.json.result.output.code, "SELECTOR_NOT_FOUND", "output = outcome.error on failure");
   });
 
   it("a CLI that dies without an envelope → failed with INTERNAL + stderr tail", async () => {
@@ -590,22 +618,17 @@ describe("runs", () => {
     assert.equal(w.json.result.job, job);
   });
 
-  it("maps options to flags: inspect out folder, preview --raw, absolute job outside the workspace", async () => {
+  it("maps options to flags: inspect out folder, preview --raw, absolute job inside the workspace", async () => {
     const ins = await request(`${base}/v1/runs`, { body: { command: "inspect", options: { url: "http://127.0.0.1:9/", fullPage: true } } });
     const insDone = await request(`${base}/v1/runs/${ins.json.result.runId}?wait=20`);
     const argv: string[] = insDone.json.result.outcome.result.argv;
     assert.ok(argv.includes(`--out=${path.join(WS, "inspect", ins.json.result.runId)}`), argv.join(" "));
     assert.ok(argv.includes("--full-page") && argv.includes("--url=http://127.0.0.1:9/"));
 
-    const outsideJob = path.join(OUTSIDE, "job-a");
-    const pv = await request(`${base}/v1/runs`, { body: { command: "preview", job: outsideJob, options: { raw: true, tiles: 6 } } });
+    const absJob = path.join(WS, "elsewhere", "job-a");
+    const pv = await request(`${base}/v1/runs`, { body: { command: "preview", job: absJob, options: { raw: true, tiles: 6 } } });
     const pvDone = await request(`${base}/v1/runs/${pv.json.result.runId}?wait=20`);
-    assert.deepEqual(pvDone.json.result.outcome.result.argv.slice(0, 4), ["preview", outsideJob, "--raw", "--tiles=6"]);
-    // That job folder is now downloadable; its sibling is not.
-    fs.mkdirSync(outsideJob, { recursive: true });
-    fs.writeFileSync(path.join(outsideJob, "contact.jpg"), "jpg");
-    assert.equal((await request(`${base}/v1/files?path=${encodeURIComponent(path.join(outsideJob, "contact.jpg"))}`)).status, 200);
-    assert.equal((await request(`${base}/v1/files?path=${encodeURIComponent(path.join(OUTSIDE, "secret.txt"))}`)).status, 403);
+    assert.deepEqual(pvDone.json.result.outcome.result.argv.slice(0, 4), ["preview", absJob, "--raw", "--tiles=6"]);
   });
 
   it("queues heavy runs (concurrency 1), cancel kills the whole process tree, the queue moves on", async () => {
@@ -671,6 +694,312 @@ describe("runs", () => {
   });
 });
 
+describe("review fixes: workspace containment (6, 7, 8)", () => {
+  const secret = () => path.join(OUTSIDE, "secret.txt");
+
+  it("6: job / options.out / storage-state outside the workspace → 400, and nothing becomes downloadable", async () => {
+    const cases: unknown[] = [
+      { command: "status", job: "/" },
+      { command: "status", job: OUTSIDE },
+      { command: "preview", job: `${WS}/../outside` },
+      { command: "make", script: VALID, options: { out: OUTSIDE } },
+      { command: "make", script: VALID, options: { out: "../outside" } },
+      { command: "check", script: VALID, options: { out: "/tmp" } },
+      { command: "inspect", options: { url: "http://127.0.0.1:9/", out: OUTSIDE } },
+      { command: "inspect", options: { url: "http://127.0.0.1:9/", storageState: path.join(OUTSIDE, "secret.txt") } },
+    ];
+    for (const body of cases) {
+      const r = await request(`${base}/v1/runs`, { body });
+      assert.equal(r.status, 400, JSON.stringify(body));
+      assert.equal(r.json.error.code, "USAGE");
+      assert.match(r.json.error.message, /must be inside the workspace/, JSON.stringify(body));
+    }
+    const home = await request(`${base}/v1/files?path=${encodeURIComponent(path.join(process.env.HOME ?? "/root", ".bashrc"))}`);
+    assert.equal(home.status, 403);
+    assert.equal((await request(`${base}/v1/files?path=${encodeURIComponent(secret())}`)).status, 403);
+  });
+
+  it("6: a script's file references must be inside the workspace too", async () => {
+    const outsideFile = secret();
+    const scripts = [
+      { ...VALID, storageState: outsideFile },
+      { ...VALID, storageState: "../outside/secret.txt" },
+      { ...VALID, music: { path: outsideFile } },
+      { ...VALID, steps: [{ id: "a", beat: [{ fx: "narrate", narrate: "hi", audio: outsideFile }] }] },
+      { ...VALID, steps: [{ id: "a", beat: [{ fx: "narrate", narrate: { en: "hi" }, audio: { en: outsideFile } }] }] },
+      { ...VALID, setup: [{ act: "useSession", storageState: outsideFile }] },
+      { version: 1, scope: "v", source: { video: outsideFile }, steps: [{ id: "a", beat: [{ fx: "narrate", narrate: "hi", at: 1 }] }] },
+    ];
+    for (const script of scripts) {
+      for (const [route, body] of [
+        ["/v1/validate", { script }],
+        ["/v1/scripts", { name: "x", script }],
+        ["/v1/runs", { command: "make", script }],
+      ] as const) {
+        const r = await request(`${base}${route}`, { body });
+        assert.equal(r.status, 400, `${route} ${JSON.stringify(script)}`);
+        assert.equal(r.json.error.code, "SCRIPT_INVALID");
+        assert.match(JSON.stringify(r.json.error.details.issues), /inside the workspace/);
+      }
+    }
+    // ${env:} paths are checked after substitution.
+    process.env.NS_TEST_STATE = outsideFile;
+    const env = await request(`${base}/v1/validate`, { body: { script: { ...VALID, storageState: "${env:NS_TEST_STATE}" } } });
+    assert.equal(env.status, 400);
+    assert.match(JSON.stringify(env.json.error.details.issues), /inside the workspace/);
+  });
+
+  it("7: a symlink inside the workspace cannot be used as a job folder or to download", async () => {
+    fs.symlinkSync(OUTSIDE, path.join(WS, "jobs", "linked"));
+    const r = await request(`${base}/v1/runs`, { body: { command: "status", job: "linked" } });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error.message, /inside the workspace/);
+    const viaAbs = await request(`${base}/v1/runs`, { body: { command: "status", job: path.join(WS, "jobs", "linked", "deeper") } });
+    assert.equal(viaAbs.status, 400);
+    const f = await request(`${base}/v1/files?path=${encodeURIComponent(path.join(WS, "jobs", "linked", "secret.txt"))}`);
+    assert.equal(f.status, 403);
+  });
+
+  it("8: scriptPath is confined, must be .json, and parse errors never echo file contents", async () => {
+    for (const p of ["/etc/passwd", secret(), "../outside/secret.txt"]) {
+      const v = await request(`${base}/v1/validate`, { body: { scriptPath: p } });
+      assert.equal(v.status, 400, p);
+      assert.ok(!v.text.includes("root:") && !v.text.includes("top secret"));
+      const d = await request(`${base}/v1/doctor?scriptPath=${encodeURIComponent(p)}`);
+      assert.equal(d.status, 400, `doctor ${p}`);
+      const run = await request(`${base}/v1/runs`, { body: { command: "validate", scriptPath: p } });
+      assert.equal(run.status, 400, `run ${p}`);
+    }
+    fs.writeFileSync(path.join(WS, "mine", "notes.txt"), "{}");
+    assert.equal((await request(`${base}/v1/validate`, { body: { scriptPath: "mine/notes.txt" } })).status, 400);
+    fs.writeFileSync(path.join(WS, "mine", "bad.json"), "root:x:0:0:SUPERSECRET:/root:/bin/bash\n");
+    const bad = await request(`${base}/v1/validate`, { body: { scriptPath: "mine/bad.json" } });
+    assert.equal(bad.status, 400);
+    assert.equal(bad.json.error.code, "SCRIPT_INVALID_JSON");
+    assert.ok(!bad.text.includes("SUPERSECRET") && !bad.text.includes("root:x"), bad.json.error.message);
+  });
+
+  it("8: only http(s) URLs: no file:// pages to screenshot, no odd TTS endpoints", async () => {
+    const scripts = [
+      { ...VALID, baseUrl: "file:///etc" },
+      { ...VALID, steps: [{ id: "a", beat: [{ act: "goto", url: "file:///etc/passwd" }, { fx: "narrate", narrate: "x" }] }] },
+    ];
+    for (const script of scripts) {
+      const r = await request(`${base}/v1/validate`, { body: { script } });
+      assert.equal(r.status, 400, JSON.stringify(script));
+      assert.equal(r.json.error.code, "SCRIPT_INVALID");
+    }
+    const ins = await request(`${base}/v1/runs`, { body: { command: "inspect", options: { url: "file:///etc/passwd" } } });
+    assert.equal(ins.status, 400);
+  });
+});
+
+describe("review fixes: browser attacks (9)", () => {
+  it("refuses Sec-Fetch-Site cross-site / same-site requests without a matching Origin", async () => {
+    const cross = await request(`${base}/v1/health`, { headers: { "Sec-Fetch-Site": "cross-site" } });
+    assert.equal(cross.status, 403);
+    const sameSite = await request(`${base}/v1/health`, { headers: { "Sec-Fetch-Site": "same-site" } });
+    assert.equal(sameSite.status, 403);
+    const otherPort = await request(`${base}/v1/health`, { headers: { "Sec-Fetch-Site": "same-site", Origin: "http://127.0.0.1:1" } });
+    assert.equal(otherPort.status, 403);
+    const video = await request(`${base}/v1/files?path=${encodeURIComponent(path.join(WS, "mine", "clip.mp4"))}`, { headers: { "Sec-Fetch-Site": "cross-site" } });
+    assert.equal(video.status, 403, "no-cors <video> from another site");
+    for (const site of ["none", "same-origin"]) {
+      assert.equal((await request(`${base}/v1/health`, { headers: { "Sec-Fetch-Site": site } })).status, 200, site);
+    }
+  });
+
+  it("will not listen on a non-loopback address without a token; with one, Host is still checked", async () => {
+    await assert.rejects(
+      startServer({ port: 0, host: "0.0.0.0", workspace: path.join(TMP, "ws-open"), concurrency: 1, cliPath: FAKE_CLI }),
+      /without a token/,
+    );
+    const s = await startServer({ port: 0, host: "0.0.0.0", workspace: path.join(TMP, "ws-open"), concurrency: 1, token: "t0k", cliPath: FAKE_CLI });
+    try {
+      const auth = { Authorization: "Bearer t0k" };
+      assert.equal((await request(`${s.url}/v1/health`, { headers: auth })).status, 200);
+      const port = new URL(s.url).port;
+      assert.equal((await request(`${s.url}/v1/health`, { headers: { ...auth, Host: `evil.example:${port}` } })).status, 403);
+      assert.equal((await request(`${s.url}/v1/health`, { headers: { ...auth, Host: `10.1.2.3:${port}` } })).status, 200);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
+describe("review fixes: resource limits (10)", () => {
+  it("concurrent GET /v1/doctor share one process", async () => {
+    const before = readArgs().filter((a) => a[0] === "doctor").length;
+    const all = await Promise.all(Array.from({ length: 20 }, () => request(`${base}/v1/doctor`)));
+    assert.ok(all.every((r) => r.status === 200 && r.json.result.ready));
+    const spawned = readArgs().filter((a) => a[0] === "doctor").length - before;
+    assert.equal(spawned, 1, `${spawned} doctor processes for 20 requests`);
+  });
+
+  it(`light runs are capped at a few at once; the rest wait`, async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const r = await request(`${base}/v1/runs`, { body: { command: "status", job: `slow-${i}` } });
+      assert.equal(r.status, 202);
+      ids.push(r.json.result.runId);
+    }
+    const h = await request(`${base}/v1/health`);
+    assert.ok(h.json.result.runs.running <= 4, JSON.stringify(h.json.result.runs));
+    assert.ok(h.json.result.runs.queued >= 4, JSON.stringify(h.json.result.runs));
+    for (const id of ids) assert.equal((await request(`${base}/v1/runs/${id}?wait=20`)).json.result.status, "failed");
+  });
+
+  it("caps queued runs (429)", async () => {
+    const saved = await request(`${base}/v1/scripts`, { body: { name: "busy", script: withScope("busy-demo") } });
+    const scriptPath = saved.json.result.scriptPath;
+    const blocker = await request(`${base}/v1/runs`, { body: { command: "record", scriptPath, job: "busy-blocker" } });
+    const ids = [blocker.json.result.runId];
+    let status = 0;
+    for (let i = 0; i < 60 && status !== 429; i++) {
+      const r = await request(`${base}/v1/runs`, { body: { command: "check", scriptPath } });
+      status = r.status;
+      if (r.status === 202) ids.push(r.json.result.runId);
+    }
+    assert.equal(status, 429);
+    assert.equal(ids.length, 51, "1 running + 50 waiting");
+    for (const id of ids.reverse()) await request(`${base}/v1/runs/${id}/cancel`, { method: "POST" });
+  });
+
+  it("bounds events per run and line length; the full history replays from disk", async () => {
+    const r = await request(`${base}/v1/runs`, { body: { command: "preview", job: "spam-job" } });
+    const done = await request(`${base}/v1/runs/${r.json.result.runId}?wait=60`);
+    assert.equal(done.json.result.status, "succeeded");
+    const count = done.json.result.eventCount;
+    assert.ok(count <= 50_002 && count >= 50_000, `eventCount ${count}`);
+    const nd = await request(`${base}/v1/runs/${r.json.result.runId}/events?format=ndjson`);
+    const lines = nd.text.trim().split("\n").map((l) => JSON.parse(l));
+    assert.equal(lines.length, count + 1, "every stored event + end");
+    assert.ok(lines.some((l) => l.message === "still reported after the cap"), "milestones survive the cap");
+    assert.ok(lines.every((l) => l.type === "end" || l.message.length <= 16 * 1024 + 200), "long lines truncated");
+    assert.deepEqual(lines.slice(0, -1).map((l) => l.seq), lines.slice(0, -1).map((_, i) => i + 1));
+  });
+
+  it("runs not in memory load from disk on demand", async () => {
+    const rec = { runId: "r_ondisk-1", command: "status", status: "succeeded", createdAt: "2020-01-01T00:00:00.000Z", args: [], cli: "narascreen status", eventCount: 0, serverPid: 1 };
+    fs.writeFileSync(path.join(WS, "runs", "r_ondisk-1.json"), JSON.stringify(rec));
+    const r = await request(`${base}/v1/runs/r_ondisk-1`);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.result.status, "succeeded");
+    assert.equal((await request(`${base}/v1/runs/${encodeURIComponent("../scripts/x")}`)).status, 404);
+  });
+});
+
+describe("uploads (PUT /v1/files)", () => {
+  const put = (p: string, body: string | Buffer, headers: Record<string, string> = {}) =>
+    new Promise<Res>((resolve, reject) => {
+      const req = http.request(`${base}/v1/files?path=${encodeURIComponent(p)}`, { method: "PUT", headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf-8");
+          resolve({ status: res.statusCode ?? 0, headers: res.headers, text, json: JSON.parse(text) });
+        });
+      });
+      req.on("error", reject);
+      req.end(body);
+    });
+
+  it("uploads into <workspace>/uploads and the relative path works as music in inline and saved scripts", async () => {
+    const r = await put("uploads/tone.mp3", Buffer.alloc(3000, 1));
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json.result, { path: path.join(WS, "uploads", "tone.mp3"), relativePath: "uploads/tone.mp3", bytes: 3000 });
+    assert.equal(fs.statSync(path.join(WS, "uploads", "tone.mp3")).size, 3000);
+    const nested = await put("music/bed.wav", "RIFF");
+    assert.equal(nested.json.result.relativePath, "uploads/music/bed.wav", "uploads/ prefix is implied");
+
+    const script = { ...VALID, music: { path: "uploads/tone.mp3" } };
+    const v = await request(`${base}/v1/validate`, { body: { script } });
+    assert.equal(v.status, 200, v.text);
+    const saved = await request(`${base}/v1/scripts`, { body: { name: "with-music", script } });
+    assert.equal(saved.status, 200, saved.text);
+    const onDisk = JSON.parse(fs.readFileSync(saved.json.result.scriptPath, "utf-8"));
+    assert.equal(onDisk.music.path, path.join(WS, "uploads", "tone.mp3"), "saved with the workspace-resolved path");
+    const byPath = await request(`${base}/v1/validate`, { body: { scriptPath: saved.json.result.scriptPath } });
+    assert.equal(byPath.status, 200, byPath.text);
+    // downloadable again
+    assert.equal((await request(`${base}/v1/files?path=uploads/tone.mp3`)).status, 200);
+  });
+
+  it("rejects absolute paths, traversal, dotfiles, other extensions, symlink escapes and oversize bodies", async () => {
+    fs.symlinkSync(OUTSIDE, path.join(WS, "uploads", "evil"));
+    const bad = ["/tmp/x.mp3", "../x.mp3", "uploads/../../x.mp3", "a/../../x.mp3", ".hidden.mp3", "x.sh", "noext", "evil/x.mp3", "C:/x.mp3", ""];
+    for (const p of bad) {
+      const r = await put(p, "data");
+      assert.equal(r.status, 400, `${p} → ${r.status}`);
+      assert.equal(r.json.error.code, "USAGE");
+    }
+    assert.equal(fs.readdirSync(OUTSIDE).includes("x.mp3"), false);
+    const big = await new Promise<number>((resolve, reject) => {
+      const req = http.request(`${base}/v1/files?path=big.mp4`, { method: "PUT", headers: { "Content-Length": String(3 * 1024 ** 3) } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+        req.destroy();
+      });
+      req.on("error", reject);
+      req.write("x");
+    });
+    assert.equal(big, 413);
+    const cross = await put("x.mp3", "d", { "Sec-Fetch-Site": "cross-site" });
+    assert.equal(cross.status, 403);
+  });
+});
+
+describe("client env for ${env:NAME}", () => {
+  const SECRET = "hunter2-secret";
+  const withPlaceholder = { ...VALID, scope: "env-demo", setup: [{ act: "fill", label: "Password", value: "${env:DEMO_PASSWORD}" }] };
+
+  it("runs get the value, markers are set, and the value never leaves the server", async () => {
+    const missing = await request(`${base}/v1/runs`, { body: { command: "validate", script: withPlaceholder } });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.json.error.code, "ENV_VAR_MISSING");
+    assert.match(missing.json.error.hint, /"env": \{"DEMO_PASSWORD"/);
+
+    const r = await request(`${base}/v1/runs`, { body: { command: "validate", script: withPlaceholder, env: { DEMO_PASSWORD: SECRET } } });
+    assert.equal(r.status, 202, r.text);
+    const id = r.json.result.runId;
+    const done = await request(`${base}/v1/runs/${id}?wait=20`);
+    const out = done.json.result.output;
+    assert.equal(out.gotSecret, true, "the CLI child received the value");
+    assert.equal(out.echo, "***", "echoed value is masked in the outcome");
+    assert.equal(out.caller, "http");
+    assert.equal(out.workspace, WS);
+    assert.ok(!done.text.includes(SECRET));
+    const sse = await readSse(`${base}/v1/runs/${id}/events`);
+    assert.ok(sse.events.some((e) => e.data.message === "typing ***"), "masked in events");
+    assert.ok(!sse.raw.includes(SECRET));
+    const runFile = fs.readFileSync(path.join(WS, "runs", `${id}.json`), "utf-8");
+    assert.ok(!runFile.includes(SECRET) && !fs.readFileSync(path.join(WS, "runs", `${id}.events.ndjson`), "utf-8").includes(SECRET));
+    assert.deepEqual(JSON.parse(runFile).envNames, ["DEMO_PASSWORD"]);
+    const savedScript = fs.readFileSync(r.json.result.scriptPath, "utf-8");
+    assert.ok(savedScript.includes("${env:DEMO_PASSWORD}") && !savedScript.includes(SECRET), "the script keeps the placeholder");
+  });
+
+  it("validate / scripts accept env; errors quoting a value are masked", async () => {
+    const v = await request(`${base}/v1/validate`, { body: { script: withPlaceholder, env: { DEMO_PASSWORD: SECRET } } });
+    assert.equal(v.status, 200, v.text);
+    const saved = await request(`${base}/v1/scripts`, { body: { name: "env-demo", script: withPlaceholder, env: { DEMO_PASSWORD: SECRET } } });
+    assert.equal(saved.status, 200);
+    assert.ok(!fs.readFileSync(saved.json.result.scriptPath, "utf-8").includes(SECRET));
+    const bad = await request(`${base}/v1/validate`, { body: { script: { ...VALID, baseUrl: "${env:SITE_URL}" }, env: { SITE_URL: "file:///very/secret/place" } } });
+    assert.equal(bad.status, 400);
+    assert.ok(!bad.text.includes("very/secret"), bad.text);
+    assert.ok(bad.text.includes("***"));
+  });
+
+  it("refuses reserved or malformed names and non-string values", async () => {
+    for (const env of [{ PATH: "/tmp" }, { NODE_OPTIONS: "--require x" }, { NARASCREEN_TOKEN: "x" }, { LD_PRELOAD: "x.so" }, { HTTPS_PROXY: "http://x" }, { lower: "x" }, { "A-B": "x" }, { DEMO: 5 }, ["x"]]) {
+      const r = await request(`${base}/v1/runs`, { body: { command: "validate", script: VALID, env } });
+      assert.equal(r.status, 400, JSON.stringify(env));
+      assert.equal(r.json.error.code, "USAGE");
+    }
+  });
+});
+
 describe("server close + restart", () => {
   it("close() kills running children; a new server on the workspace keeps the history", async () => {
     const ws = path.join(TMP, "ws-restart");
@@ -690,6 +1019,9 @@ describe("server close + restart", () => {
     // An orphaned "running" record from a dead server gets marked failed on load.
     const ghost = { runId: "r_ghost", command: "make", status: "running", createdAt: "2020-01-01T00:00:00.000Z", args: [], cli: "narascreen make", eventCount: 0, serverPid: 999999999 };
     fs.writeFileSync(path.join(ws, "runs", "r_ghost.json"), JSON.stringify(ghost));
+    // A persisted record naming folders outside the workspace grants nothing on reload.
+    const forged = { ...ghost, runId: "r_forged", status: "succeeded", job: "/", outDir: OUTSIDE };
+    fs.writeFileSync(path.join(ws, "runs", "r_forged.json"), JSON.stringify(forged));
 
     const s2 = await startServer({ port: 0, host: "127.0.0.1", workspace: ws, concurrency: 1, cliPath: FAKE_CLI });
     try {
@@ -698,6 +1030,9 @@ describe("server close + restart", () => {
       const replay = await readSse(`${s2.url}/v1/runs/${id}/events`);
       assert.ok(replay.events.length > 2, "events replayed from disk");
       assert.equal(replay.events[replay.events.length - 1].event, "end");
+      for (const p of ["/etc/passwd", path.join(OUTSIDE, "secret.txt")]) {
+        assert.equal((await request(`${s2.url}/v1/files?path=${encodeURIComponent(p)}`)).status, 403, p);
+      }
       const g = await request(`${s2.url}/v1/runs/r_ghost`);
       assert.equal(g.json.result.status, "failed");
       assert.match(g.json.result.outcome.error.message, /server stopped/);

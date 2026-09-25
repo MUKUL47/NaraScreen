@@ -1,5 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
+import { spawnSync } from "child_process";
+import { FFMPEG_PATH } from "./bin-paths";
 import {
   ffmpegSync,
   probeDuration,
@@ -241,100 +243,82 @@ function applySpotlightBatch(
   ffmpegSync(args);
 }
 
-function escapeDrawtext(text: string): string {
+// Callouts are drawn by libass (in the final ASS pass, see calloutEvents), not
+// drawtext: libass falls back across fonts and shapes complex scripts, so
+// Hindi, CJK and mixed-script text ("Settings / सेटिंग्स") render correctly.
+
+/** ASS font size that matches drawtext's pixel size (ASS sizes the whole line
+ *  box, drawtext the em) — keeps the callouts the size they always were. */
+const ASS_FONT_SCALE = 1.25;
+
+/** Plain text → ASS dialogue text. `{…}` would start an override block and a
+ *  backslash an escape (\N, \h, …): braces are escaped, and a backslash gets
+ *  an invisible word joiner so it is drawn as-is. Newlines become \N. */
+function assEscape(text: string): string {
   return text
-    .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\u2019")
-    .replace(/:/g, "\\:")
-    .replace(/;/g, "\\;");
+    .replace(/\\/g, "\\⁠")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}")
+    .replace(/\r?\n/g, "\\N");
 }
 
-function applyCalloutBatch(
-  inputPath: string,
-  actions: Action[],
-  outputPath: string,
-  totalDuration: number,
-  emit: (msg: string) => void,
-): void {
-  // Callouts are all drawtext filters — they can be stacked in one chain trivially
-  const filters: string[] = [];
+/** &HAABBGGRR for a colour at an opacity (ASS alpha 00 = opaque). */
+function assColor(rgb: number, opacity: number): string {
+  const hex = (n: number) => n.toString(16).toUpperCase().padStart(2, "0");
+  const a = Math.round((1 - opacity) * 255);
+  return `&H${hex(a)}${hex(rgb & 0xff)}${hex((rgb >> 8) & 0xff)}${hex((rgb >> 16) & 0xff)}`;
+}
 
+/** Callout styles: white text on a box (BorderStyle 4 = one box per event,
+ *  BackColour, Outline = padding), same colours/paddings as the old drawtext:
+ *  label black@0.8/10, step-counter blue@0.9/12, lower-third black@0.7/15,
+ *  panels black@0.7/10. */
+const CALLOUT_STYLES = [
+  { name: "CLabel", size: 28, box: assColor(0x000000, 0.8), pad: 10, align: 7 },
+  { name: "CStep", size: 28, box: assColor(0x2563eb, 0.9), pad: 12, align: 7 },
+  { name: "CLower", size: 36, box: assColor(0x000000, 0.7), pad: 15, align: 8 },
+  { name: "CPanel", size: 24, box: assColor(0x000000, 0.7), pad: 10, align: 7 },
+].map(
+  (s) =>
+    `Style: ${s.name},Noto Sans,${Math.round(s.size * ASS_FONT_SCALE)},&H00FFFFFF,&H00FFFFFF,&HFF000000,${s.box},` +
+    `0,0,0,0,100,100,0,0,4,${s.pad},0,${s.align},0,0,0,1`,
+);
+
+/** ASS dialogue lines for every callout, on the final timeline. Positions are
+ *  the drawtext ones: top-left of the text at calloutPosition (default
+ *  100,100) or at each panel's rect; lower-third centred with its top at h−80. */
+function calloutEvents(actions: Action[], res: { width: number; height: number }, totalDuration: number, emit: (msg: string) => void): string[] {
+  const out: string[] = [];
   for (const action of actions) {
     const start = action.timestamp;
-    const end = start + (action.calloutDuration ?? 3);
-    const enableExpr = `between(t,${start.toFixed(3)},${Math.min(end, totalDuration).toFixed(3)})`;
+    const end = Math.min(start + (action.calloutDuration ?? 3), totalDuration);
+    if (!(end > start)) continue;
     const style = action.calloutStyle || "label";
     const step = action.calloutStep;
+    const prefix = (t: string) => (style === "step-counter" && step ? `Step ${step}: ${t}` : t);
+    const line = (st: string, x: number, y: number, text: string, fs?: number) =>
+      out.push(
+        `Dialogue: 0,${secToAssTs(start)},${secToAssTs(end)},${st},,0,0,0,,` +
+          `{\\q2\\pos(${Math.round(x)},${Math.round(y)})${fs ? `\\fs${Math.round(fs * ASS_FONT_SCALE)}` : ""}}${assEscape(text)}`,
+      );
 
     const panels = action.calloutPanels;
     if (panels && panels.length > 0) {
       emit(`    Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s (${panels.length} panel${panels.length > 1 ? "s" : ""})`);
       for (const panel of panels) {
-        if (!panel.text) continue;
-        let displayText = panel.text;
-        if (style === "step-counter" && step) {
-          displayText = `Step ${step}: ${displayText}`;
-        }
-        displayText = escapeDrawtext(displayText);
-        const fontSize = panel.fontSize || 24;
-        const x = panel.rect[0];
-        const y = panel.rect[1];
-        filters.push(
-          `drawtext=text='${displayText}':fontsize=${fontSize}:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=black@0.7:boxborderw=10:enable='${enableExpr}'`,
-        );
+        // a step-counter keeps its blue box when it is positioned as a panel
+        if (panel.text) line(style === "step-counter" ? "CStep" : "CPanel", panel.rect[0], panel.rect[1], prefix(panel.text), panel.fontSize || 24);
       }
-    } else {
-      const text = action.calloutText;
-      if (!text) continue;
-
-      emit(`    Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s: "${text.slice(0, 30)}..."`);
-
-      let displayText = text;
-      if (style === "step-counter" && step) {
-        displayText = `Step ${step}: ${text}`;
-      }
-      displayText = escapeDrawtext(displayText);
-
-      const position = action.calloutPosition as [number, number] | undefined;
-      if (style === "lower-third") {
-        filters.push(
-          `drawtext=text='${displayText}':fontsize=36:fontcolor=white:x=(w-text_w)/2:y=h-80:box=1:boxcolor=black@0.7:boxborderw=15:enable='${enableExpr}'`,
-        );
-      } else if (style === "step-counter") {
-        const x = position ? position[0] : 100;
-        const y = position ? position[1] : 100;
-        filters.push(
-          `drawtext=text='${displayText}':fontsize=28:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=0x2563EB@0.9:boxborderw=12:enable='${enableExpr}'`,
-        );
-      } else {
-        const x = position ? position[0] : 100;
-        const y = position ? position[1] : 100;
-        filters.push(
-          `drawtext=text='${displayText}':fontsize=28:fontcolor=white:x=${x}:y=${y}:box=1:boxcolor=black@0.8:boxborderw=10:enable='${enableExpr}'`,
-        );
-      }
+      continue;
     }
+    const text = action.calloutText;
+    if (!text) continue;
+    emit(`    Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s: "${text.slice(0, 30)}..."`);
+    const position = action.calloutPosition as [number, number] | undefined;
+    if (style === "lower-third") line("CLower", res.width / 2, res.height - 80, text);
+    else line(style === "step-counter" ? "CStep" : "CLabel", position ? position[0] : 100, position ? position[1] : 100, prefix(text));
   }
-
-  if (filters.length === 0) { fs.copyFileSync(inputPath, outputPath); return; }
-
-  let chain = "";
-  let lastLabel = "0:v";
-  for (let i = 0; i < filters.length; i++) {
-    const outLabel = i < filters.length - 1 ? `dt${i}` : "vout";
-    const sep = chain ? ";" : "";
-    chain += `${sep}[${lastLabel}]${filters[i]}[${outLabel}]`;
-    lastLabel = outLabel;
-  }
-
-  const args = ["-y", "-i", inputPath, "-filter_complex", chain];
-  args.push("-map", "[vout]");
-  if (hasAudioStream(inputPath)) {
-    args.push("-map", "0:a", "-c:a", "copy");
-  }
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
-  args.push(outputPath);
-  ffmpegSync(args);
+  return out;
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -560,10 +544,20 @@ function secToAssTs(sec: number): string {
   return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
-function generateSubtitleFile(
-  text: string, duration: number, outputPath: string,
-  res: { width: number; height: number }, fontSize: number = 28,
-): void {
+/** One narration's subtitles, placed on the final timeline. */
+interface SubtitleCue {
+  text: string;
+  start: number;
+  duration: number;
+  size: number;
+  /** Distance of the subtitle baseline from the bottom (default 50 px). */
+  marginV?: number;
+}
+
+const SUBTITLE_MARGIN_V = 50;
+
+/** Karaoke dialogue lines for one narration, starting at `offset` seconds. */
+function subtitleDialogues(text: string, duration: number, offset: number, style: string): string[] {
   const sentences = text.match(/[^.!?\n]+[.!?\n]*/g) || [text];
   const entries: string[] = [];
   for (const sentence of sentences) {
@@ -586,7 +580,7 @@ function generateSubtitleFile(
   }
 
   const totalChars = entries.reduce((sum, e) => sum + e.length, 0);
-  let currentTime = 0;
+  let currentTime = offset;
   const dialogues: string[] = [];
 
   for (const entry of entries) {
@@ -600,10 +594,26 @@ function generateSubtitleFile(
       const cs = Math.max(1, Math.round(wordDur * 100));
       return `{\\kf${cs}}${w} `;
     }).join("").trim();
-    dialogues.push(`Dialogue: 0,${startTs},${endTs},Default,,0000,0000,0000,karaoke,${karokeParts}`);
+    dialogues.push(`Dialogue: 0,${startTs},${endTs},${style},,0000,0000,0000,karaoke,${karokeParts}`);
     currentTime += entryDuration;
   }
+  return dialogues;
+}
 
+/** One ASS file for every narration of the video (one style per font size). */
+function writeSubtitleFile(
+  cues: SubtitleCue[],
+  outputPath: string,
+  res: { width: number; height: number },
+  callouts: string[] = [],
+): void {
+  const styleOf = (c: SubtitleCue) => `S${c.size}_${c.marginV ?? SUBTITLE_MARGIN_V}`;
+  const styles = [...new Map(cues.map((c) => [styleOf(c), c])).values()].map(
+    (c) => `Style: ${styleOf(c)},Noto Sans,${c.size},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,${c.marginV ?? SUBTITLE_MARGIN_V},1`,
+  );
+  // Subtitles on layer 1: drawn above any callout box they meet.
+  const dialogues = cues.flatMap((c) => subtitleDialogues(c.text, c.duration, c.start, styleOf(c))).map((d) => d.replace(/^Dialogue: 0,/, "Dialogue: 1,"));
+  if (callouts.length) styles.push(...CALLOUT_STYLES);
   const assContent = `[Script Info]
 Title: Demo Subtitle
 ScriptType: v4.00+
@@ -612,24 +622,27 @@ PlayResY: ${res.height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Noto Sans,${fontSize},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,50,1
+${styles.join("\n")}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-${dialogues.join("\n")}
+${[...callouts, ...dialogues].join("\n")}
 `;
   fs.writeFileSync(outputPath, assContent, "utf-8");
 }
 
+/** Burn an ASS file. ffmpeg runs IN the subtitle's folder with a bare file
+ *  name: the `ass=` filter argument can't carry paths with , ' [ ] : or a
+ *  Windows drive letter without fragile escaping. */
 function burnSubtitles(videoPath: string, subtitlePath: string, outputPath: string): boolean {
-  ffmpegSync([
-    "-y", "-i", videoPath,
-    "-vf", `ass=${subtitlePath}`,
+  const res = spawnSync(FFMPEG_PATH, [
+    "-y", "-i", path.resolve(videoPath),
+    "-vf", `ass=${path.basename(subtitlePath)}`,
     "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
     "-c:a", "copy",
-    outputPath,
-  ]);
-  return fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0;
+    path.resolve(outputPath),
+  ], { cwd: path.dirname(path.resolve(subtitlePath)), stdio: ["pipe", "pipe", "ignore"] });
+  return res.status === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0;
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -647,8 +660,10 @@ function buildSingleZoom(
   holdDuration: number,
   narration: NarrationResult | undefined,
   emit: (msg: string) => void,
-  /** Burn this narration's subtitles into the hold (null/undefined = none). */
+  /** Subtitle size for this narration (null/undefined = no subtitles). */
   subtitleSize?: number | null,
+  /** Where subtitle cues are collected, keyed by the segment they belong to. */
+  cues?: Map<string, Omit<SubtitleCue, "start">>,
 ): string[] {
   const [zx, zy, zw, zh] = zoomRect;
   const { width: outW, height: outH } = res;
@@ -689,11 +704,8 @@ function buildSingleZoom(
   paths.push(holdPath);
 
   // Subtitles belong on the hold — that is where the narration plays.
-  if (narration?.text && subtitleSize) {
-    const subPath = path.join(tempDir, `zoomsub_${tag}.ass`);
-    const subOutPath = path.join(tempDir, `zoomholdsub_${tag}.mp4`);
-    generateSubtitleFile(narration.text, narration.audioDuration, subPath, res, subtitleSize);
-    if (burnSubtitles(holdPath, subPath, subOutPath)) paths[paths.length - 1] = subOutPath;
+  if (narration?.text && subtitleSize && cues) {
+    cues.set(holdPath, { text: narration.text, duration: narration.audioDuration, size: subtitleSize });
   }
 
   // Zoom-out
@@ -766,6 +778,7 @@ function buildZoomInsert(
   project: Record<string, unknown>,
   emit: (msg: string) => void,
   frameTs: number,
+  cues?: Map<string, Omit<SubtitleCue, "start">>,
 ): string[] {
   type ZoomTarget = { rect: [number, number, number, number]; narrations?: Record<string, string>; audioPath?: Record<string, string>; customAudioPath?: string };
   let targets: ZoomTarget[];
@@ -810,6 +823,7 @@ function buildZoomInsert(
       target.rect, framePath, tempDir, segIdx, i, res,
       zoomDuration, thisHold, narrForThis, emit,
       action.showSubtitles !== false ? action.subtitleSize ?? 28 : null,
+      cues,
     );
     allPaths.push(...paths);
   }
@@ -924,8 +938,13 @@ function executeInsertPass(
 ): {
   narrationTimestamps: Array<{ start: number; end: number }>;
   insertExpansions: Array<{ at: number; added: number }>;
+  subtitleCues: SubtitleCue[];
 } {
   const totalDuration = probeDuration(inputPath);
+  // Subtitles are NOT burned into the segments: they go on in one pass after
+  // spotlight/callout, so dimming never darkens them. Each cue is tied to its
+  // segment; its start is known once the segments are normalized.
+  const cueOf = new Map<string, Omit<SubtitleCue, "start">>();
 
   // Sort inserts by their remapped timestamp
   const sorted = insertActions
@@ -965,22 +984,16 @@ function executeInsertPass(
     let insertPaths: string[];
 
     if (action.type === "zoom" && (action.zoomRect || action.zoomRects?.length || action.zoomTargets?.length)) {
-      insertPaths = buildZoomInsert(action, inputPath, tempDir, segIdx, res, narration, project, emit, mappedTs);
+      insertPaths = buildZoomInsert(action, inputPath, tempDir, segIdx, res, narration, project, emit, mappedTs, cueOf);
     } else if (action.type === "pause" || action.freeze === true) {
       insertPaths = buildPauseInsert(action, inputPath, tempDir, segIdx, res, narration, emit, mappedTs);
     } else {
       insertPaths = buildNarrateInsert(action, inputPath, tempDir, segIdx, res, totalDuration, narration, emit, mappedTs);
     }
 
-    // Apply subtitles if narration has text (zooms burn theirs into each hold)
+    // Subtitles for the narration (zooms registered theirs on each hold)
     if (narration?.text && action.showSubtitles !== false && insertPaths.length > 0 && action.type !== "zoom") {
-      const lastPath = insertPaths[insertPaths.length - 1];
-      const subPath = path.join(tempDir, `sub_${String(segIdx).padStart(3, "0")}.ass`);
-      const subOutPath = path.join(tempDir, `subseg_${String(segIdx).padStart(3, "0")}.mp4`);
-      generateSubtitleFile(narration.text, narration.audioDuration, subPath, res, action.subtitleSize ?? 28);
-      if (burnSubtitles(lastPath, subPath, subOutPath)) {
-        insertPaths[insertPaths.length - 1] = subOutPath;
-      }
+      cueOf.set(insertPaths[insertPaths.length - 1], { text: narration.text, duration: narration.audioDuration, size: action.subtitleSize ?? 28 });
     }
 
     const totalEffectDur = insertPaths.reduce((s, p) => s + probeDuration(p), 0);
@@ -1025,7 +1038,7 @@ function executeInsertPass(
 
   if (segments.length === 0) {
     fs.copyFileSync(inputPath, outputPath);
-    return { narrationTimestamps, insertExpansions };
+    return { narrationTimestamps, insertExpansions, subtitleCues: [] };
   }
 
   // Normalize & concat
@@ -1039,7 +1052,17 @@ function executeInsertPass(
   const concatList = path.join(tempDir, "insert_concat.txt");
   concatSegments(normalized, outputPath, concatList);
 
-  return { narrationTimestamps, insertExpansions };
+  // The concat demuxer starts each file where the previous one ended, so
+  // the normalized durations give each segment's start on the final timeline.
+  const subtitleCues: SubtitleCue[] = [];
+  let at = 0;
+  segments.forEach((seg, i) => {
+    const cue = cueOf.get(seg);
+    if (cue) subtitleCues.push({ ...cue, start: at });
+    at += probeDuration(normalized[i]);
+  });
+
+  return { narrationTimestamps, insertExpansions, subtitleCues };
 }
 
 // Build a remap from post-skip/speed time → final (post-insert) time. An insert
@@ -1221,6 +1244,38 @@ export async function produceTimelineVideo(
   }
 
   // ═══════════════════════════════════════════════════════════
+  // Pass 4b: Blur — BEFORE inserts, on the post-skip/speed timeline.
+  // Freeze frames and zoom frames are cut from this video, so a narration or
+  // pause inside a blur stays blurred for its whole length and a zoom into a
+  // blurred region shows blurred pixels. (Blurring after inserts left freezes
+  // and zooms made from the unblurred video: the secret showed.) blurDuration
+  // is in recording seconds, like every other timestamp of the action.
+  // ═══════════════════════════════════════════════════════════
+
+  const preInsertBlur = blurActions
+    .map((a) => {
+      const start = remapTs(a.timestamp);
+      const end = remapTs(a.timestamp + (a.blurDuration ?? 3));
+      return { ...a, timestamp: start, blurDuration: end - start };
+    })
+    .filter((a) => a.timestamp >= 0 && (a.blurDuration ?? 0) > 0.05);
+  if (preInsertBlur.length > 0) {
+    const batches = batchNonOverlapping(preInsertBlur);
+    const blurInputDuration = probeDuration(currentInput);
+    emit(`\n[Pass: Blur] ${preInsertBlur.length} action(s) → ${batches.length} pass(es)`);
+    for (let bi = 0; bi < batches.length; bi++) {
+      const out = nextOutput();
+      emit(`  Pass ${bi + 1}/${batches.length} (${batches[bi].length} blur${batches[bi].length > 1 ? "s" : ""}):`);
+      applyBlurBatch(currentInput, batches[bi], out, nativeRes, blurInputDuration, emit);
+      if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+        currentInput = out;
+      } else {
+        emit(`    Warning: blur batch pass produced no output, skipping`);
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // Pass 5: Insert Effects (zoom, pause, narrate)
   // Uses remapped timestamps for cutting the processed video
   // ═══════════════════════════════════════════════════════════
@@ -1229,6 +1284,7 @@ export async function produceTimelineVideo(
   let narrationTimestamps: Array<{ start: number; end: number }> = [];
   // original(post-skip/speed) → final time, accounting for insert stretching.
   let insertRemap: (ts: number) => number = (ts) => ts;
+  let subtitleCues: SubtitleCue[] = [];
 
   if (insertActions.length > 0) {
     // Pre-generate narration audio
@@ -1252,6 +1308,7 @@ export async function produceTimelineVideo(
     );
     narrationTimestamps = result.narrationTimestamps;
     insertRemap = buildInsertRemap(result.insertExpansions);
+    subtitleCues = result.subtitleCues;
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
@@ -1260,7 +1317,7 @@ export async function produceTimelineVideo(
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Pass 5b: Overlay Effects (blur → spotlight → callout)
+  // Pass 5b: Overlay Effects (spotlight → callout; blur ran in pass 4b)
   // Applied AFTER inserts, with timestamps remapped through skip/speed/insert so
   // each overlay lands on the SAME frame its rect was captured on. (Burning them
   // before inserts made spotlights drift early as narrations stretched the line.)
@@ -1273,7 +1330,6 @@ export async function produceTimelineVideo(
       .filter((a) => a.timestamp >= 0);
 
   const remappedSpotlights = remapOverlayActions(spotlightActions);
-  const remappedBlur = remapOverlayActions(blurActions);
   const remappedCallouts = remapOverlayActions(calloutActions);
 
   // Validate: no overlapping spotlights (use multiple rects on one spotlight instead)
@@ -1293,9 +1349,7 @@ export async function produceTimelineVideo(
 
   const finalDuration = probeDuration(currentInput);
   const overlayGroups: Array<{ type: string; actions: Action[]; apply: (input: string, actions: Action[], output: string, res: { width: number; height: number }, dur: number, emit: (msg: string) => void) => void }> = [
-    { type: "blur", actions: remappedBlur, apply: applyBlurBatch },
     { type: "spotlight", actions: remappedSpotlights, apply: applySpotlightBatch },
-    { type: "callout", actions: remappedCallouts, apply: (i, a, o, _r, d, e) => applyCalloutBatch(i, a, o, d, e) },
   ];
 
   for (const { type, actions: typeActions, apply } of overlayGroups) {
@@ -1313,6 +1367,41 @@ export async function produceTimelineVideo(
       } else {
         emit(`    Warning: ${type} batch pass produced no output, skipping`);
       }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Pass 5c: Callouts + subtitles — one ASS file on the final timeline,
+  // burned LAST so spotlight dimming never covers them (libass renders any
+  // script, with font fallback).
+  // ═══════════════════════════════════════════════════════════
+
+  const calloutLines = remappedCallouts.length
+    ? (emit(`\n[Overlay: callout] ${remappedCallouts.length} action(s)`), calloutEvents(remappedCallouts, res, finalDuration, emit))
+    : [];
+  if (subtitleCues.length > 0 || calloutLines.length > 0) {
+    emit(`\n[Pass: Subtitles] ${subtitleCues.length} narration(s)${calloutLines.length ? `, ${calloutLines.length} callout line(s)` : ""}`);
+    // A lower-third banner shares the bottom band with subtitles: while one is
+    // on screen, lift the subtitles just above its box so neither hides the other.
+    const banners = remappedCallouts
+      .filter((a) => a.calloutStyle === "lower-third")
+      .map((a) => {
+        const panel = a.calloutPanels?.[0];
+        // producer banner: text top at h-80, 36 px, 15 px box border; panel: its y, 10 px border
+        const boxTop = panel ? panel.rect[1] - 10 : res.height - 95;
+        return { start: a.timestamp, end: a.timestamp + (a.calloutDuration ?? 3), lift: res.height - boxTop + 12 };
+      });
+    for (const cue of subtitleCues) {
+      const over = banners.filter((b) => b.start < cue.start + cue.duration && b.end > cue.start);
+      if (over.length) cue.marginV = Math.max(SUBTITLE_MARGIN_V, ...over.map((b) => b.lift));
+    }
+    const subPath = path.join(tempDir, "subtitles.ass");
+    writeSubtitleFile(subtitleCues, subPath, res, calloutLines);
+    const out = nextOutput();
+    if (burnSubtitles(currentInput, subPath, out)) {
+      currentInput = out;
+    } else {
+      emit("  Warning: subtitle/callout pass produced no output, skipping");
     }
   }
 

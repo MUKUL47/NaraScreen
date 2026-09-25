@@ -137,6 +137,21 @@ export function resolveNarration(src: NarrationSource, lang: string): { lang: st
   return null;
 }
 
+/** Why this narration isn't really in the produce language, or null:
+ *  a map without that language falls back to its "en" text, and a plain
+ *  string is spoken in whatever language is being produced. */
+export function narrationLanguageNote(src: NarrationSource, lang: string): string | null {
+  if (src.audio != null) return null;
+  const want = src.lang ?? lang;
+  if (src.narrate && typeof src.narrate === "object" && src.narrate[want] == null && src.narrate.en != null) {
+    return `no ${want} narration — used en (spoken with an English voice). Add "${want}": "…" to the narrate map.`;
+  }
+  if (typeof src.narrate === "string" && !src.lang && lang !== "en") {
+    return `a plain-string narration is spoken as ${lang}. If the text isn't ${lang}, use a map like {"en": "…", "${lang}": "…"} or set "lang".`;
+  }
+  return null;
+}
+
 /** Pre-recorded audio for the produce language: a single file is used for
  *  every language; a per-language map picks audio[lang] ?? audio.en. Paths are
  *  absolute after validation. */
@@ -221,7 +236,11 @@ function collectJobs(script: DemoScript, lang: string): Job[] {
       // The text (if any) only feeds subtitles.
       jobs.push({ ...base, lang: narr?.lang ?? audio.lang, voice: "recorded", text: narr?.text ?? "", recorded: audio.path });
     } else if (narr) {
-      jobs.push({ ...base, lang: narr.lang, voice: resolveVoice(script, slot.src, narr.lang), text: narr.text });
+      // Fallback text (e.g. "en" in a hi video) must be read by a voice of ITS
+      // language — the entry's own voice was chosen for the wanted language.
+      const fellBack = narr.lang !== (slot.src.lang ?? lang);
+      const voice = fellBack ? scriptVoice(script, narr.lang) : resolveVoice(script, slot.src, narr.lang);
+      jobs.push({ ...base, lang: narr.lang, voice, text: narr.text });
     }
     // Neither: unresolvable for this language — the compiler reports it with
     // context (produceLanguage compiles once before TTS so it surfaces first).
@@ -312,34 +331,66 @@ export async function synthesizeNarrations(
   return clips;
 }
 
+/** Attempts per clip, and the pause before each retry: a busy engine drops
+ *  sockets or answers 5xx now and then, and the next try usually works. */
+const TTS_ATTEMPTS = 3;
+const TTS_BACKOFF_MS = [500, 1500];
+
 async function synthesizeHttp(endpoint: string, job: Job, speed: number, outPath: string): Promise<void> {
   const where = { step: job.step, entry: job.entry, path: job.path };
-  let res: Response;
-  try {
-    res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "kokoro", input: job.text, voice: job.voice, speed, response_format: "wav" }),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const timedOut = isTimeout(err);
+  let res: Response | undefined;
+  let buf = Buffer.alloc(0);
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= TTS_ATTEMPTS; attempt++) {
+    lastErr = undefined;
+    try {
+      res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "kokoro", input: job.text, voice: job.voice, speed, response_format: "wav" }),
+        signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+      });
+      buf = Buffer.from(await res.arrayBuffer());
+      if (res.status < 500) break;
+    } catch (err) {
+      lastErr = err;
+      res = undefined;
+      if (isTimeout(err)) break; // already waited HTTP_TIMEOUT_MS — don't triple it
+    }
+    if (attempt < TTS_ATTEMPTS) await new Promise((r) => setTimeout(r, TTS_BACKOFF_MS[attempt - 1]));
+  }
+
+  if (!res) {
+    const timedOut = isTimeout(lastErr);
+    // Only call the engine "unavailable" when it really is down; a socket
+    // error from an engine that answers its health check is a failed request.
+    const health = await checkTts({ mode: "http", endpoint });
+    if (!health.ok || timedOut) {
+      throw new AgentError(
+        "TTS_UNAVAILABLE",
+        timedOut
+          ? `Kokoro at ${endpoint} did not answer within ${HTTP_TIMEOUT_MS / 1000}s (${job.path})`
+          : `Kokoro is not reachable at ${endpoint}: ${fetchErrorText(lastErr)}`,
+        {
+          hint: timedOut
+            ? "The engine is overloaded or still loading its model. Wait a minute and retry; check it with `narascreen doctor`."
+            : UNAVAILABLE_HINT,
+          where,
+          details: { endpoint, voice: job.voice, lang: job.lang, health: health.detail },
+        },
+      );
+    }
     throw new AgentError(
-      "TTS_UNAVAILABLE",
-      timedOut
-        ? `Kokoro at ${endpoint} did not answer within ${HTTP_TIMEOUT_MS / 1000}s (${job.path})`
-        : `Kokoro is not reachable at ${endpoint}: ${fetchErrorText(err)}`,
+      "TTS_FAILED",
+      `Kokoro is up but the request for ${job.path} failed ${TTS_ATTEMPTS} times: ${fetchErrorText(lastErr)}`,
       {
-        hint: timedOut
-          ? "The engine is overloaded or still loading its model. Wait a minute and retry; check it with `narascreen doctor`."
-          : UNAVAILABLE_HINT,
+        hint: "Retry produce (finished clips are cached). If it keeps failing on this entry, shorten or simplify its text.",
         where,
-        details: { endpoint, voice: job.voice, lang: job.lang },
+        details: { endpoint, voice: job.voice, lang: job.lang, cause: fetchErrorText(lastErr), health: health.detail },
       },
     );
   }
 
-  const buf = Buffer.from(await res.arrayBuffer());
   if (res.status >= 400) {
     const body = errorBodyText(buf);
     throw new AgentError("TTS_FAILED", `Kokoro rejected the narration at ${job.path} (HTTP ${res.status})`, {

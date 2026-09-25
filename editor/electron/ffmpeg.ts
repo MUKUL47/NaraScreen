@@ -175,7 +175,8 @@ export function concatSegments(
 ): boolean {
   fs.writeFileSync(
     concatListPath,
-    segments.map((s) => `file '${s}'`).join("\n"),
+    // concat-list quoting: a ' inside '…' is written as '\''
+    segments.map((s) => `file '${s.replace(/'/g, "'\\''")}'`).join("\n"),
     "utf-8",
   );
 

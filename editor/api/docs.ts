@@ -159,11 +159,15 @@ function httpReference(base: string): string[] {
   out.push(
     "### Authentication and safety",
     "",
-    `- Binds to \`${s.DEFAULT_HOST}\` by default: only programs on this machine can connect. Binding another address exposes it to the network — use a token then.`,
+    `- Binds to \`${s.DEFAULT_HOST}\` by default: only programs on this machine can connect. Binding any other address requires a token (the server refuses to start without one).`,
     "- Token: when the server is started with `--token <secret>` (or the `NARASCREEN_TOKEN` environment variable), every `/v1/*` request needs `Authorization: Bearer <secret>`; otherwise `401`. `/`, `/docs`, `/docs.md` and `/llms.txt` stay public.",
-    "- Requests from web pages of other origins (an `Origin` header that is not this server) are refused with `403`; so are unexpected `Host` names while bound to localhost (DNS-rebinding protection). Command-line HTTP clients are unaffected.",
-    `- JSON bodies are limited to ${Math.round(s.MAX_BODY_BYTES / 1024 / 1024)} MB (\`413\` otherwise).`,
-    "- `/v1/files` only serves files inside the workspace or inside a job/output folder used by a run of this server; anything else is `403`, even through `..` or symlinks.",
+    "- Requests made by web pages of other sites (an `Origin` header that is not this server, or `Sec-Fetch-Site: cross-site` / `same-site`) are refused with `403`, as are `Host` names other than localhost / an IP address (DNS-rebinding protection). Command-line HTTP clients send neither and are unaffected.",
+    "- **Uploading files:** `curl -T clip.mp3 \"$BASE/v1/files?path=uploads/clip.mp3\"` stores it as `<workspace>/uploads/clip.mp3`; use the returned `relativePath` (`uploads/clip.mp3`) in scripts.",
+    "- **How relative file paths in scripts resolve:** in a script sent inline (`script` in `/v1/validate`, `/v1/scripts`, `/v1/runs`) they resolve against the **workspace** (so `uploads/clip.mp3` works) and are saved as absolute paths; in a script *file* (`scriptPath`) they resolve against that file's folder, as on the CLI.",
+    "- **Secrets for `${env:NAME}`:** add `\"env\": {\"DEMO_PASSWORD\": \"…\"}` to `POST /v1/runs` (or `/v1/validate`, `/v1/scripts` to check). The values are used only to fill `${env:NAME}` placeholders for that request/run: they are never written to `runs/*.json`, scripts or logs, and values of 4+ characters are replaced by `***` wherever they would appear in events or envelopes. Names must match `^[A-Z_][A-Z0-9_]*$`; process settings (PATH, HOME, NODE_*, NARASCREEN_*, LD_*, proxies, …) are refused. Keep placeholders in the script (`\"value\": \"${env:DEMO_PASSWORD}\"`), not the secret itself.",
+    "- **Everything lives in the workspace.** Over HTTP, `scriptPath`, `job`, `options.out`, `options.storage-state` and every file a script references (`storageState`, `audio`, `music.path`, `source.video`) must resolve inside the workspace (symlinks followed) — otherwise `400`. Scripts may only use `http(s)` URLs.",
+    `- Limits: JSON bodies ≤ ${Math.round(s.MAX_BODY_BYTES / 1024 / 1024)} MB (\`413\`); at most ${s.LIGHT_CONCURRENCY} light runs / doctor checks at once (the rest wait); at most ${s.MAX_QUEUED_RUNS} waiting runs (\`429\` beyond); ${s.MAX_RUN_EVENTS.toLocaleString("en")} events per run.`,
+    "- `/v1/files` only serves files whose real location (symlinks followed) is inside the workspace; anything else is `403`, even through `..` or symlinks.",
     "- Runs execute the `narascreen` CLI as child processes. Cancelling a run, or stopping the server, stops its whole process tree (browser and ffmpeg included).",
     "",
     "### HTTP status codes",
@@ -178,11 +182,12 @@ function httpReference(base: string): string[] {
         ["`302`", "`/` redirects to `/docs`."],
         ["`400`", "The request needs fixing: `USAGE` (bad JSON, unknown command/option) or a script problem such as `SCRIPT_INVALID`."],
         ["`401`", "Missing or wrong bearer token."],
-        ["`403`", "Path outside the allowed folders (`/v1/files`), or a cross-origin / unexpected-host request."],
+        ["`403`", "File outside the workspace (`/v1/files`), or a request from another web site / unexpected `Host`."],
         ["`404`", "Unknown route or run id, or a file/script/job that does not exist."],
         ["`405`", "Known path, wrong method."],
         ["`413`", "Body larger than the limit."],
         ["`416`", "`Range` outside the file."],
+        ["`429`", "Too many runs waiting — let some finish or cancel them, then retry."],
         ["`500`", "NaraScreen bug or unexpected tool failure (`INTERNAL`, exit class 4)."],
         ["`503`", "The machine is not ready (`doctor` failed: exit class 2 codes)."],
       ],
@@ -207,7 +212,7 @@ function runCommandsReference(): string[] {
     const opts = c.flags
       .filter((f) => f.name !== "script" && !s.BLOCKED_RUN_OPTIONS.includes(f.name))
       .map((f) => `${code(f.name)}${f.type === "boolean" ? " (bool)" : ""}`);
-    return [code(name), cell(input.join("; ") || "—"), opts.join(", ") || "—", c.heavy ? "queued" : "immediate"];
+    return [code(name), cell(input.join("; ") || "—"), opts.join(", ") || "—", c.heavy ? "heavy queue" : "light (≤ " + s.LIGHT_CONCURRENCY + " at once)"];
   });
   return [
     "### Running commands (`POST /v1/runs`)",
@@ -216,10 +221,10 @@ function runCommandsReference(): string[] {
     "dashes (`{\"lang\": \"en,hi\", \"force\": true, \"until\": \"open-tasks\"}`); boolean flags take `true`/`false`,",
     "the others strings (numbers are accepted). An inline `script` is saved as",
     "`<workspace>/scripts/run-<runId>.demo-script.json`; relative file paths inside it (e.g. `storageState`) and",
-    "relative `scriptPath`/`out` values resolve against the workspace. `job` is a name (→ `<workspace>/jobs/<name>`) or",
-    "an absolute path; it defaults to `<workspace>/jobs/<script scope>`. Scripts are validated before the run is",
-    "accepted, so an invalid script fails fast with `400 SCRIPT_INVALID`.",
-    `Heavy commands wait in a first-in-first-out queue (\`--concurrency\`, default 1); the others start immediately.`,
+    "relative `scriptPath`/`out` values resolve against the workspace, and all of them must stay inside it. `job` is a",
+    "name (→ `<workspace>/jobs/<name>`) or a path inside the workspace; it defaults to `<workspace>/jobs/<script scope>`.",
+    "Scripts are validated before the run is accepted, so an invalid script fails fast with `400 SCRIPT_INVALID`.",
+    `Heavy commands wait in a first-in-first-out queue (\`--concurrency\`, default 1); light ones run up to ${s.LIGHT_CONCURRENCY} at once.`,
     `Not available over HTTP: ${s.BLOCKED_RUN_OPTIONS.map((o) => code(o)).join(", ")} (needs a keyboard).`,
     "",
     ...table(["command", "Input fields", "`options` keys", "Starts"], rows),
@@ -231,8 +236,9 @@ function followingRunsReference(): string[] {
   return [
     "### Following a run",
     "",
-    "Status: `queued` → `running` → `succeeded` | `failed` | `cancelled`. When a run ends, `outcome` holds the",
-    "envelope the CLI printed (`outcome.result` on success, `outcome.error` on failure).",
+    "Status: `queued` → `running` → `succeeded` | `failed` | `cancelled`. When a run ends, `GET /v1/runs/<runId>`",
+    "adds `ok` and `output` — the command's result (e.g. `output.videos[0].path`) or, when `ok` is false, its error",
+    "(`output.code`, `output.hint`) — plus `outcome`, the complete envelope the CLI printed (with its `warnings`/`next`).",
     "",
     `- **Long-poll:** \`GET /v1/runs/<runId>?wait=<seconds>\` (max ${s.MAX_WAIT_SEC}) answers as soon as the run ends, or after the wait with the current status. Repeat until \`status\` is final.`,
     "- **Server-Sent Events:** `GET /v1/runs/<runId>/events`. Replays every past event, then streams live ones, then sends",
@@ -242,7 +248,7 @@ function followingRunsReference(): string[] {
     "- **NDJSON:** `GET /v1/runs/<runId>/events?format=ndjson` — the same stream as one JSON object per line; the last",
     "  line is `{\"type\":\"end\",\"seq\":…,\"status\":…,\"outcome\":{…}}`. Empty lines are keep-alives; skip them.",
     "- **Cancel:** `POST /v1/runs/<runId>/cancel` stops the run (SIGTERM, then SIGKILL after 5 s) and returns it with `status: \"cancelled\"`.",
-    "- Runs are kept in `<workspace>/runs/<runId>.json` and `<runId>.events.ndjson`, and survive a server restart.",
+    "- Runs are kept in `<workspace>/runs/<runId>.json` and `<runId>.events.ndjson` (the complete event history), and survive a server restart.",
     "",
     "```bash",
     "curl -N $BASE/v1/runs/<runId>/events            # live progress (SSE)",

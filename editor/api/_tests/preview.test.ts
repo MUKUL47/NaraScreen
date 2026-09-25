@@ -125,3 +125,73 @@ test("produceLanguage: a renderer pass that fails is never shipped → RENDER_FA
   assert.ok(!fs.existsSync(path.join(job, "video", "final_en.mp4")));
   assert.ok(probeDuration(path.join(job, "video", "rejected_en.mp4")) > 0);
 });
+
+/** Raw 8-bit gray pixels of `rect` in the frame at `t`. */
+function grayCrop(video: string, t: number, [x, y, w, h]: [number, number, number, number]): Buffer {
+  const out = path.join(tmp, `crop-${Math.random().toString(36).slice(2)}.gray`);
+  ffmpegSync(["-y", "-ss", t.toFixed(3), "-i", video, "-frames:v", "1", "-vf", `crop=${w}:${h}:${x}:${y},format=gray`, "-f", "rawvideo", out]);
+  return fs.readFileSync(out);
+}
+const meanDiff = (a: Buffer, b: Buffer) => a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0) / a.length;
+
+test("produceLanguage: blur holds through a narration freeze; '%' callouts draw; subtitles survive an awkward job path", async () => {
+  // , ' ; [ ] : in the job path used to drop the subtitles silently (ass= filter argument)
+  const { tone } = syntheticJob("job-ok");
+  const job = path.join(tmp, "job [1], it's; a:b");
+  fs.mkdirSync(jobPaths(job).recordingsDir, { recursive: true });
+  fs.copyFileSync(jobPaths(path.join(tmp, "job-ok")).recording, jobPaths(job).recording);
+  const secret: [number, number, number, number] = [40, 40, 200, 120];
+  const label: [number, number, number, number] = [300, 250, 200, 60];
+  const sc = script([{ id: "s", beat: [
+    { fx: "blur", anchor: { text: "key" }, duration: 1 },
+    { fx: "callout", text: "Revenue up 20%", anchor: { text: "r" }, duration: 3 },
+    { fx: "narrate", audio: tone, narrate: "The key stays hidden." },
+  ] }]);
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "blur", t: 0.2, rect: secret },
+    { beat: "s", i: 1, kind: "fx", fx: "callout", t: 0.3, rect: label },
+    { beat: "s", i: 2, kind: "fx", fx: "narrate", t: 1 },
+  ];
+  const r = await produceLanguage(job, sc, trace, "en", () => {});
+  const log = fs.readFileSync(r.logPath, "utf-8");
+  assert.match(log, /\[Pass: Blur\]/);
+  assert.match(log, /\[Pass: Subtitles\] 1 narration/);
+  const rec = jobPaths(job).recording;
+  // the freeze (final 1.0–2.5 s) is cut from the blurred video: the secret stays blurred
+  // for its whole length even though the blur's own 1 s window ends at 1.2 s of recording
+  assert.ok(meanDiff(grayCrop(r.videoPath, 2.2, secret), grayCrop(rec, 1.0, secret)) > 8, "secret visible during the freeze");
+  // after the freeze the recording resumes at 1.0 s — past the blur window (0.2–1.2 s) at 1.4 s
+  assert.ok(meanDiff(grayCrop(r.videoPath, 2.5 + 0.4, secret), grayCrop(rec, 1.4, secret)) < 4, "blur outlived its window");
+  // the callout panel (above the label) really drew its text
+  const panel: [number, number, number, number] = [300, 206, 240, 28];
+  assert.ok(meanDiff(grayCrop(r.videoPath, 0.6, panel), grayCrop(rec, 0.6, panel)) > 8, "callout with % drew nothing");
+});
+
+/** Longest run of bright pixels along any row of a gray crop `w` wide. */
+function longestBrightRun(gray: Buffer, w: number): number {
+  let best = 0;
+  for (let y = 0; y * w < gray.length; y++) {
+    let run = 0;
+    for (let x = 0; x < w; x++) {
+      run = gray[y * w + x] > 200 ? run + 1 : 0;
+      best = Math.max(best, run);
+    }
+  }
+  return best;
+}
+
+test("callouts render any script (libass): Devanagari draws real glyphs, not missing-glyph boxes", async () => {
+  // a plain dark recording: the only bright pixels are the callout's text
+  const job = path.join(tmp, "job-hi");
+  fs.mkdirSync(jobPaths(job).recordingsDir, { recursive: true });
+  ffmpegSync(["-y", "-f", "lavfi", "-i", "color=c=0x202020:s=640x400:r=30", "-t", "3", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", jobPaths(job).recording]);
+  const label: [number, number, number, number] = [60, 200, 200, 40];
+  const sc = script([{ id: "s", beat: [{ fx: "callout", text: "कार्यसूची", anchor: { text: "a" }, duration: 2 }] }], { viewport: { width: 640, height: 400 } });
+  const trace: TraceEntry[] = [{ beat: "s", i: 0, kind: "fx", fx: "callout", t: 0.5, rect: label }];
+  const r = await produceLanguage(job, sc, trace, "hi", () => {});
+  // The panel sits above the element. Real Devanagari joins a word with one
+  // unbroken headline stroke; a font without it draws a row of separate boxes.
+  const panel: [number, number, number, number] = [60, 150, 240, 40];
+  const run = longestBrightRun(grayCrop(r.videoPath, 1.0, panel), panel[2]);
+  assert.ok(run > 50, `longest headline stroke ${run}px — Devanagari not shaped/rendered`);
+});

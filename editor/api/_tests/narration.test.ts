@@ -61,14 +61,23 @@ before(async () => {
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
       const url = req.url ?? "";
-      if (req.method === "GET" && url === "/ok/v1/models") {
+      if (req.method === "GET" && /^\/(ok|flaky|boom|five)\/v1\/models$/.test(url)) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ object: "list", data: [{ id: "kokoro" }, { id: "tts-1" }] }));
         return;
       }
       if (req.method !== "POST") return void res.writeHead(404).end();
       requests.push({ url, body: JSON.parse(raw) });
-      if (url === "/ok/v1/audio/speech") {
+      const seen = requests.filter((r) => r.url === url).length;
+      if (url === "/boom/v1/audio/speech" || (url === "/flaky/v1/audio/speech" && seen === 1)) {
+        req.socket.destroy(); // what a busy engine sometimes does: UND_ERR_SOCKET
+        return;
+      }
+      if (url === "/five/v1/audio/speech" && seen === 1) {
+        res.writeHead(503).end("busy");
+        return;
+      }
+      if (url === "/ok/v1/audio/speech" || url === "/flaky/v1/audio/speech" || url === "/five/v1/audio/speech") {
         res.writeHead(200, { "Content-Type": "audio/wav" });
         res.end(wav());
       } else if (url === "/bad-voice/v1/audio/speech") {
@@ -285,4 +294,35 @@ test("unreadable recorded audio → TTS_FAILED (\"could not be read\")", async (
     assert.equal(e.where?.path, "steps[0].beat[1]");
     return true;
   });
+});
+
+test("en fallback text in a hi video is read by an English voice (not the entry's hi voice)", async () => {
+  const sc = script(`${base}/ok/v1/audio/speech`, [{ id: "s", beat: [
+    { fx: "narrate", narrate: { en: "English only." }, voice: "hf_beta" },
+    { fx: "narrate", narrate: { en: "x", hi: "नमस्ते" }, voice: "hf_beta" },
+  ] }]);
+  const clips = await synthesizeNarrations(sc, "hi", newDir("fallback"), () => {});
+  assert.deepEqual([clips.get("s:0")!.lang, clips.get("s:0")!.voice], ["en", "af_heart"]);
+  assert.deepEqual([clips.get("s:1")!.lang, clips.get("s:1")!.voice], ["hi", "hf_beta"]);
+});
+
+test("transient socket errors and 5xx are retried", async () => {
+  for (const kind of ["flaky", "five"]) {
+    const sc = script(`${base}/${kind}/v1/audio/speech`, [{ id: "s", beat: [{ fx: "narrate", narrate: `Retry ${kind}.` }] }]);
+    const clips = await synthesizeNarrations(sc, "en", newDir(kind), () => {});
+    assert.ok(clips.get("s:0")!.durationSec > 0.4, kind);
+    assert.equal(requests.filter((r) => r.url === `/${kind}/v1/audio/speech`).length, 2, kind);
+  }
+});
+
+test("an engine that answers its health check but keeps dropping the request → TTS_FAILED, not UNAVAILABLE", async () => {
+  const sc = script(`${base}/boom/v1/audio/speech`, [{ id: "s", beat: [{ fx: "narrate", narrate: "Never." }] }]);
+  await assert.rejects(synthesizeNarrations(sc, "en", newDir("boom"), () => {}), (e: unknown) => {
+    assert.ok(e instanceof AgentError);
+    assert.equal(e.code, "TTS_FAILED");
+    assert.match(e.message, /Kokoro is up but the request for steps\[0\]\.beat\[0\] failed 3 times/);
+    assert.doesNotMatch(e.hint ?? "", /docker/);
+    return true;
+  });
+  assert.equal(requests.filter((r) => r.url === "/boom/v1/audio/speech").length, 3);
 });

@@ -58,7 +58,8 @@ curl -s $BASE/v1/doctor
 curl -s -X POST $BASE/v1/runs -H 'Content-Type: application/json' \
   -d '{"command":"inspect","options":{"url":"https://app.example.com/"}}'
 #   → {"ok":true,"result":{"runId":"r_…","links":{"wait":"/v1/runs/r_…?wait=120", …}}}
-curl -s "$BASE/v1/runs/<runId>?wait=120"          # blocks until done → outcome.result.elements
+curl -s "$BASE/v1/runs/<runId>?wait=120"          # blocks until done → result.output.elements
+#   finished runs: result.ok, result.output (= the command's result, or its error), result.outcome (full envelope)
 
 # 3. Save your script (it is validated first; problems come back as SCRIPT_INVALID with a list)
 curl -s -X POST $BASE/v1/scripts -H 'Content-Type: application/json' \
@@ -74,7 +75,11 @@ curl -s -X POST $BASE/v1/runs -H 'Content-Type: application/json' \
   -d '{"command":"make","scriptPath":"<scriptPath>","job":"my-demo"}'
 curl -N $BASE/v1/runs/<runId>/events              # Server-Sent Events; the last one is `end`
 
-# 6. Fetch the results (any absolute path from a result works here)
+# Need your own files (a voiceover, music, a video to edit, a saved login)? Upload them first,
+# then refer to them in the script by the returned relativePath, e.g. "audio": "uploads/intro.mp3".
+curl -s -T intro.mp3 "$BASE/v1/files?path=uploads/intro.mp3"
+
+# 6. Fetch the results (any path from a result works here)
 curl -s "$BASE/v1/files?path=<video path>" -o demo.mp4
 curl -s "$BASE/v1/files?path=<contactSheet path>" -o contact.jpg
 ```
@@ -92,6 +97,11 @@ narascreen check    my-demo.demo-script.json
 narascreen make     my-demo.demo-script.json --out ./jobs/my-demo
 narascreen preview  ./jobs/my-demo
 ```
+
+**Over HTTP everything lives in the server's workspace:** jobs, saved scripts and uploads. Paths you pass
+(`job`, `scriptPath`, file references inside scripts) must resolve inside it — use job *names* (`"job": "my-demo"`)
+and `uploads/…` paths from `PUT /v1/files`. In scripts sent inline, relative file paths resolve against the
+workspace; in script files, against the file's own folder.
 
 If `narascreen` is not on your PATH, the launcher lives at `editor/bin/narascreen` inside the
 NaraScreen checkout (run it with any working directory).
@@ -297,7 +307,7 @@ In an **fx** entry they go inside `anchor` (`{"fx": "spotlight", "anchor": {"rol
 1. `"exact": true` — `name`/`label` match the whole text instead of a substring (`"Save"` stops matching `"Save draft"`).
 2. `"within"` — search inside one container:
    - `{ "within": { "role": "dialog", "name": "New task" } }` — inside a dialog
-   - `{ "within": { "text": "Pune office" } }` — inside the row/card that contains that text (e.g. that row's Edit button)
+   - `{ "within": { "text": "Quarterly report" } }` — inside the row/card whose text is exactly that (e.g. that row's Edit button; "Quarterly report 2" is a different row)
    - `{ "within": { "css": "#billing" } }`
 3. `"nth": 1` — the second match (0-based). Fragile; use when nothing else works.
 
@@ -360,7 +370,8 @@ cuts the wait between the click and the result, and
 fast-forwards through the rest of the step.
 
 "Needs an element" means: give an `anchor`, **or** place the fx right after an act that targeted an
-element in the same step (click/fill/select/hover/scroll) — it then uses that element.
+element in the same step (click/fill/select/hover/scroll/waitFor, or press with a selector) — it then uses
+that element, measured after the act (e.g. `waitFor` a dialog, then `spotlight` lights the dialog).
 
 Rules the renderer enforces:
 
@@ -409,9 +420,15 @@ Rules the renderer enforces:
 Pick one:
 
 1. **`setup` steps** (simplest). Script the login form in `setup`; it runs before recording starts.
-   Keep secrets out of the file with `${env:NAME}` placeholders — NaraScreen substitutes environment
-   variables of the process running it (for the HTTP server: the environment it was started with).
-   A missing variable fails fast with `ENV_VAR_MISSING`.
+   Keep secrets out of the file with `${env:NAME}` placeholders. A missing value fails fast with `ENV_VAR_MISSING`.
+   - **CLI:** NaraScreen reads them from its environment: `DEMO_PASSWORD=… narascreen make …`.
+   - **HTTP:** send them with the request — they are used for that run only, never stored, and masked as `***`
+     in events and results. Pass the same `env` to `/v1/validate` / `/v1/scripts` when checking such a script.
+     ```bash
+     curl -s -X POST $BASE/v1/runs -H 'Content-Type: application/json' \
+       -d '{"command":"make","scriptPath":"<scriptPath>","env":{"DEMO_PASSWORD":"s3cret"}}'
+     ```
+   Throwaway demo credentials (a public sandbox login) may be written into the script directly.
 2. **`storageState`**: a Playwright storage-state JSON (cookies + localStorage) from a previous login.
    Relative paths are relative to the script file.
 3. **Several users in one video**: `{"act": "useSession", "storageState": "other-user.json", "path": "/inbox"}`

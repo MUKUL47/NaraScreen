@@ -142,17 +142,21 @@ test("callout label: anchored rect → one panel above the element", () => {
   assert.deepEqual(a.calloutPanels, [{ text: "Toggle", rect: [500, 276, 101, 28], fontSize: 28 }]);
 });
 
-test("blur: array + defaults", () => {
+// Review fix: an unset blur duration means "step-end" (a secret must not be
+// unblurred right after the next narration); it used to be "auto" (→ 3 s here).
+test("blur: array + defaults (duration unset = until the step ends)", () => {
   const script = baseScript([
     { id: "b1", beat: [{ fx: "blur", anchor: { label: "API key" } }] },
+    { id: "b2", beat: [{ fx: "callout", style: "lower-third", text: "Next" }] },
   ]);
   const trace: TraceEntry[] = [
     { beat: "b1", i: 0, kind: "fx", fx: "blur", t: 5, rect: [10, 20, 100, 40] },
+    { beat: "b2", i: 0, kind: "fx", fx: "callout", t: 12 },
   ];
   const [a] = compile(script, trace);
   assert.deepEqual(a.blurRects, [[10, 20, 100, 40]]);
   assert.equal(a.blurRadius, 20);
-  assert.equal(a.blurDuration, 3);
+  assert.equal(a.blurDuration, 7);
 });
 
 test("narrate: emits narrations keyed by lang, freezes by default", () => {
@@ -419,7 +423,24 @@ test("auto: zoom stop rule — a zoom between overlay and narration ends the ove
 
 test("auto: zoom stop rule — the narrating entry itself is a zoom", () => {
   const script = baseScript([{ id: "s", beat: [
-    { fx: "blur", anchor: { text: "secret" } },
+    { fx: "spotlight", anchor: { text: "x" } },
+    { fx: "zoom", narrate: "Look closer." },
+  ] }]);
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "spotlight", t: 10, rect: R },
+    { beat: "s", i: 1, kind: "fx", fx: "zoom", t: 11, rect: R },
+  ];
+  const warnings: string[] = [];
+  const [spot] = compile(script, trace, "en", clips({ "s:1": 3 }), warnings);
+  assert.equal(spot.spotlightDuration, 0.95);
+  assert.match(warnings[0], /stops at the zoom/);
+});
+
+// Blur is burned BEFORE the inserts, so its duration is in recording seconds
+// and a zoom/freeze cut from a blurred moment is blurred: no stop, no warning.
+test("auto blur: in recording seconds, until the narrating zoom's frame + 0.5 s — no zoom stop", () => {
+  const script = baseScript([{ id: "s", beat: [
+    { fx: "blur", anchor: { text: "secret" }, duration: "auto" },
     { fx: "zoom", narrate: "Look closer." },
   ] }]);
   const trace: TraceEntry[] = [
@@ -428,8 +449,8 @@ test("auto: zoom stop rule — the narrating entry itself is a zoom", () => {
   ];
   const warnings: string[] = [];
   const [blur] = compile(script, trace, "en", clips({ "s:1": 3 }), warnings);
-  assert.equal(blur.blurDuration, 0.95);
-  assert.match(warnings[0], /unblurred/);
+  assert.equal(blur.blurDuration, 1.5);
+  assert.deepEqual(warnings, []);
 });
 
 test("auto: lower-third callouts are not rect-bound, so they run through a narrated zoom", () => {
@@ -478,7 +499,7 @@ test("auto: never shorter than 0.5 s", () => {
   assert.equal(compile(script, trace)[0].calloutDuration, 0.5);
 });
 
-test("explicit blur running into a zoom in its step → warning; overlapping explicit spotlights → warning", () => {
+test("explicit blur over a zoom: kept, no warning; overlapping explicit spotlights → warning", () => {
   const script = baseScript([{ id: "s", beat: [
     { fx: "blur", anchor: { text: "secret" }, duration: 5 },
     { fx: "spotlight", anchor: { text: "a" }, duration: 4 },
@@ -494,9 +515,9 @@ test("explicit blur running into a zoom in its step → warning; overlapping exp
   const warnings: string[] = [];
   const actions = compile(script, trace, "en", undefined, warnings);
   assert.equal(byName(actions, "s #0 blur").blurDuration, 5, "explicit durations are kept");
-  assert.equal(warnings.length, 2, warnings.join("\n"));
-  assert.match(warnings.join("\n"), /beat\[0\] \(blur\).*runs into the zoom/);
-  assert.match(warnings.join("\n"), /beat\[1\] \(spotlight\).*SPOTLIGHT_OVERLAP/);
+  // the zoom is cut from the already-blurred video: no blur warning any more
+  assert.equal(warnings.length, 1, warnings.join("\n"));
+  assert.match(warnings[0], /beat\[1\] \(spotlight\).*SPOTLIGHT_OVERLAP/);
 });
 
 // ── the producer's timeline model ────────────────────────────
@@ -704,7 +725,7 @@ test("ranges: seconds / next-act / step-end / step id / last step → recording 
     { beat: "s", i: 1, kind: "act", act: "click", t: 3, rect: R },
   ], "en", undefined, warnings);
   assert.deepEqual(none, []);
-  assert.match(warnings[0], /the range is empty/);
+  assert.match(warnings[0], /steps\[0\]\.beat\[0\] \(skip\): has nothing to cut \(0\.00s\) — it was ignored\. .*put the slow action/);
 });
 
 test("ranges: overlapping speed ranges are clipped, empty ones dropped, fx inside a skip warned", () => {
@@ -730,7 +751,7 @@ test("ranges: overlapping speed ranges are clipped, empty ones dropped, fx insid
   assert.equal(warnings.length, 3, warnings.join("\n"));
   assert.match(warnings[0], /beat\[1\] \(speed\): starts inside the speed at steps\[0\]\.beat\[0\]/);
   assert.match(warnings[1], /beat\[2\] \(speed\): lies entirely inside the speed at steps\[0\]\.beat\[1\]/);
-  assert.match(warnings[2], /beat\[4\] \(narrate\) happens inside the skipped stretch.*it will be cut/);
+  assert.match(warnings[2], /beat\[4\] \(narrate\) sits inside the part that steps\[0\]\.beat\[3\] cuts out .* starts at the cut instead: on the first frame after the skipped part/);
 });
 
 test("auto: never across a skip cut (warning); lower-thirds may", () => {
@@ -757,17 +778,17 @@ test("auto: never across a skip cut (warning); lower-thirds may", () => {
 
 test("auto: an overlay inside a speed range stops at its end", () => {
   const script = baseScript([
-    { id: "a", beat: [{ fx: "speed", factor: 2, seconds: 4 }, { fx: "blur", anchor: { text: "x" } }, { fx: "narrate", narrate: "Hi." }] },
+    { id: "a", beat: [{ fx: "speed", factor: 2, seconds: 4 }, { fx: "spotlight", anchor: { text: "x" } }, { fx: "narrate", narrate: "Hi." }] },
   ]);
   const trace: TraceEntry[] = [
     { beat: "a", i: 0, kind: "fx", fx: "speed", t: 2 },
-    { beat: "a", i: 1, kind: "fx", fx: "blur", t: 3, rect: R },
+    { beat: "a", i: 1, kind: "fx", fx: "spotlight", t: 3, rect: R },
     { beat: "a", i: 2, kind: "fx", fx: "narrate", t: 7 },
   ];
   const warnings: string[] = [];
   const actions = compile(script, trace, "en", clips({ "a:2": 1 }), warnings, { durationSec: 20 });
-  // 2x from 2..6 → blur at 2.5 (post-speed), range ends at 4 → 4 − 2.5 − 0.05
-  assert.equal(byName(actions, "a #1 blur").blurDuration, 1.45);
+  // 2x from 2..6 → spotlight at 2.5 (post-speed), range ends at 4 → 4 − 2.5 − 0.05
+  assert.equal(byName(actions, "a #1 spotlight").spotlightDuration, 1.45);
   assert.match(warnings[0], /changes the playback speed/);
 });
 
@@ -806,7 +827,7 @@ test("step-end: until the next step starts, on the final timeline (inserts in be
   assert.deepEqual(warnings, []);
 });
 
-test("end: a blur keeps covering to the end of the video through freezes; zooms inside it are warned about", () => {
+test("end: a blur covers to the end of the recording (freezes and zooms after it are cut from blurred video)", () => {
   const script = baseScript([
     { id: "a", beat: [{ fx: "blur", anchor: { label: "API key" }, duration: "end" }] },
     { id: "b", beat: [{ fx: "narrate", narrate: "Still hidden." }, { fx: "zoom" }] },
@@ -818,10 +839,10 @@ test("end: a blur keeps covering to the end of the video through freezes; zooms 
   ];
   const warnings: string[] = [];
   const actions = compile(script, trace, "en", clips({ "b:0": 2 }), warnings, { durationSec: 12 });
-  // final video = 12 + 2 (narration) + 3.6 (zoom); the blur starts at 2
-  assert.equal(byName(actions, "a #0 blur").blurDuration, 15.6);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /steps\[0\]\.beat\[0\] \(blur, "end"\): the zoom at steps\[1\]\.beat\[1\].*NOT blurred/);
+  // recording seconds to the exact recording end (12 − 2) + 0.1 s so the last
+  // frame is inside (blur runs on the recording timeline — nothing to estimate)
+  assert.equal(byName(actions, "a #0 blur").blurDuration, 10.1);
+  assert.deepEqual(warnings, []);
 });
 
 test("end: spotlight/callout still stop at a zoom (warning) and spotlights yield to the next spotlight; callouts don't", () => {
@@ -845,10 +866,48 @@ test("end: spotlight/callout still stop at a zoom (warning) and spotlights yield
   const actions = compile(script, trace, "en", undefined, warnings, { durationSec: 10 });
   assert.equal(byName(actions, "a #0 spotlight").spotlightDuration, 1.95, "yields to the next spotlight");
   assert.equal(byName(actions, "a #3 spotlight").spotlightDuration, 2.95, "stops before the zoom");
-  // lower-third: not rect-bound, not capped by the label → 10 + 3.6 − 1
-  assert.equal(byName(actions, "a #1 callout").calloutDuration, 12.6);
+  // lower-third: not rect-bound, not capped by the label → 10 + 3.6 − 1 (+ open end)
+  assert.equal(byName(actions, "a #1 callout").calloutDuration, 12.6 + 60);
   assert.equal(warnings.length, 1, warnings.join("\n"));
   assert.match(warnings[0], /beat\[3\] \(spotlight\): "end" duration stops at the zoom/);
+});
+
+test("language fallback: a map without the produce language, or a plain string in a non-en video → warning", () => {
+  const script = baseScript([{ id: "s", beat: [
+    { fx: "narrate", narrate: { en: "Hello" } },
+    { fx: "narrate", narrate: "Plain text" },
+    { fx: "narrate", narrate: "नमस्ते", lang: "hi" },
+    { fx: "narrate", narrate: { en: "Hi", hi: "नमस्ते" } },
+  ] }]);
+  const trace: TraceEntry[] = [0, 1, 2, 3].map((i) => ({ beat: "s", i, kind: "fx" as const, fx: "narrate" as const, t: i + 1 }));
+  const hi: string[] = [];
+  compile(script, trace, "hi", undefined, hi);
+  assert.equal(hi.length, 2, hi.join("\n"));
+  assert.match(hi[0], /^steps\[0\]\.beat\[0\]: no hi narration — used en/);
+  assert.match(hi[1], /^steps\[0\]\.beat\[1\]: a plain-string narration is spoken as hi/);
+  const en: string[] = [];
+  compile(script, trace, "en", undefined, en);
+  assert.deepEqual(en, []);
+});
+
+test("callout text per language: picks the produce language, falls back to en with a warning", () => {
+  const script = baseScript([{ id: "s", beat: [
+    { fx: "callout", style: "lower-third", text: { en: "Tasks", hi: "कार्य" } },
+    { fx: "callout", style: "lower-third", text: { en: "Settings" } },
+    { fx: "callout", text: "Brand", anchor: { text: "x" } },
+  ] }]);
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "callout", t: 1 },
+    { beat: "s", i: 1, kind: "fx", fx: "callout", t: 5 },
+    { beat: "s", i: 2, kind: "fx", fx: "callout", t: 9, rect: R },
+  ];
+  const warnings: string[] = [];
+  const [a, b, c] = compile(script, trace, "hi", undefined, warnings);
+  assert.deepEqual([a.calloutText, b.calloutText, c.calloutText], ["कार्य", "Settings", "Brand"]);
+  assert.equal(c.calloutPanels![0].text, "Brand");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^steps\[0\]\.beat\[1\]: no hi callout text — used en/);
+  assert.equal(compile(script, trace, "en")[0].calloutText, "Tasks");
 });
 
 // ── error paths ──────────────────────────────────────────────

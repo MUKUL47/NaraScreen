@@ -12,7 +12,8 @@
 //   placeholder  → getByPlaceholder(placeholder, { exact })
 //   testId       → getByTestId(testId)
 //   css          → locator(css)
-//   within       → search inside ONE container (see scopeLocator)
+//   within       → search inside ONE container (see scopeLocator):
+//                  css / role(+name) → first match; text → exact visible text, nearest row/card/section
 //   nth          → the nth match, 0-based (default 0)
 //
 // collectElements() lists what an agent could target on the current page and
@@ -27,8 +28,9 @@ type AriaRole = Parameters<Page["getByRole"]>[0];
 
 // ─── selector → Locator ──────────────────────────────────────────────
 
-/** Containers `within: { text }` climbs to: the nearest of these around the text
- *  (the element holding the text counts), else the text element's parent. */
+/** Containers `within: { text }` climbs to: the nearest of these around the first
+ *  VISIBLE element whose whole text is exactly that text (whitespace-normalised,
+ *  case-sensitive; the element itself counts), else that element's parent. */
 export const SCOPE_CONTAINERS = [
   "tr", "li", "[role=row]", "[role=listitem]", "article", "section",
   "form", "fieldset", "dialog", "[role=dialog]", "[role=group]",
@@ -50,7 +52,9 @@ export function scopeLocator(page: Page, within: Scope): Locator {
     return page.getByRole(within.role as AriaRole, within.name != null ? { name: within.name } : undefined).first();
   }
   if (within.text != null) {
-    return page.getByText(within.text, { exact: false }).first().locator(NEAREST_CONTAINER_XPATH);
+    // Exact text of a VISIBLE element, so "Task 1" does not scope to "Task 12"
+    // and hidden copies (templates, closed menus) are ignored.
+    return page.getByText(within.text, { exact: true }).filter({ visible: true }).first().locator(NEAREST_CONTAINER_XPATH);
   }
   throw new Error("within needs one of css | text | role");
 }
@@ -319,7 +323,8 @@ const DOM_INFO = pageFn<(el: Element, arg: { key: string; containers: string }) 
       const t = norm(node.textContent);
       if ((t.match(/[\\p{L}\\p{N}]/gu) || []).length < 2) continue;
       if (typeof p.checkVisibility === "function" && !p.checkVisibility()) continue;
-      out.containerText = t.length <= 40 ? t : t.slice(0, 40).replace(/\\s+\\S*$/, "");
+      // within.text matches an element's whole text exactly: only short, whole texts qualify
+      if (t.length <= 60 && norm(p.innerText || p.textContent) === t) out.containerText = t;
       break;
     }
     let c = cont;
@@ -330,6 +335,48 @@ const DOM_INFO = pageFn<(el: Element, arg: { key: string; containers: string }) 
   }
   return out;
 }`);
+
+const VISIBLE_BOX = pageFn<(el: Element) => { box: [number, number, number, number]; vis: [number, number, number, number] | null }>(`
+(el) => {
+  const r = el.getBoundingClientRect();
+  let x0 = Math.max(0, r.left), y0 = Math.max(0, r.top);
+  let x1 = Math.min(window.innerWidth, r.right), y1 = Math.min(window.innerHeight, r.bottom);
+  const cs0 = getComputedStyle(el);
+  let hidden = cs0.visibility === "hidden" || cs0.display === "none" || r.width <= 0 || r.height <= 0;
+  // Ancestors that clip (overflow other than visible) hide whatever lies outside them.
+  for (let a = el.parentElement; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
+    const cs = getComputedStyle(a);
+    if (cs.position === "fixed") break;
+    const cx = cs.overflowX !== "visible", cy = cs.overflowY !== "visible";
+    if (!cx && !cy) continue;
+    const ar = a.getBoundingClientRect();
+    if (cx) { x0 = Math.max(x0, ar.left + a.clientLeft); x1 = Math.min(x1, ar.left + a.clientLeft + a.clientWidth); }
+    if (cy) { y0 = Math.max(y0, ar.top + a.clientTop); y1 = Math.min(y1, ar.top + a.clientTop + a.clientHeight); }
+  }
+  const box = [r.left, r.top, r.width, r.height];
+  return { box, vis: hidden || x1 - x0 < 1 || y1 - y0 < 1 ? null : [x0, y0, x1 - x0, y1 - y0] };
+}`);
+
+export interface VisibleBox {
+  /** Full layout box (viewport coordinates, may extend off screen). */
+  box: { x: number; y: number; width: number; height: number };
+  /** The part actually visible: clipped by the viewport and every scrolling/overflow-hidden ancestor. */
+  visible: Rect | null;
+  /** True when the whole box is visible (1px slack). */
+  whole: boolean;
+}
+
+/** Where an element is and how much of it can really be seen (null if detached). */
+export async function measureVisible(loc: Locator, timeout = 1000): Promise<VisibleBox | null> {
+  const m = await loc.evaluate(VISIBLE_BOX, undefined, { timeout }).catch(() => null);
+  if (!m) return null;
+  const [x, y, width, height] = m.box;
+  const visible: Rect | null = m.vis
+    ? [Math.round(m.vis[0]), Math.round(m.vis[1]), Math.round(m.vis[2]), Math.round(m.vis[3])]
+    : null;
+  const whole = !!m.vis && Math.abs(m.vis[2] - width) <= 1 && Math.abs(m.vis[3] - height) <= 1;
+  return { box: { x, y, width, height }, visible, whole };
+}
 
 const PROBE = pageFn<(els: Element[], key: string) => number[]>(
   `(els, key) => { const s = window[key] || []; return els.map((e) => s.indexOf(e)); }`,

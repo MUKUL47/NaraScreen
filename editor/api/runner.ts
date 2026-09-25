@@ -28,6 +28,7 @@ import {
   describeSelector,
   locate,
   locateAll,
+  measureVisible,
   pageHeadings,
   pickSelector,
   scopeLocator,
@@ -100,6 +101,10 @@ interface Env {
   currentPath: string;
   /** Pages NaraScreen opened itself (not "the site opened a new tab"). */
   internalPages: Set<Page>;
+  /** NaraScreen is opening a helper tab right now (its "page" event fires before newPage() resolves). */
+  openingInternal?: boolean;
+  /** Headless check: scroll instantly instead of gliding (nothing is filmed). */
+  fast?: boolean;
 }
 
 // ─── entry point ─────────────────────────────────────────────────────
@@ -150,6 +155,7 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
       log,
       currentPath: "",
       internalPages: new Set(),
+      fast: fastCheck,
     };
     watchPageEvents(env, context);
 
@@ -283,6 +289,7 @@ async function runStep(
   });
   const dwell = fastCheck ? 0 : beat.dwellMs ?? d.dwellMs;
   let lastRect: Rect | undefined; // fx without an anchor reuse the latest box in the step
+  let prevT: number | undefined; // trace t of the previous slot in this step
 
   for (let i = 0; i < beat.beat.length; i++) {
     const entry = beat.beat[i];
@@ -290,14 +297,22 @@ async function runStep(
     env.currentPath = where.path!;
     let rect: Rect | undefined;
     let rects: Rect[] | undefined;
+    let blurStart: number | undefined;
     if (isAct(entry)) {
-      rect = await runAct(env, entry, where, d);
-      if (rect) lastRect = rect;
+      const res = await runAct(env, entry, where, d);
+      rect = res.rect;
+      if (res.focus !== undefined) lastRect = res.focus ?? undefined;
     } else {
       // A `disabled` fx is still revealed and dwelled on: toggling it must not
       // change the recording (it is not part of the job's structure hash).
       // Range fx (speed/skip/mute) only mark a time, so they carry no box.
       rect = RANGE_FX.includes(entry.fx) ? undefined : lastRect;
+      // A blur hides a secret: where was it BEFORE the reveal? (see below)
+      const blurSels = entry.fx === "blur" ? (entry.anchors?.length ? entry.anchors : entry.anchor ? [entry.anchor] : []) : [];
+      const blurT = blurSels.length ? now() : undefined;
+      const blurBefore = blurSels.length
+        ? await Promise.all(blurSels.map((a) => measureVisible(locate(env.page, a), 500).catch(() => null)))
+        : [];
       if (entry.targets?.length) {
         rects = await targetRects(env, entry.targets, where, d);
         rect = rects[0];
@@ -311,10 +326,29 @@ async function runStep(
         rect = await reveal(env, loc, entry.anchor, at, d, d.timeoutMs);
       }
       if (rect) lastRect = rect;
+      if (blurSels.length) {
+        const after = rects ?? (rect ? [rect] : []);
+        const unmoved =
+          after.length === blurBefore.length &&
+          blurBefore.every((b, k) => !!b?.whole && !!b.visible && b.visible.every((v, n) => Math.abs(v - after[k][n]) <= 2));
+        if (unmoved) {
+          // Already on screen where it gets blurred: start the blur as early as
+          // it was known to be there (end of the previous slot, else just now),
+          // not after the reveal/settle — otherwise the secret is readable meanwhile.
+          blurStart = prevT ?? blurT;
+        } else if (blurBefore.some((b) => b?.visible)) {
+          addWarning(
+            env,
+            `${where.path}: the element to blur moved while being revealed (scrolled into place), so it was visible unblurred for a moment. ` +
+              `Put the blur where the element is already on screen (e.g. after a scroll to it), or accept the brief exposure.`,
+          );
+        }
+      }
     }
     // Stamp AFTER the act/reveal: t marks the on-screen result, which the dwell
-    // then holds and any following fx aligns to.
-    const t = round3(now());
+    // then holds and any following fx aligns to. (Exception: an unmoved blur.)
+    const t = round3(blurStart ?? now());
+    prevT = t;
     trace.push({
       beat: beat.id,
       i,
@@ -416,7 +450,7 @@ function watchPageEvents(env: Env, context: BrowserContext): void {
     void dlg.accept().catch(() => {});
   });
   context.on("page", (p) => {
-    if (env.internalPages.has(p)) return;
+    if (env.openingInternal || env.internalPages.has(p)) return;
     addWarning(
       env,
       `${env.currentPath}: the site opened a new tab/window. Only the original tab is recorded and the script keeps acting there. Prefer a goto to that URL instead.`,
@@ -435,8 +469,23 @@ function navTimeout(d: DemoDefaults): number {
 
 // ─── acts ────────────────────────────────────────────────────────────
 
-/** Execute one act. Returns the target's post-reveal box for element acts. */
-async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults): Promise<Rect | undefined> {
+/**
+ * What an act leaves behind: `rect` = the target's box when it was acted on
+ * (goes into the trace), `focus` = the box following anchorless fx should use
+ * (undefined = unchanged, null = no element to inherit).
+ */
+interface ActResult {
+  rect?: Rect;
+  focus?: Rect | null;
+}
+
+/** Visible box of an element right now, without scrolling (null if not visible). */
+async function currentRect(loc: Locator): Promise<Rect | null> {
+  return (await measureVisible(loc, 500))?.visible ?? null;
+}
+
+/** Execute one act. */
+async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults): Promise<ActResult> {
   const { page } = env;
   const timeout = e.timeoutMs ?? d.timeoutMs;
   const sel = pickSelector(e);
@@ -444,35 +493,39 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   switch (e.act) {
     case "goto":
       await gotoChecked(env, (e.url ?? e.path)!, where, navTimeout(d));
-      return undefined;
+      return {};
 
     case "wait":
       await sleep(e.ms ?? 0);
-      return undefined;
+      return {};
 
     case "useSession":
       await useSession(env, e, where, navTimeout(d));
-      return undefined;
+      return {};
 
-    case "waitFor":
-      await resolveTarget(env, sel!, where, timeout, { waitFor: true });
-      return undefined; // a gate only: nothing to show
+    case "waitFor": {
+      // A gate: nothing is revealed, but the element it waited for is what an
+      // anchorless fx right after it means ("wait for the dialog, spotlight it").
+      const loc = await resolveTarget(env, sel!, where, timeout, { waitFor: true });
+      await settledBox(loc);
+      return { focus: await currentRect(loc) };
+    }
 
     case "press": {
       const key = e.key!;
       if (sel) {
         const loc = await resolveTarget(env, sel, where, timeout);
         await attempt(env, where, sel, `press "${key}" on`, () => loc.press(key, { timeout }));
-      } else {
-        await attempt(env, where, undefined, `press "${key}"`, () => page.keyboard.press(key));
+        return { focus: await currentRect(loc) };
       }
-      return undefined;
+      await attempt(env, where, undefined, `press "${key}"`, () => page.keyboard.press(key));
+      return {};
     }
 
     case "scroll":
       if (!sel) {
-        await scrollToY(page, e.y ?? 0, d);
-        return undefined;
+        await scrollToY(env, e.y ?? 0, d, where);
+        return {};
       }
       break; // element scroll: the reveal below IS the action
   }
@@ -507,9 +560,11 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       await selectOption(env, loc, sel, e.option!, where, timeout);
       break;
     case "scroll":
-      break;
+      return { rect, focus: rect };
   }
-  return rect;
+  // The act may have moved the element (layout change, textarea growing, an
+  // auto-scroll): fx that inherit it use where it is NOW; if it is gone, where it was.
+  return { rect, focus: (await currentRect(loc)) ?? rect };
 }
 
 async function gotoChecked(env: Env, target: string, where: ErrorWhere, timeoutMs: number): Promise<void> {
@@ -554,17 +609,84 @@ function absoluteUrl(target: string, baseUrl: string | undefined): string {
   }
 }
 
-async function scrollToY(page: Page, y: number, d: DemoDefaults): Promise<void> {
-  await page.evaluate((top) => window.scrollTo({ top, behavior: "smooth" }), y);
-  await sleep(d.revealMs);
-  // Smooth scrolling over a long distance can outlast revealMs: wait until it stops.
-  let last = -1;
-  for (let i = 0; i < 25; i++) {
-    const cur = await page.evaluate(() => window.scrollY).catch(() => last);
-    if (cur === last) break;
-    last = cur;
-    await sleep(60);
+/**
+ * scroll {y}: scroll the page's main scroller — the document, or (apps whose
+ * body doesn't scroll) the biggest scrollable element, e.g. an inner <main> —
+ * to y, gliding on camera. Warns when there is nothing to scroll.
+ */
+async function scrollToY(env: Env, y: number, d: DemoDefaults, where: ErrorWhere): Promise<void> {
+  const plan = await env.page.evaluate(
+    ({ top, key, smooth }) => {
+      const se = (document.scrollingElement || document.documentElement) as HTMLElement;
+      let target: HTMLElement | null = se.scrollHeight - se.clientHeight > 1 ? se : null;
+      if (!target) {
+        let best = 0;
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+          if (el.scrollHeight - el.clientHeight <= 1) continue;
+          const oy = getComputedStyle(el).overflowY;
+          if (oy !== "auto" && oy !== "scroll") continue;
+          const area = el.clientWidth * el.clientHeight;
+          if (area > best) {
+            best = area;
+            target = el;
+          }
+        }
+      }
+      if (!target) return { found: false, from: 0, to: 0 };
+      const to = Math.max(0, Math.min(top, target.scrollHeight - target.clientHeight));
+      const from = target.scrollTop;
+      (window as unknown as Record<string, unknown>)[key] = [{ a: target, left: target.scrollLeft, top: to }];
+      target.scrollTo({ top: to, behavior: (smooth ? "smooth" : "instant") as ScrollBehavior });
+      return { found: true, from, to };
+    },
+    { top: y, key: SCROLL_KEY, smooth: !env.fast },
+  );
+  if (!plan.found) {
+    addWarning(env, `${where.path}: scroll to y=${y} did nothing — neither the page nor any element on it can scroll. Scroll to an element instead ({"act": "scroll", "role": …}).`);
+    return;
   }
+  await waitForScroll(env.page, Date.now(), d.revealMs);
+}
+
+/** Key of the page-global list of { element, target scroll position } being glided to. */
+const SCROLL_KEY = "__narascreen_scroll_targets";
+
+/**
+ * Wait until every scroller reaches its target position — "the reading did not
+ * change" can't tell a finished scroll from one that has not started yet (smooth
+ * scrolling can start >1 s late in a fresh browser). After 3 s the positions are
+ * set directly. Also waits at least `minMs` since `since` (the on-camera settle).
+ */
+async function waitForScroll(page: Page, since: number, minMs: number): Promise<void> {
+  const check = (force: boolean) =>
+    page
+      .evaluate(
+        ({ key, force }) => {
+          const w = window as unknown as Record<string, unknown>;
+          const list = (w[key] as { a: Element; left: number; top: number }[] | undefined) ?? [];
+          let done = true;
+          for (const x of list) {
+            if (Math.abs(x.a.scrollTop - x.top) > 1 || Math.abs(x.a.scrollLeft - x.left) > 1) {
+              done = false;
+              if (force) x.a.scrollTo({ left: x.left, top: x.top, behavior: "instant" as ScrollBehavior });
+            }
+          }
+          if (done || force) delete w[key];
+          return done;
+        },
+        { key: SCROLL_KEY, force },
+      )
+      .catch(() => true); // navigated away: nothing left to wait for
+  const deadline = since + 3000;
+  while (!(await check(false))) {
+    if (Date.now() > deadline) {
+      await check(true);
+      break;
+    }
+    await sleep(40);
+  }
+  const left = since + minMs - Date.now();
+  if (left > 0) await sleep(left);
 }
 
 async function selectOption(
@@ -635,20 +757,24 @@ async function useSession(env: Env, e: ActEntry, where: ErrorWhere, timeoutMs: n
   try {
     await context.clearCookies();
     if (state.cookies?.length) await context.addCookies(state.cookies);
-    // localStorage: the current origin is replaced in place (it belongs to the
-    // previous session); other origins are seeded through a throwaway tab whose
-    // requests never reach the network.
+    // What a switch replaces: ALL cookies; the current page origin's
+    // localStorage + sessionStorage (they belong to the previous session) are
+    // cleared, then refilled from the file. Other origins listed in the file are
+    // replaced through a throwaway tab whose requests never reach the network.
+    // Origins that are neither current nor in the file keep their storage.
     const current = originOf(page.url());
     const origins = state.origins ?? [];
     if (current) {
       const items = origins.find((o) => o.origin === current)?.localStorage ?? [];
       await page.evaluate((list) => {
         localStorage.clear();
+        sessionStorage.clear();
         for (const it of list) localStorage.setItem(it.name, it.value);
       }, items);
     }
     for (const o of origins.filter((x) => x.origin !== current && x.localStorage?.length)) {
-      const tmp = await context.newPage();
+      env.openingInternal = true;
+      const tmp = await context.newPage().finally(() => (env.openingInternal = false));
       env.internalPages.add(tmp);
       try {
         await tmp.route("**/*", (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<html></html>" }));
@@ -718,11 +844,12 @@ async function resolveTarget(
     throw await diagnoseMissing(env, sel, where, timeout, err, !!opts.waitFor);
   }
   if (sel.nth == null) {
-    const count = await locateAll(env.page, sel).count().catch(() => 1);
+    // Only visible matches are a real choice (hidden copies — templates, closed menus — aren't).
+    const count = await locateAll(env.page, sel).filter({ visible: true }).count().catch(() => 1);
     if (count > 1) {
       addWarning(
         env,
-        `${where.path}: selector ${describeSelector(sel)} matched ${count} elements; used the first. ` +
+        `${where.path}: selector ${describeSelector(sel)} matched ${count} visible elements; used match #${sel.nth ?? 0}. ` +
           `Add "nth" or "within" to choose explicitly (\`narascreen inspect\` suggests a unique selector).`,
       );
     }
@@ -821,23 +948,39 @@ async function diagnoseMissing(
 async function reveal(env: Env, loc: Locator, sel: Selector, where: ErrorWhere, d: DemoDefaults, timeout: number): Promise<Rect> {
   // Scrolled in-page rather than with locator.scrollIntoViewIfNeeded(): that one
   // runs actionability retries which stall on disabled elements, and the target
-  // is already known to be visible here.
+  // is already known to be visible here. "On screen" means not clipped by the
+  // viewport NOR by a scrolling / overflow-hidden ancestor (a row in a list).
+  const before = await measureVisible(loc, timeout);
+  const started = Date.now();
   try {
     await loc.evaluate(
-      (el, center) => {
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        let r = el.getBoundingClientRect();
-        if (r.top < 0 || r.left < 0 || r.bottom > vh || r.right > vw) {
-          el.scrollIntoView({ block: "nearest", inline: "nearest" }); // jump: get it on screen
-          r = el.getBoundingClientRect();
+      (el, o) => {
+        // Jump (instantly) when not fully visible, so the glide below is short.
+        if (o.jump) el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" as ScrollBehavior });
+        const w = window as unknown as Record<string, unknown>;
+        if (!o.center) {
+          delete w[o.key];
+          return;
         }
-        if (center) {
-          // then glide it to the middle ON CAMERA (tall elements: to the top)
-          el.scrollIntoView({ block: r.height > vh * 0.8 ? "start" : "center", inline: "center", behavior: "smooth" });
+        // Glide to the middle ON CAMERA (tall elements: to the top). Record where
+        // every scroller ends up (instant dry run, then back) so the caller can
+        // wait for the glide to really arrive.
+        const block: ScrollLogicalPosition = el.getBoundingClientRect().height > window.innerHeight * 0.8 ? "start" : "center";
+        const scrollers: Element[] = [];
+        for (let a = el.parentElement; a; a = a.parentElement) {
+          if (a.scrollHeight > a.clientHeight || a.scrollWidth > a.clientWidth) scrollers.push(a);
+        }
+        const se = document.scrollingElement || document.documentElement;
+        if (!scrollers.includes(se)) scrollers.push(se);
+        const from = scrollers.map((a) => [a.scrollLeft, a.scrollTop]);
+        el.scrollIntoView({ block, inline: "center", behavior: "instant" as ScrollBehavior });
+        w[o.key] = scrollers.map((a) => ({ a, left: a.scrollLeft, top: a.scrollTop }));
+        if (o.smooth) {
+          scrollers.forEach((a, i) => a.scrollTo({ left: from[i][0], top: from[i][1], behavior: "instant" as ScrollBehavior }));
+          el.scrollIntoView({ block, inline: "center", behavior: "smooth" });
         }
       },
-      d.center,
+      { center: d.center, jump: !before?.whole, smooth: !env.fast, key: SCROLL_KEY },
       { timeout },
     );
   } catch (err) {
@@ -847,14 +990,15 @@ async function reveal(env: Env, loc: Locator, sel: Selector, where: ErrorWhere, 
       hint: "The element is hidden, detached or covered. Do whatever reveals it first (open the menu/tab/dialog).",
     });
   }
-  await sleep(d.revealMs); // let the scroll settle ON CAMERA
+  // Let the glide ARRIVE and settle on camera before measuring.
+  await waitForScroll(env.page, started, d.revealMs);
   const box = await settledBox(loc);
-  const rect = box ? clampToViewport(box, env.script.viewport) : null;
-  if (!rect) {
+  const m = box ? await measureVisible(loc, timeout) : null;
+  if (!m?.visible) {
     throw await failure(
       env,
       "TARGET_NOT_VISIBLE",
-      `${label(where)}: ${describeSelector(sel)} is ${box ? "outside the visible area" : "hidden or has no size"} after scrolling`,
+      `${label(where)}: ${describeSelector(sel)} is ${box ? "outside the visible area (or clipped by a scrolling container)" : "hidden or has no size"} after scrolling`,
       {
         where,
         selector: sel,
@@ -863,7 +1007,7 @@ async function reveal(env: Env, loc: Locator, sel: Selector, where: ErrorWhere, 
       },
     );
   }
-  return rect;
+  return m.visible;
 }
 
 /**
@@ -889,8 +1033,17 @@ async function revealGroup(env: Env, items: { sel: Selector; where: ErrorWhere }
     const right = Math.max(...boxes.map((b) => b.box!.x + b.box!.width));
     if (bottom - top <= vp.height && right - left <= vp.width) {
       const dy = (top + bottom) / 2 - vp.height / 2;
-      await env.page.evaluate((by) => window.scrollBy({ top: by, behavior: "smooth" }), dy);
-      await sleep(d.revealMs);
+      const started = Date.now();
+      await env.page.evaluate(
+        ({ by, key, smooth }) => {
+          const se = document.scrollingElement || document.documentElement;
+          const top = Math.max(0, Math.min(se.scrollTop + by, se.scrollHeight - se.clientHeight));
+          (window as unknown as Record<string, unknown>)[key] = [{ a: se, left: se.scrollLeft, top }];
+          se.scrollTo({ top, behavior: (smooth ? "smooth" : "instant") as ScrollBehavior });
+        },
+        { by: dy, key: SCROLL_KEY, smooth: !env.fast },
+      );
+      await waitForScroll(env.page, started, d.revealMs);
       await settledBox(locs[0]);
       boxes = await measureAll(locs, vp);
     }
@@ -923,22 +1076,22 @@ async function revealGroup(env: Env, items: { sel: Selector; where: ErrorWhere }
 
 type Box = { x: number; y: number; width: number; height: number };
 
-/** Every box in the current scroll position (no scrolling); rect only when fully on screen. */
+/**
+ * Every element in the current scroll position (no scrolling). `rect` is set only
+ * when the element is wholly visible — not cut by the viewport or by a scrolling /
+ * overflow-hidden ancestor. An element bigger than the viewport counts when it
+ * fills it.
+ */
 async function measureAll(locs: Locator[], vp: { width: number; height: number }): Promise<{ box: Box | null; rect: Rect | null }[]> {
   return Promise.all(
     locs.map(async (l) => {
-      const box = await l.boundingBox().catch(() => null);
-      const rect = box && box.width > 0 && box.height > 0 && fullyInside(box, vp) ? clampToViewport(box, vp) : null;
-      return { box, rect };
+      const m = await measureVisible(l, 1000);
+      if (!m) return { box: null, rect: null };
+      const huge = m.box.width > vp.width || m.box.height > vp.height;
+      const fills = !!m.visible && m.visible[2] >= Math.min(m.box.width, vp.width) - 1 && m.visible[3] >= Math.min(m.box.height, vp.height) - 1;
+      return { box: m.box, rect: m.whole || (huge && fills) ? m.visible : null };
     }),
   );
-}
-
-/** Entirely on screen (1px slack); an element bigger than the viewport only has to cover it. */
-function fullyInside(box: Box, vp: { width: number; height: number }): boolean {
-  const okX = box.width > vp.width ? box.x <= 1 && box.x + box.width >= vp.width - 1 : box.x >= -1 && box.x + box.width <= vp.width + 1;
-  const okY = box.height > vp.height ? box.y <= 1 && box.y + box.height >= vp.height - 1 : box.y >= -1 && box.y + box.height <= vp.height + 1;
-  return okX && okY;
 }
 
 /** zoom `targets`: one rect per target, index-aligned (all measured on one frame). */
@@ -971,17 +1124,6 @@ async function settledBox(loc: Locator): Promise<{ x: number; y: number; width: 
   return prev && prev.width > 0 && prev.height > 0 ? prev : null;
 }
 
-function clampToViewport(
-  box: { x: number; y: number; width: number; height: number },
-  vp: { width: number; height: number },
-): Rect | null {
-  const x0 = Math.max(0, box.x);
-  const y0 = Math.max(0, box.y);
-  const x1 = Math.min(vp.width, box.x + box.width);
-  const y1 = Math.min(vp.height, box.y + box.height);
-  if (x1 - x0 < 1 || y1 - y0 < 1) return null;
-  return [Math.round(x0), Math.round(y0), Math.round(x1 - x0), Math.round(y1 - y0)];
-}
 
 /** Run a Playwright action; turn its error into ACTION_FAILED with a useful hint. */
 async function attempt(

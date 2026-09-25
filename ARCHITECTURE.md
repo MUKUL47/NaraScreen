@@ -2,7 +2,7 @@
 
 This is the developer-facing map of the repo. For install and usage, see [README.md](README.md).
 
-It describes the repo as of 2026-09-25: `main` at `e2c541a`, plus uncommitted work in `editor/electron/produce.ts`, `editor/api/` and `editor/indicf5-prototype/`.
+It describes the repo as of 2026-09-25: `main` at `cd44074`, plus uncommitted work on the headless agent layer (`editor/api/`) and renderer fixes in `editor/electron/`.
 
 ---
 
@@ -16,7 +16,7 @@ NaraScreen is a local-only desktop app for making narrated product-demo videos:
 
 Narration comes from **Kokoro TTS**, either a local Python install or a local HTTP server, or from the microphone. Nothing is uploaded anywhere.
 
-A second, experimental layer is under construction in [editor/api/](editor/api/): a **headless demo generator**. You write a declarative demo script. Playwright performs it in a real browser and records it. A compiler turns the script into NaraScreen actions, and the same producer renders the video without Electron. It is currently used to generate tutorial videos for the *erpfee* ERP web app.
+A second layer lives in [editor/api/](editor/api/): a **headless, agent-facing interface** (`narascreen` CLI + `narascreen serve` HTTP server). An external AI agent — or a person — writes a declarative *demo script* (JSON, no timestamps or pixels); NaraScreen drives a real browser with Playwright, records it, generates narration, and renders the video with the same producer the desktop app uses. It is app-agnostic and agent-agnostic. It can also narrate/edit an existing video file instead of recording a site.
 
 ---
 
@@ -32,8 +32,9 @@ ui-demo-pipeline/
 └── editor/                    the app itself; run everything from here
     ├── electron/              Electron main process and the Node-side media pipeline
     ├── src/                   React renderer (UI)
-    ├── api/                   headless demo-gen pipeline (uncommitted)
-    ├── indicf5-prototype/     TTS quality experiment for Indian languages (uncommitted)
+    ├── api/                   headless agent layer: schema, CLI, HTTP server, manual (see below)
+    ├── bin/narascreen         portable launcher for the CLI (works from any folder)
+    ├── indicf5-prototype/     TTS experiment for Indian languages (git-ignored, local only)
     ├── scripts/               build-dist.js and optional setup scripts (venvs, Piper)
     ├── public/                static assets for the renderer
     └── vite.config.ts         builds the renderer plus 3 Electron entries
@@ -42,7 +43,8 @@ ui-demo-pipeline/
 Git ignores these folders, so they exist only on the local disk:
 
 - **Build output:** `editor/node_modules`, `dist/`, `dist-electron/`, `dist-web/` (stale), `release/`.
-- **Local runtimes:** `kokoro-venv/`, `translate-venv/`, `piper/`, `indicf5-prototype/venv/`.
+- **Local runtimes:** `kokoro-venv/`, `translate-venv/`, `piper/`, all of `indicf5-prototype/`.
+- **Headless output:** `narascreen-out/` (default job/inspect folder), `editor/api/_tests/.tmp/`.
 - **App icon:** `build/`, including `icon.png`. A fresh clone has no icon, so `npm run dist` needs one to be added.
 - **At the repo root:** `demo-output/` (old sessions from March) and `sessions/` (empty, owned by root).
 
@@ -159,8 +161,10 @@ Each pass reads the previous pass's output from `video/temp/pass_N.mp4`:
 | 2 | **Skip** | Cuts out the kept pieces, normalizes their audio, and joins them |
 | 3 | **Speed** | Ranges are first remapped through the skip pass, then cut, retimed and joined |
 | 4 | **Mute** | Ranges are remapped through skip and speed |
-| 5 | **Inserts** | Zoom, pause and narrate at remapped timestamps. TTS runs here if no audio file exists yet. The pass records how much time each insert adds, and where |
-| 6 | **Overlays** | Blur, then spotlight, then callout, with timestamps remapped through skip, speed *and* inserts. Actions of one type are batched into as few ffmpeg runs as possible, splitting only where they overlap in time |
+| 4b | **Blur** | Before the inserts, on the post-skip/speed timeline (duration in recording seconds), so freeze frames and zoom frames are cut from already-blurred video |
+| 5 | **Inserts** | Zoom, pause and narrate at remapped timestamps. TTS runs here if no audio file exists yet. Records how much time each insert adds (for remapping) and collects one subtitle cue per narration |
+| 5b | **Spotlight** | Remapped through skip, speed *and* inserts; batched into as few ffmpeg runs as possible, split only where they overlap |
+| 5c | **Text (ASS)** | Callouts and subtitles in one libass pass on the final timeline: subtitles above spotlight dimming and above lower-thirds; any script (Latin, Devanagari, CJK) renders |
 | 7 | **Music** | Mixed in with `amix`. The music is ducked during the narration ranges recorded by the insert pass |
 | 8 | **Final** | Scale and pad to `resolution`, and/or re-encode at `crf`, if either differs from the defaults (native size, CRF 18) |
 
@@ -171,8 +175,8 @@ Every segment is normalized to 44.1 kHz stereo AAC before joining, because strea
 **Timestamp remapping** is the subtle part:
 - Actions are authored against the original recording.
 - Every pass that changes duration (skip, speed, inserts) exposes a function that maps a timestamp from the old timeline to the new one, and later passes compose these functions.
-- The uncommitted change in `produce.ts` moved the overlay passes from *before* inserts to *after* them, and added `insertExpansions` / `buildInsertRemap`. Before this, spotlights and callouts drifted earlier with every freeze insert.
-- The step-list comment above `produceTimelineVideo` (around line 1048) still shows the old order.
+- Spotlight and callout run *after* the inserts, remapped through `insertExpansions` / `buildInsertRemap`, so they don't drift earlier with every freeze. Blur runs *before* the inserts (pass 4b) so freeze and zoom frames are cut from already-blurred video.
+- Subtitles are collected during the insert pass and burned in one final pass, on top of spotlight dimming.
 
 ---
 
@@ -219,47 +223,48 @@ The IPC handler `tts:generate` in [main.ts](editor/electron/main.ts) calls [tts.
 
 ---
 
-## Headless demo generator (`editor/api/`, uncommitted)
+## Headless agent layer (`editor/api/`)
 
-**Purpose:** go from a script to a finished tutorial video with no manual timeline work. The contract is in [DEMO_SCRIPT_CONTRACT.md](editor/api/DEMO_SCRIPT_CONTRACT.md) (partly stale; see below).
+**Purpose:** an external agent that knows nothing about this repo produces narrated demo videos of any website
+by writing one JSON file and calling NaraScreen. The agent-facing documentation is [api/MANUAL.md](editor/api/MANUAL.md)
+(served at `/docs` with generated reference tables); this section is the developer view.
 
 ```
-*.demo-script.json ──runner.ts──► recordings/recording.mp4 + trace.jsonl ──compiler.ts──► actions
-   (intent only: no                (Playwright Chromium; CDP screencast        │
-    timestamps or pixels)           frames → ffmpeg; the trace holds the real   ▼
-                                    time + on-screen box of every step)    produce-headless.ts
-                                                                           → demo-project.json
-                                                                           → produceTimelineVideo()
-                                                                           → video/final_<lang>.mp4
+agent ─► demo-script.json ─► validate ─► record (runner: Playwright + CDP screencast → recording.mp4 + trace.jsonl)
+                                        or import (video-source.ts: source.video → recording.mp4 + trace from `at`/`rect`)
+                             ─► produce (narration.ts: Kokoro clips, cached ─► compiler.ts: script+trace → NaraScreen actions
+                                         ─► produce-headless.ts: demo-project.json ─► electron/produce.ts renderer)
+                             ─► preview (contact sheet)          all state in a job folder (job.ts)
+agent ◄─ one JSON envelope per command (CLI stdout / HTTP), progress events on stderr / SSE
 ```
 
-- **Script shape** ([types.ts](editor/api/types.ts)):
-  - top level: `baseUrl`, `storageState`, `viewport`, `defaults`, `steps[]`;
-  - each step is a *beat* holding a list of **act** verbs (`goto`, `waitFor`, `click`, `fill`, `select`, `hover`, `press`, `scroll`, `switchUser`) and **fx** verbs (`zoom`, `spotlight`, `callout`, `blur`, `pause`, `narrate`);
-  - selectors are by role+name, label, text or placeholder, optionally scoped with `within`.
-- **Compiler** ([compiler.ts](editor/api/compiler.ts)): joins each fx entry to its trace entry and emits exactly one NaraScreen action. It is pure, with tests in `_tests/`.
-- **Runner** ([runner.ts](editor/api/runner.ts)): for each step it scrolls the target into view and centres it, waits, measures its box (a zero-size box is a hard failure), performs the action, then waits again. `check` mode validates selectors without recording.
-- **CLI** ([cli.ts](editor/api/cli.ts)); there is no npm script, so run it from `editor/`:
-  ```bash
-  npx tsx api/cli.ts check <script.json> [--headed] [--hold]   # validate selectors only
-  npx tsx api/cli.ts run   <script.json> [--out <dir>]         # record only
-  npx tsx api/cli.ts gen   <script.json> [--out <dir>] [--lang en,hi]   # record → compile → produce
-  npx tsx --test api/_tests/compiler.test.ts                   # compiler tests
-  ```
-  `--lang en,hi` records once and produces one video per language. The default output folder is `~/Videos/<script-name>/`.
-- **erpfee coupling:** the tool is tied to one developer machine.
-  - [record-erpfee.sh](editor/api/record-erpfee.sh) boots the erpfee stack: Postgres :5433, Redis :6380 (flushed every run), backend :8090, `vite preview` :4173, and Kokoro via Docker. It then runs [mint-cookie.ts](editor/api/mint-cookie.ts) to log in and write a Playwright `storageState`, then runs `cli.ts gen`.
-  - Paths are hard-coded: `/home/mukul/shoponmap-starter/backend` and `/home/mukul/erpfee`.
-  - Every example script hard-codes an absolute `storageState` path.
-  - The script contains test-only secrets, labelled NON-PROD.
-  - It runs `fuser -k` on ports 8090 and 4173, killing whatever is using them.
-- **Known gaps:**
-  - Per-beat `dwellMs` is ignored; only `defaults.dwellMs` is read.
-  - `scroll` by `y` is ignored.
-  - `tsc -p api/tsconfig.json` fails at `mint-cookie.ts:181` because `import.meta` is not allowed under `module: CommonJS`.
-  - The contract doc still calls `narrate` "deferred" and shows the output file as `final.mp4`.
+| Module | Role |
+|---|---|
+| [schema.ts](editor/api/schema.ts) | **The contract.** zod schema + TS types for demo scripts; exported as JSON Schema (`narascreen schema`). Browser scripts (acts + fx) and video-source scripts (fx with `at`/`rect`). |
+| [validate.ts](editor/api/validate.ts) | Load + `${env:NAME}` interpolation + structural (zod, per-entry) + semantic checks; every issue with a path and hint. |
+| [errors.ts](editor/api/errors.ts), [output.ts](editor/api/output.ts) | Stable error codes → exit codes; the envelope `{ok, command, result|error, warnings, next}` and the event stream. |
+| [job.ts](editor/api/job.ts) | Job folder, atomic lock, and the structure fingerprint that decides when a recording can be reused (text-only edits re-render without re-recording). |
+| [runner.ts](editor/api/runner.ts), [page-elements.ts](editor/api/page-elements.ts), [screencast.ts](editor/api/screencast.ts), [inspect.ts](editor/api/inspect.ts) | Browser side: selector semantics (one definition), reveal/measure, trace, failure diagnostics (screenshot + candidate selectors), page inspection. |
+| [narration.ts](editor/api/narration.ts), [compiler.ts](editor/api/compiler.ts), [produce-headless.ts](editor/api/produce-headless.ts), [preview.ts](editor/api/preview.ts) | Produce side: TTS (fails loudly, retried, cached), timeline model (auto durations, ranges, stop rules), render + output presets, contact sheets. |
+| [cli.ts](editor/api/cli.ts), [commands.ts](editor/api/commands.ts), [doctor.ts](editor/api/doctor.ts), [init.ts](editor/api/init.ts), [bin/narascreen](editor/bin/narascreen) | CLI. `commands.ts` is the single command catalog (help, parsing, server mapping, docs). |
+| [server.ts](editor/api/server.ts), [docs.ts](editor/api/docs.ts) | `narascreen serve`: runs spawn the CLI with `--events json`; SSE/NDJSON events, long-poll, uploads, workspace confinement, token/Origin checks, limits; `/docs`, `/docs.md`, `/llms.txt`. |
 
----
+**Design rules** (keep them when changing things):
+- App-agnostic and agent-agnostic: nothing may reference a specific target app or AI vendor.
+- stdout carries exactly one JSON envelope; everything else goes to stderr.
+- Every failure is an `AgentError` with a code, a `hint` the agent can act on, and `where` in the script.
+- New script fields go into `schema.ts` first (docs tables are generated from it), then validate/compiler, then MANUAL.md.
+
+**Tests** (run from `editor/`): `npm run test:api` runs everything; individually
+`tsx --test api/_tests/{compiler,narration,preview}.test.ts` (unit, fast), `server.test.ts` (~1 min),
+`e2e.test.ts` (full CLI against the "Acme Tasks" fixture app in `_tests/fixture-site/`, ~10 min; needs
+Kokoro on :8880, ffmpeg with drawtext/ass, Playwright Chromium).
+
+**Renderer changes made for this layer** (also affect the desktop app): blur is applied before freeze/zoom
+inserts (so frozen and zoomed frames stay blurred) with its duration in recording seconds; subtitles are burned
+in one final pass above spotlights and lower-thirds; speed ramps now actually shorten the video; slow motion
+< 0.5× works with audio; music works on silent recordings; narrated zooms get subtitles; small-region blur,
+`%` in callouts, and special characters in paths are handled.
 
 ## Side experiments and unwired code
 

@@ -388,7 +388,8 @@ function usage(ctx: Ctx, message: string, hint?: string): AgentError {
 /** ./narascreen-out/<script name without .demo-script.json/.json>, against cwd. */
 function defaultOut(ctx: Ctx, scriptPath: string): string {
   const base = path.basename(scriptPath).replace(/\.demo-script\.json$|\.json$/i, "") || "demo";
-  return path.resolve(ctx.cwd, OUT_ROOT, base);
+  // Under `serve`, jobs live in the server's workspace so HTTP clients can name them.
+  return WORKSPACE ? path.join(WORKSPACE, "jobs", base) : path.resolve(ctx.cwd, OUT_ROOT, base);
 }
 
 function outDir(ctx: Ctx, loaded: LoadedScript): string {
@@ -509,6 +510,56 @@ function safeRealpath(p: string): string | undefined {
   }
 }
 
+// ─── `next` for HTTP callers ─────────────────────────────────────────
+//
+// `narascreen serve` runs this CLI with NARASCREEN_CALLER=http: its client
+// can't run shell commands, so the same suggestions come out as the HTTP
+// requests that do the same thing. Jobs inside <workspace>/jobs are named.
+
+const HTTP_CALLER = process.env.NARASCREEN_CALLER === "http";
+const WORKSPACE = process.env.NARASCREEN_WORKSPACE ? path.resolve(process.env.NARASCREEN_WORKSPACE) : undefined;
+
+function jobRef(dir: string): string {
+  if (!WORKSPACE) return dir;
+  const rel = path.relative(path.join(WORKSPACE, "jobs"), dir);
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel) && !rel.includes(path.sep) ? rel : dir;
+}
+
+function httpHint(args: string[]): string {
+  const [command, ...rest] = args;
+  const doc = findCommand(command);
+  const body: Record<string, unknown> = { command };
+  const options: Record<string, string | boolean> = {};
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a.startsWith("--")) {
+      const name = a.slice(2);
+      const type = doc?.flags.find((f) => f.name === name)?.type;
+      options[name] = type === "string" ? rest[++i] : true;
+    } else if (doc?.arg?.name === "job") body.job = jobRef(path.resolve(a));
+    else if (doc?.arg?.name === "script") body.scriptPath = a;
+    else body.arg = a;
+  }
+  // The server names the job folder with `job`, not --out.
+  if (typeof options.out === "string" && ["check", "record", "make"].includes(command)) {
+    body.job = jobRef(options.out);
+    delete options.out;
+  }
+  switch (command) {
+    case "help":
+    case "manual":
+      return "GET /docs.md";
+    case "doctor":
+      return "GET /v1/doctor";
+    case "voices":
+      return "GET /v1/voices";
+    case "validate":
+      return `POST /v1/validate ${JSON.stringify({ scriptPath: body.scriptPath })}`;
+  }
+  if (Object.keys(options).length) body.options = options;
+  return `POST /v1/runs ${JSON.stringify(body)}`;
+}
+
 /** Shell-quote one argument only when it needs it. */
 function q(s: string): string {
   if (/^[\w@%+=:,./-]+$/.test(s)) return s;
@@ -517,10 +568,12 @@ function q(s: string): string {
 }
 
 function cli(...args: string[]): string {
+  if (HTTP_CALLER) return httpHint(args);
   return [PROG, ...args.map(q)].join(" ");
 }
 
 function openCmd(file: string): string {
+  if (HTTP_CALLER) return `GET /v1/files?path=${encodeURIComponent(file)}`;
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? 'start ""' : "xdg-open";
   return `${opener} ${q(file)}`;
 }
@@ -746,14 +799,25 @@ async function produceJob(ctx: Ctx, dir: string, script: DemoScript, langs: stri
       const { width, height } = r as Partial<{ width: number; height: number }>;
       videos.push({ lang, path: r.videoPath, durationSec: r.durationSec, ...(width && height ? { width, height } : {}), narrations: r.narrations, preview });
     } catch (e) {
+      const err = toAgentError(e);
       try {
         const state = loadJob(dir);
-        state.produce[lang] = { status: "failed", at: nowIso(), error: toAgentError(e).toJSON() };
+        state.produce[lang] = { status: "failed", at: nowIso(), error: err.toJSON() };
         writeJob(dir, state);
       } catch {
         // keep the original error
       }
-      throw e;
+      if (!videos.length) throw err;
+      // Languages already rendered are finished products — say where they are.
+      throw new AgentError(err.code, `[${lang}] ${err.message}`, {
+        hint: err.hint,
+        where: err.where,
+        details: {
+          ...err.details,
+          failedLang: lang,
+          videos: videos.map((v) => ({ lang: v.lang, path: v.path, durationSec: v.durationSec, preview: v.preview })),
+        },
+      });
     }
   }
   return videos;
@@ -890,7 +954,8 @@ const HANDLERS: Record<string, Handler> = {
       script = loadScript(ctx.known.script).script;
     }
     const { runDoctor } = await import("./doctor");
-    const report = await runDoctor({ script, outDir: path.resolve(ctx.cwd, OUT_ROOT) });
+    // Under `serve`, output goes to the server's workspace, not our cwd.
+    const report = await runDoctor({ script, outDir: WORKSPACE ?? path.resolve(ctx.cwd, OUT_ROOT) });
     for (const c of report.checks) {
       if (!c.ok && !c.required) ctx.warnings.push(`${c.id}: ${c.detail}${c.fix ? ` — fix: ${c.fix}` : ""}`);
     }

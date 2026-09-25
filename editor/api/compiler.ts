@@ -6,10 +6,12 @@
 // the browser (but range fx may end at one). Disabled fx emit nothing either;
 // the script-level `music` becomes one music action.
 //
-// The one non-trivial job is "auto" overlay durations (spotlight / callout /
-// blur that should stay up while the narration that follows is spoken). The
-// producer first cuts skips and applies speed ramps, then inserts freeze frames
-// (pause, zoom, narrate) at fx timestamps, and draws overlays LAST, remapping
+// The one non-trivial job is "auto" overlay durations (spotlight / callout
+// that should stay up while the narration that follows is spoken). The
+// producer first cuts skips and applies speed ramps (and burns blurs there, so
+// blur durations are plain recording seconds — see resolveBlur), then inserts
+// freeze frames (pause, zoom, narrate) at fx timestamps, and draws spotlights
+// and callouts LAST, remapping
 // only their START: an overlay whose source time is t_i is drawn from
 // placed(t_i) to placed(t_i) + duration on the final timeline. So the duration
 // has to include everything the overlay lives through. `modelTimeline`
@@ -17,7 +19,14 @@
 // bookkeeping) so these numbers match what produce.ts really renders.
 
 import { AgentError, type AgentErrorInit } from "./errors";
-import { narrationSlots, resolveAudio, resolveNarration, type NarrationClip, type NarrationSource } from "./narration";
+import {
+  narrationLanguageNote,
+  narrationSlots,
+  resolveAudio,
+  resolveNarration,
+  type NarrationClip,
+  type NarrationSource,
+} from "./narration";
 import { RANGE_DEFAULT_UNTIL } from "./schema";
 import {
   BUILTIN_DEFAULTS,
@@ -52,6 +61,13 @@ export interface CompileOptions {
 
 /** Overlay fallback when no narration follows (and the schema's default). */
 export const AUTO_FALLBACK_SEC = 3;
+/** Spotlight/callout "end" windows run this far past the MODELLED end of the
+ *  final video (its real length is only known after rendering; the renderer
+ *  clamps every overlay to it), so model error can't cut them short. */
+export const END_OPEN_SEC = 60;
+/** Blur runs on the recording timeline, whose end is known exactly: "end"
+ *  just adds a hair so the last frame is inside the window. */
+export const BLUR_END_PAD_SEC = 0.1;
 /** Shortest overlay "auto" ever produces. */
 export const AUTO_MIN_SEC = 0.5;
 /** Overlays stay up this long after their narration's last word. */
@@ -115,7 +131,11 @@ type DurationMode = "fixed" | "auto" | "step-end" | "end";
 
 function overlayDuration(fx: FxEntry): { value: number; mode: DurationMode } {
   if (typeof fx.duration === "number") return { value: fx.duration, mode: "fixed" };
-  return { value: AUTO_FALLBACK_SEC, mode: fx.duration === "step-end" || fx.duration === "end" ? fx.duration : "auto" };
+  if (fx.duration === "step-end" || fx.duration === "end") return { value: AUTO_FALLBACK_SEC, mode: fx.duration };
+  if (fx.duration === "auto") return { value: AUTO_FALLBACK_SEC, mode: "auto" };
+  // Unset: a blur hides something, so it stays for the whole step instead of
+  // lifting as soon as the next narration ends; other overlays follow "auto".
+  return { value: AUTO_FALLBACK_SEC, mode: fx.fx === "blur" ? "step-end" : "auto" };
 }
 
 /** Where step k ends in recording time: the first slot of the next step, or
@@ -154,10 +174,10 @@ function narrationFields(
  *  when they set a fontSize (else the producer centers its own banner). */
 function calloutPanel(
   fx: FxEntry,
+  text: string,
   rect: Rect | undefined,
   vp: { width: number; height: number },
 ): NonNullable<NaraAction["calloutPanels"]>[number] | undefined {
-  const text = fx.text!;
   const shown = fx.style === "step-counter" && fx.step ? `Step ${fx.step}: ${text}` : text;
   if (fx.style === "lower-third") {
     if (fx.fontSize == null) return undefined;
@@ -237,12 +257,14 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
       return done();
     }
     case "callout": {
-      if (!fx.text) throw fail("callout needs text", "Add a `text` to the callout entry.");
-      base.calloutText = fx.text;
+      // text may be per-language, like narration: {lang} → else "en"
+      const text = resolveNarration({ narrate: fx.text }, c.lang)?.text;
+      if (!text) throw fail("callout needs text", `Add a \`text\` to the callout entry (for "${c.lang}", or an "en" fallback).`);
+      base.calloutText = text;
       base.calloutStyle = fx.style ?? "label";
       base.calloutDuration = overlayDuration(fx).value;
       if (fx.step != null) base.calloutStep = fx.step;
-      const panel = calloutPanel(fx, rects[0], c.viewport);
+      const panel = calloutPanel(fx, text, rects[0], c.viewport);
       if (panel) base.calloutPanels = [panel];
       return done();
     }
@@ -291,6 +313,17 @@ export function compile(
   const d: DemoDefaults = { ...BUILTIN_DEFAULTS, ...script.defaults };
   const byKey = indexTrace(trace);
   const speakers = new Map(narrationSlots(script).map((sp) => [sp.key, sp]));
+  for (const sp of speakers.values()) {
+    const note = narrationLanguageNote(sp.src, lang);
+    if (note) warnings.push(`${sp.path}: ${note}`);
+  }
+  script.steps.forEach((beat, s) =>
+    beat.beat.forEach((e, i) => {
+      if (isFx(e) && e.fx === "callout" && !e.disabled && e.text && typeof e.text === "object" && e.text[lang] == null && e.text.en != null) {
+        warnings.push(`steps[${s}].beat[${i}]: no ${lang} callout text — used en. Add "${lang}": "…" to the text map.`);
+      }
+    }),
+  );
   const endOfRecording = opts.durationSec ?? Math.max(0, ...trace.map((e) => e.t)) + 0.5;
   const slots: Slot[] = [];
   let n = 0;
@@ -404,7 +437,14 @@ function tidyRanges(slots: Slot[], warnings: string[]): Slot[] {
     for (const sl of ranges) {
       const end = rangeEndOf(sl.action);
       if (end - sl.action.timestamp < MIN_RANGE_SEC) {
-        warnings.push(`${sl.path} (${kind}): the range is empty (${sl.action.timestamp.toFixed(2)}s–${end.toFixed(2)}s), so it is left out. Check \`until\`/\`seconds\`.`);
+        const len = Math.max(0, end - sl.action.timestamp).toFixed(2);
+        const what = kind === "skip" ? "nothing to cut" : kind === "speed" ? "nothing to speed up" : "nothing to mute";
+        warnings.push(
+          `${sl.path} (${kind}): has ${what} (${len}s) — it was ignored. ` +
+            (sl.fx.until == null || sl.fx.until === "next-act"
+              ? `It ends when the next action finishes, and that action was instant: put the slow action (the one to ${kind === "skip" ? "cut" : kind === "speed" ? "speed up" : "mute"}) right after it, or use \`seconds\`.`
+              : "Check `until` / `seconds`."),
+        );
         dropped.add(sl);
         continue;
       }
@@ -427,8 +467,8 @@ function tidyRanges(slots: Slot[], warnings: string[]): Slot[] {
     for (const sl of kept) {
       if (sl === skip || sl.fx.fx === "skip" || !(sl.t > a + 0.01 && sl.t < b - 0.01)) continue;
       warnings.push(
-        `${sl.path} (${sl.fx.fx}) happens inside the skipped stretch of ${skip.path} (${a.toFixed(1)}s–${b.toFixed(1)}s): it will be cut ` +
-          `(it lands on the cut point). Move it after the skipped part, or end the skip earlier.`,
+        `${sl.path} (${sl.fx.fx}) sits inside the part that ${skip.path} cuts out (${a.toFixed(1)}s–${b.toFixed(1)}s of the recording), ` +
+          `so it starts at the cut instead: on the first frame after the skipped part. Move it after the skip (or end the skip earlier) if that is not what you want.`,
       );
     }
   }
@@ -634,7 +674,7 @@ function overlayDurationOf(a: NaraAction): number {
 }
 
 /**
- * AUTO duration of overlay i, drawn from P = placed(t_i):
+ * AUTO duration of spotlight/callout i, drawn from P = placed(t_i):
  *   target = start(j) + cover(j) − P   for the first later entry j in the same
  *            step that narrates and has a clip; cover = clip + 0.5 for narrate;
  *            for a zoom, the end of its last narrated hold + 0.5 (capped at the
@@ -646,14 +686,41 @@ function overlayDurationOf(a: NaraAction): number {
  *    - never past the next overlay of the same fx type: placed(t_k) − P.
  *   Minimum 0.5 s.
  * "step-end" / "end": target = realAt(mapped(end of step / recording)) − P, with
- * the same caps — except a blur keeps covering (zooms inside it are warned
- * about) and only spotlights yield to the next overlay of their kind.
+ * the same caps, except that only spotlights yield to the next overlay of their
+ * kind. (Blur: see resolveBlur.)
  * start(j) − P = (t_j − t_i) + Σ real lengths of the inserts between them — the
  * spec's "(t_j − t_i) + inserts between + narration", with the lengths the
  * producer really renders. Lower-third callouts are not tied to an element, so
  * the zoom/range caps don't apply to them (drawn over zoomed or re-timed frames
  * they are still correct).
  */
+/**
+ * Blur is burned BEFORE the inserts (on the recording timeline, after skips
+ * and speed ramps), so every freeze and zoom cut from a blurred moment is
+ * blurred for its whole length. Its duration is therefore in RECORDING
+ * seconds and ignores the inserts entirely:
+ *   fixed → as given;  "step-end"/"end" (unset = "step-end") → until the next
+ *   step's first slot / the recording end;  "auto" → until the first later
+ *   narration in the step has spoken: its freeze (or zoom) point + 0.5 s, or,
+ *   for freeze:false, its start + clip + 0.5 s; else 3 s.  Minimum 0.5 s.
+ * No zoom, range or same-type caps: a blur never lifts early.
+ */
+function resolveBlur(sl: Slot, slots: Slot[]) {
+  if (sl.mode === "fixed") return;
+  let dur: number;
+  if (sl.mode === "end") {
+    dur = sl.windowEnd! - sl.t + BLUR_END_PAD_SEC;
+  } else if (sl.mode !== "auto") {
+    dur = sl.windowEnd! - sl.t;
+  } else {
+    const j = slots.find((o) => o.s === sl.s && o.i > sl.i && (o.fx.fx === "narrate" || o.fx.fx === "zoom") && o.clips.length);
+    if (!j) dur = AUTO_FALLBACK_SEC;
+    else if (j.fx.fx === "narrate" && j.fx.freeze === false) dur = j.t + j.clips[0].durationSec + NARRATION_TAIL_SEC - sl.t;
+    else dur = j.t + NARRATION_TAIL_SEC - sl.t;
+  }
+  setOverlayDuration(sl.action, Math.max(AUTO_MIN_SEC, round3(dur)));
+}
+
 function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, warnings: string[]) {
   const spanOf = new Map<NaraAction, InsertSpan>(tl.inserts.map((sp) => [sp.action, sp]));
   const slotOf = new Map<NaraAction, Slot>(slots.map((sl) => [sl.action, sl]));
@@ -662,24 +729,15 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
 
   for (const sl of slots) {
     if (!isOverlay(sl.fx)) continue;
-    const m = tl.mapped(sl.t);
-    const P = tl.placed(sl.t);
-    const zoomAfter = (sameStep: boolean) =>
-      tl.inserts.find((sp) => sp.action.type === "zoom" && sp.at >= m && (!sameStep || slotOf.get(sp.action)?.step === sl.step));
-
-    if (sl.mode === "fixed") {
-      // Explicit durations are the author's call — only flag a blur whose window
-      // reaches a zoom in its step: zoomed frames come from the unblurred video.
-      const dur = overlayDurationOf(sl.action);
-      const z = zoomAfter(true);
-      if (sl.fx.fx === "blur" && z && P + dur > z.start) {
-        warnings.push(
-          `${sl.path} (blur): its ${sec(dur)} window runs into the zoom at ${pathOf(z.action)}. ` +
-            `Zoomed frames are made from the unblurred recording, so what the blur hides can show — end the blur before the zoom or drop the zoom.`,
-        );
-      }
+    if (sl.fx.fx === "blur") {
+      resolveBlur(sl, slots);
       continue;
     }
+    const m = tl.mapped(sl.t);
+    const P = tl.placed(sl.t);
+    const zoomAfter = () => tl.inserts.find((sp) => sp.action.type === "zoom" && sp.at >= m);
+
+    if (sl.mode === "fixed") continue; // explicit durations are the author's call
 
     // target: "auto" → until the first narration that follows in this step
     // ends; "step-end"/"end" → until that point on the final timeline (so the
@@ -691,7 +749,7 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
       : undefined;
     const span = j && spanOf.get(j.action);
     if (!auto) {
-      target = tl.realAt(tl.mapped(sl.windowEnd!)) - P;
+      target = tl.realAt(tl.mapped(sl.windowEnd!)) - P + (sl.mode === "end" ? END_OPEN_SEC : 0);
     } else if (j && span) {
       let cover: number;
       if (j.fx.fx === "narrate") {
@@ -706,20 +764,8 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
     // caps
     const caps: { at: number; why: "zoom" | "range" | "same"; action: NaraAction }[] = [];
     const rectBound = !(sl.fx.fx === "callout" && (sl.fx.style ?? "label") === "lower-third");
-    // A blur told to last to the step/video end is hiding something: it keeps
-    // covering through later freezes; zooms inside it are only warned about.
-    const keepsCovering = sl.fx.fx === "blur" && !auto;
-    if (keepsCovering) {
-      const inside = tl.inserts.filter((sp) => sp.action.type === "zoom" && sp.at >= m && sp.start < P + target);
-      for (const z of inside) {
-        warnings.push(
-          `${sl.path} (blur, "${sl.mode}"): the zoom at ${pathOf(z.action)} falls inside the blur — zoomed frames are made from the ` +
-            `unblurred recording and are NOT blurred, so what the blur hides can show. Drop that zoom or zoom somewhere else.`,
-        );
-      }
-    }
-    if (rectBound && !keepsCovering) {
-      const z = zoomAfter(false);
+    if (rectBound) {
+      const z = zoomAfter();
       if (z) caps.push({ at: z.start - P - CAP_GAP_SEC, why: "zoom", action: z.action });
       const b = tl.boundaries.find((x) => x.at > m + 1e-6);
       if (b) caps.push({ at: tl.realAt(b.at) - P - CAP_GAP_SEC, why: "range", action: b.action });
@@ -737,9 +783,7 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
       warnings.push(
         `${sl.path} (${sl.fx.fx}): "${sl.mode}" duration stops at the zoom at ${pathOf(binding.action)} after ${sec(dur)}` +
           (j ? ` (the narration it was waiting for ends later)` : "") +
-          ` — overlays can't continue through a zoom because zoomed frames are rescaled` +
-          (sl.fx.fx === "blur" ? ", and the zoom shows the unblurred frame" : "") +
-          `. Move the ${sl.fx.fx} after the zoom, or narrate before zooming.`,
+          ` — overlays can't continue through a zoom because zoomed frames are rescaled. Move the ${sl.fx.fx} after the zoom, or narrate before zooming.`,
       );
     } else if (binding?.why === "range") {
       const kind = binding.action.type;

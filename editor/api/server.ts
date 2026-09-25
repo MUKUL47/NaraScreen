@@ -27,8 +27,8 @@ import { findCommand, type CommandDoc } from "./commands";
 import { buildLlmsTxt, buildManualMarkdown, renderDocsHtml } from "./docs";
 import { AgentError, exitCodeFor, toAgentError, type AgentErrorInit, type ErrorCode } from "./errors";
 import { failure, log, success, warn, type Envelope, type NaraEvent } from "./output";
-import { demoScriptJsonSchema } from "./schema";
-import { loadScript, scriptSummary, validateScript } from "./validate";
+import { demoScriptJsonSchema, type DemoScript } from "./schema";
+import { loadScript, scriptSummary, validateScript, type LoadedScript } from "./validate";
 import { DEFAULT_VOICES, LANG_CODES, LANG_LABELS } from "../src/lib/voices";
 
 // ─── public constants (also rendered into the docs) ──────────────────
@@ -36,6 +36,10 @@ import { DEFAULT_VOICES, LANG_CODES, LANG_LABELS } from "../src/lib/voices";
 export const DEFAULT_PORT = 4790;
 export const DEFAULT_HOST = "127.0.0.1";
 export const MAX_BODY_BYTES = 5 * 1024 * 1024;
+/** PUT /v1/files: largest upload, streamed to disk. */
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+/** File types an agent may upload (media for audio/music/source.video, JSON storage states). */
+export const UPLOAD_EXTENSIONS = [".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm", ".png", ".jpg", ".jpeg", ".json"];
 export const MAX_WAIT_SEC = 300;
 export const HEARTBEAT_SEC = 15;
 /** SIGTERM → wait this long → SIGKILL. */
@@ -44,6 +48,16 @@ export const CANCEL_GRACE_MS = 5000;
 export const RUN_COMMANDS = ["inspect", "check", "record", "produce", "make", "preview", "status", "doctor", "validate"];
 /** CLI flags that make no sense without a terminal (`--hold` waits for Enter). */
 export const BLOCKED_RUN_OPTIONS = ["hold"];
+/** Light runs (validate/status/doctor) executed at once; more wait in their own queue. */
+export const LIGHT_CONCURRENCY = 4;
+/** Runs waiting in queues; beyond this POST /v1/runs answers 429. */
+export const MAX_QUEUED_RUNS = 50;
+/** Events kept in memory per active run (all of them stay in the .events.ndjson file). */
+export const MAX_MEMORY_EVENTS = 2000;
+/** Events persisted per run; after that only stage/step/warning events are kept. */
+export const MAX_RUN_EVENTS = 50_000;
+/** Run records kept in memory; older finished runs are read back from disk on demand. */
+export const MAX_MEMORY_RUNS = 500;
 
 export interface ServerOptions {
   port: number;
@@ -68,7 +82,12 @@ export interface RouteDoc {
 }
 
 export const ROUTES: RouteDoc[] = [
-  { method: "GET", path: "/", summary: "Redirects to `/docs`.", response: "`302` → `/docs`" },
+  {
+    method: "GET",
+    path: "/",
+    summary: "Browsers (`Accept: text/html`) are redirected to `/docs`; everything else gets the `/llms.txt` orientation.",
+    response: "`302` → `/docs`, or `text/plain`",
+  },
   { method: "GET", path: "/docs", summary: "The manual as a web page (for humans).", response: "`text/html`" },
   {
     method: "GET",
@@ -110,22 +129,22 @@ export const ROUTES: RouteDoc[] = [
     method: "POST",
     path: "/v1/validate",
     summary: "Validates a script without opening a browser and reports every problem at once.",
-    body: "`{ \"script\": { …demo script… } }` or `{ \"scriptPath\": \"<absolute or workspace-relative path>\" }`",
+    body: "`{ \"script\": { …demo script… } }` or `{ \"scriptPath\": \"<.json file inside the workspace>\" }`, plus optional `\"env\": { \"NAME\": \"value\" }` for `${env:NAME}` placeholders",
     response: "`{ valid: true, scriptPath?, summary }` + `warnings`; `400 SCRIPT_INVALID` with `error.details.issues: [{ path, message, hint? }]`.",
   },
   {
     method: "POST",
     path: "/v1/scripts",
     summary: "Validates a script and saves it as `<workspace>/scripts/<name>.demo-script.json` (replacing any previous version). Pass the returned `scriptPath` to runs.",
-    body: "`{ \"name\": \"my-demo\", \"script\": { …demo script… } }`",
+    body: "`{ \"name\": \"my-demo\", \"script\": { …demo script… } }`, plus optional `\"env\"` (only to check `${env:NAME}` placeholders — the saved file keeps the placeholders)",
     response: "`{ scriptPath, name, summary }` + `warnings`; `400 SCRIPT_INVALID` (nothing saved) when invalid.",
   },
   {
     method: "POST",
     path: "/v1/runs",
     summary: "Starts a CLI command as a background run — see [Running commands](#running-commands-post-v1runs).",
-    body: "`{ \"command\": \"make\", \"script\": {…} or \"scriptPath\": \"…\", \"job\": \"my-demo\", \"options\": { \"lang\": \"en\" } }`",
-    response: "`202` `{ runId, status, command, cli, job?, scriptPath?, links: { self, events, wait, cancel } }` (links are paths on this server).",
+    body: "`{ \"command\": \"make\", \"script\": {…} or \"scriptPath\": \"…\", \"job\": \"my-demo\", \"options\": { \"lang\": \"en\" }, \"env\": { \"DEMO_PASSWORD\": \"…\" } }`",
+    response: "`202` `{ runId, status, command, cli, job?, scriptPath?, links: { self, events, wait, cancel } }` (links are paths on this server); `429` when too many runs are waiting.",
   },
   {
     method: "GET",
@@ -137,7 +156,7 @@ export const ROUTES: RouteDoc[] = [
     method: "GET",
     path: "/v1/runs/:id?wait=<sec>",
     summary: `One run. With \`wait\` (seconds, max ${MAX_WAIT_SEC}) the request blocks until the run ends or the time is up.`,
-    response: "`{ runId, command, status, exitCode?, createdAt, startedAt?, finishedAt?, eventCount, lastEvent?, queuePosition?, cli, job?, scriptPath?, links, outcome? }` — `outcome` is the CLI envelope once the run has ended.",
+    response: "`{ runId, command, status, exitCode?, createdAt, startedAt?, finishedAt?, eventCount, lastEvent?, queuePosition?, cli, job?, scriptPath?, links, ok?, output?, outcome? }` — once the run has ended, `output` is the command's result (or its error when `ok` is false) and `outcome` the full CLI envelope.",
   },
   {
     method: "GET",
@@ -152,10 +171,17 @@ export const ROUTES: RouteDoc[] = [
     response: "The run with `status: \"cancelled\"` (unchanged if it had already ended).",
   },
   {
+    method: "PUT",
+    path: "/v1/files?path=<relative path>",
+    summary: "Uploads a file into `<workspace>/uploads/` (raw request body, e.g. `curl -T clip.mp3`). Use the returned `relativePath` in scripts (`audio`, `music.path`, `source.video`, `storageState`). Replaces an existing file.",
+    body: "The raw file bytes (not JSON), up to 2 GB. Allowed extensions: " + UPLOAD_EXTENSIONS.join(" ") + ".",
+    response: "`{ path, relativePath, bytes }` — `path` absolute, `relativePath` relative to the workspace (e.g. `uploads/clip.mp3`); `400` for absolute paths, `..`, symlinks or other extensions; `413` over the size limit.",
+  },
+  {
     method: "GET",
     path: "/v1/files?path=<path>",
-    summary: "Downloads a file a run produced (video, contact sheet, screenshot…) or lists a folder. Supports `Range` for video seeking.",
-    response: "The file (`Content-Type` from the extension), or `{ path, entries: [{ name, type, size, url }] }` for a folder; `403` outside the workspace and run folders.",
+    summary: "Downloads a file from the workspace — e.g. a video, contact sheet or screenshot a run produced — or lists a folder. Supports `Range` for video seeking.",
+    response: "The file (`Content-Type` from the extension), or `{ path, entries: [{ name, type, size, url }] }` for a folder; `403` for anything outside the workspace (symlinks are followed before checking).",
   },
 ];
 
@@ -209,6 +235,8 @@ interface RunRecord {
   job?: string;
   outDir?: string;
   eventCount: number;
+  /** Names (never values) of variables the client passed in `env`. */
+  envNames?: string[];
   lastEvent?: RunEvent;
   outcome?: Envelope;
   serverPid: number;
@@ -216,13 +244,20 @@ interface RunRecord {
 }
 
 class Run {
-  /** In memory for runs of this server; null = history is only on disk (earlier server). */
-  events: RunEvent[] | null = [];
+  /** Client `env` for ${env:} substitution: handed to the child, never persisted. */
+  env?: Record<string, string>;
+  /** Values of `env`, masked out of every event and envelope this run produces. */
+  secrets: string[] = [];
+  /** Recent events of an active run (bounded); the full history is always on disk. */
+  events: RunEvent[] = [];
+  /** True once `events` no longer holds the whole history (trimmed, or run from disk). */
+  partial = false;
   readonly bus = new EventEmitter();
   child?: ChildProcess;
   exited?: Promise<void>;
-  eventLog?: fs.WriteStream;
-  heavySlot = false;
+  eventLogPath?: string;
+  /** Which queue slot the running child occupies. */
+  slot?: "heavy" | "light";
   cancelReason?: string;
   killTimer?: NodeJS.Timeout;
   stdout = "";
@@ -263,7 +298,36 @@ const usage = (message: string, hint?: string, status = 400, details?: Record<st
   new HttpError(status, "USAGE", message, { hint, details });
 
 const VERSION = readVersion();
-const MAX_STDOUT = 32 * 1024 * 1024;
+const MAX_STDOUT = 8 * 1024 * 1024;
+/** Longest stderr line kept as one event; longer output is split. */
+const MAX_LINE = 16 * 1024;
+const RUN_ID_RE = /^r_[A-Za-z0-9_-]{1,64}$/;
+const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+/** Variables a client may not set: they steer the process, the CLI or its tools, not the script. */
+const RESERVED_ENV_RE =
+  /^(PATH|HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|TMPDIR|TMP|TEMP|IFS|ENV|BASH_ENV|LANG|LANGUAGE|TZ|DISPLAY|WAYLAND_DISPLAY|NO_COLOR|FORCE_COLOR|(HTTPS?|ALL|NO|FTP)_PROXY|(LC|XDG|NODE|NPM|NARASCREEN|LD|DYLD|PLAYWRIGHT|ELECTRON|KOKORO|FFMPEG|FFPROBE|TSX|UV|SSL|OPENSSL|PYTHON|DBUS|CHROME|CHROMIUM|GTK|QT)(_.*)?)$/;
+const MAX_CLIENT_ENV = 50;
+
+/** Values worth masking: very short ones ("1", "on") would mangle unrelated text. */
+function secretValues(env: Record<string, string>): string[] {
+  return [...new Set(Object.values(env).filter((v) => v.length >= 4))].sort((a, b) => b.length - a.length);
+}
+
+function redact(text: string, secrets: string[]): string {
+  let out = text;
+  for (const v of secrets) if (out.includes(v)) out = out.split(v).join("***");
+  return out;
+}
+
+/** Mask secrets anywhere in a JSON value (JSON-escaped forms included). */
+function redactJson(v: unknown, secrets: string[]): unknown {
+  let text = JSON.stringify(v);
+  for (const s of secrets) {
+    const esc = JSON.stringify(s).slice(1, -1);
+    if (text.includes(esc)) text = text.split(esc).join("***");
+  }
+  return JSON.parse(text);
+}
 const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 class NaraServer {
@@ -276,9 +340,15 @@ class NaraServer {
   private readonly http: http.Server;
   private readonly runs = new Map<string, Run>();
   private readonly queue: Run[] = [];
-  private readonly roots = new Set<string>();
+  private readonly lightQueue: Run[] = [];
+  /** realpath of the workspace: every path reachable over HTTP must resolve inside it. */
+  private wsReal = "";
   private readonly routes: { method: string; re: RegExp; keys: string[]; key: string; handler: Handler; command: string }[];
   private heavyRunning = 0;
+  private lightRunning = 0;
+  private readonly lightWaiters: (() => void)[] = [];
+  /** One `doctor` process at a time; concurrent GET /v1/doctor share its result. */
+  private doctorInFlight?: Promise<Envelope>;
   /** Set synchronously by close(): no new runs start from here on. */
   private stopping = false;
   private closing?: Promise<void>;
@@ -305,10 +375,15 @@ class NaraServer {
   // ── lifecycle ──
 
   async listen(): Promise<string> {
-    for (const d of Object.values(this.dirs)) fs.mkdirSync(d, { recursive: true });
-    this.roots.add(this.ws);
-    this.loadRuns();
     const host = this.opts.host || DEFAULT_HOST;
+    if (!this.loopback && !this.token) {
+      throw new AgentError("USAGE", `Refusing to listen on ${host} without a token`, {
+        hint: "Anyone who can reach that address could run commands. Pass --token <secret> (or set NARASCREEN_TOKEN), or bind 127.0.0.1.",
+      });
+    }
+    for (const d of Object.values(this.dirs)) fs.mkdirSync(d, { recursive: true });
+    this.wsReal = fs.realpathSync(this.ws);
+    this.loadRuns();
     const port = Number.isFinite(Number(this.opts.port)) ? Number(this.opts.port) : DEFAULT_PORT;
     await new Promise<void>((resolve, reject) => {
       const onError = (err: NodeJS.ErrnoException) => {
@@ -329,16 +404,13 @@ class NaraServer {
     const addr = this.http.address() as AddressInfo;
     this.url = `http://${urlHost(host)}:${addr.port}`;
     process.on("exit", this.onProcessExit);
-    if (!this.loopback && !this.token) {
-      warn(`Listening on ${host} without a token: anyone who can reach this port can run commands. Use --token.`);
-    }
     return this.url;
   }
 
   close(): Promise<void> {
     this.stopping = true;
     this.closing ??= (async () => {
-      for (const run of [...this.queue]) await this.cancel(run, "The server was stopped before this run started.");
+      for (const run of [...this.queue, ...this.lightQueue]) await this.cancel(run, "The server was stopped before this run started.");
       await Promise.all(
         [...this.runs.values()].filter((r) => !r.final).map((r) => this.cancel(r, "The server was stopped while this run was in progress.")),
       );
@@ -360,7 +432,15 @@ class NaraServer {
 
   private handlers(): Record<string, { command: string; handler: Handler }> {
     return {
-      "GET /": { command: "docs", handler: async ({ res }) => void res.writeHead(302, { Location: "/docs" }).end() },
+      "GET /": {
+        command: "docs",
+        // Browsers get the HTML manual; agents and curl (no text/html in Accept) get the short orientation.
+        handler: async ({ req, res, base }) => {
+          res.setHeader("Vary", "Accept");
+          if (/text\/html/i.test(String(req.headers.accept ?? ""))) res.writeHead(302, { Location: "/docs" }).end();
+          else sendText(res, 200, "text/plain", buildLlmsTxt(base));
+        },
+      },
       "GET /docs": {
         command: "docs",
         handler: async ({ res, base }) =>
@@ -386,6 +466,7 @@ class NaraServer {
       "GET /v1/runs/:id/events": { command: "runs.events", handler: (c) => this.runEvents(c) },
       "POST /v1/runs/:id/cancel": { command: "runs.cancel", handler: (c) => this.cancelRun(c) },
       "GET /v1/files": { command: "files", handler: (c) => this.files(c) },
+      "PUT /v1/files": { command: "files.upload", handler: (c) => this.upload(c) },
     };
   }
 
@@ -437,13 +518,25 @@ class NaraServer {
 
   /** Auth + browser-attack checks for /v1. Docs stay public. */
   private guard(req: http.IncomingMessage) {
+    // DNS rebinding: a hostile page's domain re-pointed at us still carries its own
+    // name in Host. Loopback binds accept loopback names; other binds accept IP
+    // literals too (never an arbitrary domain name).
     const host = req.headers.host ?? "";
-    if (this.loopback && !isLoopbackHost(hostnameOf(host))) {
-      throw usage(`Unexpected Host header "${host}"`, "This server only answers requests addressed to localhost / 127.0.0.1.", 403);
+    const name = hostnameOf(host);
+    if (!isLoopbackHost(name) && (this.loopback || !isIpLiteral(name))) {
+      throw usage(`Unexpected Host header "${host}"`, "Address this server by 127.0.0.1 / localhost (or its IP address).", 403);
     }
+    // Browsers: another site's page (even a no-cors <img>/<video> GET, or a page on
+    // another localhost port) must not drive the API. Programs send neither header.
     const origin = req.headers.origin;
-    if (origin && origin !== `http://${host}`) {
-      throw usage(`Cross-origin request from ${origin} refused`, "Call the API from a program (curl, an HTTP client), not from another web page.", 403);
+    const site = String(req.headers["sec-fetch-site"] ?? "");
+    const sameOrigin = origin ? origin === `http://${host}` : site === "same-origin" || site === "none" || site === "";
+    if (!sameOrigin || site === "cross-site" || (site === "same-site" && !origin)) {
+      throw usage(
+        `Cross-origin request refused (${origin ? `Origin ${origin}` : `Sec-Fetch-Site ${site}`})`,
+        "Call the API from a program (curl, an HTTP client), not from a web page on another origin.",
+        403,
+      );
     }
     if (this.token) {
       const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "");
@@ -475,7 +568,7 @@ class NaraServer {
         workspace: this.ws,
         auth: !!this.token,
         concurrency: this.concurrency,
-        runs: { queued: this.queue.length, running },
+        runs: { queued: this.queue.length + this.lightQueue.length, running },
         docs: `${base}/docs.md`,
       }),
     );
@@ -499,17 +592,35 @@ class NaraServer {
   private async doctor({ res, url }: Ctx) {
     const args = ["doctor"];
     const scriptPath = url.searchParams.get("scriptPath");
-    if (scriptPath) args.push("--script", path.resolve(this.ws, scriptPath));
-    const env = await this.runCliOnce(args, 120_000, "doctor");
+    if (scriptPath) args.push(`--script=${this.loadScriptFile(scriptPath).path}`);
+    // Concurrent plain doctor calls share one process; every call also needs a light slot.
+    let pending = !scriptPath ? this.doctorInFlight : undefined;
+    if (!pending) {
+      if (this.lightWaiters.length >= MAX_QUEUED_RUNS) throw tooBusy();
+      pending = (async () => {
+        const release = await this.acquireLight();
+        try {
+          return await this.runCliOnce(args, 120_000, "doctor");
+        } finally {
+          release();
+        }
+      })();
+      if (!scriptPath) {
+        this.doctorInFlight = pending;
+        void pending.finally(() => (this.doctorInFlight = undefined));
+      }
+    }
+    const env = await pending;
     sendEnvelope(res, env.ok ? 200 : httpStatusFor((env.error?.code ?? "INTERNAL") as ErrorCode), env);
   }
 
   private async validate({ req, res }: Ctx) {
-    const body = await readJson(req, ["script", "scriptPath"]);
+    const body = await readJson(req, ["script", "scriptPath", "env"]);
+    const env = this.clientEnv(body.env, res);
     if (body.script !== undefined) {
       const raw = this.inlineScript(body.script);
-      const { script, warnings } = validateScript(raw, { dir: this.ws });
-      sendEnvelope(
+      const { script, warnings } = this.admitScript(raw, this.ws, env);
+      this.sendRedacted(
         res,
         200,
         success("validate", { valid: true, summary: scriptSummary(script) }, {
@@ -520,8 +631,8 @@ class NaraServer {
       return;
     }
     if (typeof body.scriptPath === "string" && body.scriptPath) {
-      const loaded = loadScript(path.resolve(this.ws, body.scriptPath));
-      sendEnvelope(
+      const loaded = this.loadScriptFile(body.scriptPath, env);
+      this.sendRedacted(
         res,
         200,
         success("validate", { valid: true, scriptPath: loaded.path, summary: scriptSummary(loaded.script) }, {
@@ -535,11 +646,12 @@ class NaraServer {
   }
 
   private async saveScript({ req, res }: Ctx) {
-    const body = await readJson(req, ["name", "script"]);
+    const body = await readJson(req, ["name", "script", "env"]);
+    const env = this.clientEnv(body.env, res);
     const name = sanitizeName(body.name);
     if (body.script === undefined) throw usage('Missing "script" (the demo script as a JSON object)');
     const raw = this.inlineScript(body.script);
-    const { script, warnings } = validateScript(raw, { dir: this.ws }); // throws SCRIPT_INVALID → 400, nothing saved
+    const { script, warnings } = this.admitScript(raw, this.ws, env); // throws SCRIPT_INVALID → 400, nothing saved
     const scriptPath = path.join(this.dirs.scripts, `${name}.demo-script.json`);
     writeFileAtomic(scriptPath, JSON.stringify(raw, null, 2) + "\n");
     sendEnvelope(
@@ -556,16 +668,114 @@ class NaraServer {
    *  (so it means the same thing once saved under <workspace>/scripts/). */
   private inlineScript(v: unknown): Record<string, unknown> {
     if (!isObject(v)) throw usage('"script" must be a JSON object (the demo script)', "GET /v1/schema describes the format.");
-    return absolutizeScriptPaths(v, this.ws);
+    const copy = JSON.parse(JSON.stringify(v)) as Record<string, unknown>;
+    mapScriptFiles(copy, (p) => (p.includes("${") || path.isAbsolute(p) ? p : path.resolve(this.ws, p)));
+    return copy;
+  }
+
+  // ── client-supplied environment (for ${env:NAME} in scripts) ──
+
+  /** Values to mask from responses on this connection (set when the request carried `env`). */
+  private readonly secretsByRes = new WeakMap<http.ServerResponse, string[]>();
+
+  /** Vet a request's `env`: names like DEMO_PASSWORD only, no overriding the process basics. */
+  private clientEnv(v: unknown, res: http.ServerResponse): Record<string, string> | undefined {
+    if (v === undefined || v === null) return undefined;
+    if (!isObject(v)) throw usage('"env" must be an object of NAME → string, e.g. {"DEMO_PASSWORD": "…"}');
+    const out: Record<string, string> = {};
+    const entries = Object.entries(v);
+    if (entries.length > MAX_CLIENT_ENV) throw usage(`"env" may hold at most ${MAX_CLIENT_ENV} variables`);
+    for (const [name, value] of entries) {
+      if (!ENV_NAME_RE.test(name)) throw usage(`env name "${name}" must match ${ENV_NAME_RE.source}`, "Use UPPER_CASE names such as DEMO_PASSWORD.");
+      if (RESERVED_ENV_RE.test(name)) throw usage(`env name "${name}" is reserved`, "Pick an application-specific name such as DEMO_PASSWORD; process settings (PATH, NODE_*, NARASCREEN_*, LD_*, …) cannot be overridden.");
+      if (typeof value !== "string" || value.length > 8192 || value.includes("\0")) throw usage(`env value of "${name}" must be a string (≤ 8 KB)`);
+      out[name] = value;
+    }
+    this.secretsByRes.set(res, secretValues(out));
+    return out;
+  }
+
+  private sendRedacted(res: http.ServerResponse, status: number, env: Envelope) {
+    const secrets = this.secretsByRes.get(res) ?? [];
+    sendEnvelope(res, status, secrets.length ? (redactJson(env, secrets) as Envelope) : env);
+  }
+
+  // ── workspace containment: everything reachable over HTTP lives in the workspace ──
+
+  /** Resolve a client-supplied path against the workspace; refuse it unless it stays
+   *  inside, after following symlinks of every existing part of it. */
+  private inWorkspace(p: string, what: string): string {
+    if (p.includes("\0")) throw usage(`Invalid ${what}`);
+    const abs = path.resolve(this.ws, p);
+    if (!isInside(realpathDeepest(abs), this.wsReal)) {
+      throw usage(
+        `${what} must be inside the workspace (${this.ws}): ${abs}`,
+        `Over HTTP every script, job and file lives in the workspace. Use a name or a path under ${this.ws} (relative paths resolve against it), or restart the server with --workspace <dir>.`,
+      );
+    }
+    return abs;
+  }
+
+  /** A script file named by a client (scriptPath / options.script / ?scriptPath=). */
+  private loadScriptFile(p: unknown, env?: Record<string, string>): LoadedScript {
+    if (typeof p !== "string" || !p.trim()) throw usage('"scriptPath" must be a file path');
+    const abs = this.inWorkspace(p, "scriptPath");
+    if (!/\.json$/i.test(abs)) throw usage(`scriptPath must be a .json file: ${abs}`);
+    // Check file references before validation opens (or probes) any of them.
+    try {
+      const raw: unknown = JSON.parse(fs.readFileSync(abs, "utf-8"));
+      if (isObject(raw)) this.checkScriptFiles(raw, path.dirname(abs));
+    } catch (e) {
+      if (e instanceof AgentError) throw e; // unreadable / not JSON: loadScript reports it below
+    }
+    const loaded = quietJsonErrors(() => loadScript(abs, { env: { ...process.env, ...env } }));
+    this.checkScriptFiles(loaded.script as unknown as Record<string, unknown>, loaded.dir);
+    checkScriptUrls(loaded.script);
+    return loaded;
+  }
+
+  /** Validate an inline script (relative paths against `dir`) with the HTTP-only rules. */
+  private admitScript(raw: Record<string, unknown>, dir: string, env?: Record<string, string>): { script: DemoScript; warnings: string[] } {
+    this.checkScriptFiles(raw, dir); // before validation opens (or probes) any file
+    const res = quietJsonErrors(() => validateScript(raw, { dir, env: { ...process.env, ...env } }));
+    this.checkScriptFiles(res.script as unknown as Record<string, unknown>, dir); // after ${env:} substitution
+    checkScriptUrls(res.script);
+    return res;
+  }
+
+  /** Every file a script points at (storageState, audio, music, source video) must be in the workspace. */
+  private checkScriptFiles(script: Record<string, unknown>, dir: string) {
+    const issues: { path: string; message: string; hint: string }[] = [];
+    mapScriptFiles(script, (p, at) => {
+      if (p.includes("${")) return p; // checked again after substitution
+      const abs = path.resolve(dir, p);
+      if (!isInside(realpathDeepest(abs), this.wsReal)) {
+        issues.push({ path: at, message: `file must be inside the workspace (${this.ws}): ${abs}`, hint: "Copy the file into the workspace and reference it from there." });
+      }
+      return p;
+    });
+    if (issues.length) {
+      throw new AgentError("SCRIPT_INVALID", `${issues.length} file reference(s) outside the workspace. First: ${issues[0].path}`, {
+        hint: "Over HTTP a script may only use files inside the server's workspace.",
+        where: { path: issues[0].path },
+        details: { issues },
+      });
+    }
+  }
+
+  private fileAllowed(p: string): boolean {
+    return isInside(realpathDeepest(path.resolve(this.ws, p)), this.wsReal);
   }
 
   // ── runs ──
 
   private async createRun({ req, res, base }: Ctx) {
     if (this.stopping) throw new HttpError(503, "INTERNAL", "The server is shutting down", { hint: "Retry once it is back." });
-    const body = await readJson(req, ["command", "script", "scriptPath", "job", "options"]);
+    const body = await readJson(req, ["command", "script", "scriptPath", "job", "options", "env"]);
+    const env = this.clientEnv(body.env, res);
+    if (this.queue.length + this.lightQueue.length >= MAX_QUEUED_RUNS) throw tooBusy();
     const runId = this.newRunId();
-    const plan = this.planRun(body, runId);
+    const plan = this.planRun(body, runId, env);
     const rec: RunRecord = {
       runId,
       command: plan.command,
@@ -577,28 +787,30 @@ class NaraServer {
       ...(plan.job ? { job: plan.job } : {}),
       ...(plan.outDir ? { outDir: plan.outDir } : {}),
       eventCount: 0,
+      ...(env ? { envNames: Object.keys(env) } : {}),
       serverPid: process.pid,
     };
     const run = new Run(rec);
+    if (env) {
+      run.env = env;
+      run.secrets = secretValues(env);
+    }
     this.runs.set(runId, run);
-    for (const d of [plan.job, plan.outDir]) if (d) this.roots.add(d);
-    run.eventLog = fs.createWriteStream(this.eventsPath(runId), { flags: "a" });
-    run.eventLog.on("error", () => (run.eventLog = undefined));
+    this.pruneRuns();
+    run.eventLogPath = this.eventsPath(runId);
     this.persist(run);
     log(`run ${runId}: ${rec.cli}`);
 
-    if (findCommand(plan.command)?.heavy) {
-      const ahead = this.queue.length + this.heavyRunning;
-      this.queue.push(run);
-      this.addEvent(run, {
-        type: "log",
-        message: ahead ? `queued: waiting for ${ahead} run(s) ahead` : "queued",
-        data: { runStatus: "queued", ahead },
-      });
-      this.pump();
-    } else {
-      this.start(run);
-    }
+    const heavy = !!findCommand(plan.command)?.heavy;
+    const queue = heavy ? this.queue : this.lightQueue;
+    const ahead = queue.length + (heavy ? this.heavyRunning : this.lightRunning) - (heavy ? this.concurrency - 1 : LIGHT_CONCURRENCY - 1);
+    queue.push(run);
+    this.addEvent(run, {
+      type: "log",
+      message: ahead > 0 ? `queued: waiting for ${ahead} run(s) ahead` : "queued",
+      data: { runStatus: "queued", ahead: Math.max(0, ahead) },
+    });
+    this.pump();
     sendEnvelope(
       res,
       202,
@@ -712,9 +924,30 @@ class NaraServer {
   }
 
   private findRun(id: string): Run {
-    const run = this.runs.get(id);
+    let run = this.runs.get(id);
+    if (!run && RUN_ID_RE.test(id)) {
+      // Pruned from memory (or from an earlier server): read it back from disk.
+      const rec = this.readRunRecord(`${id}.json`);
+      if (rec) {
+        run = new Run(rec);
+        run.partial = true;
+        this.runs.set(id, run);
+        this.pruneRuns();
+      }
+    }
     if (!run) throw usage(`No run with id "${id}"`, "GET /v1/runs lists the runs this server knows.", 404);
     return run;
+  }
+
+  /** Keep at most MAX_MEMORY_RUNS records in memory, dropping the oldest finished ones. */
+  private pruneRuns() {
+    if (this.runs.size <= MAX_MEMORY_RUNS) return;
+    const finished = [...this.runs.values()].filter((r) => r.final).sort((a, b) => a.rec.createdAt.localeCompare(b.rec.createdAt));
+    for (const r of finished) {
+      if (this.runs.size <= MAX_MEMORY_RUNS) break;
+      if (r.bus.listenerCount("event") || r.bus.listenerCount("end")) continue;
+      this.runs.delete(r.rec.runId);
+    }
   }
 
   private waitForEnd(run: Run, res: http.ServerResponse, ms: number): Promise<void> {
@@ -751,7 +984,8 @@ class NaraServer {
       ...(r.scriptPath ? { scriptPath: r.scriptPath } : {}),
       ...(r.outDir ? { outDir: r.outDir } : {}),
       links: links(r.runId),
-      ...(r.outcome ? { outcome: r.outcome } : {}),
+      // Once ended: `ok` + `output` = the command's result (or its error) without digging into `outcome`.
+      ...(r.outcome ? { ok: r.outcome.ok, output: r.outcome.ok ? r.outcome.result : r.outcome.error, outcome: r.outcome } : {}),
     };
     const next = run.final ? this.fileCommands(base, r.outcome) : this.followCommands(base, r.runId);
     return success("runs.get", result, { next });
@@ -768,14 +1002,14 @@ class NaraServer {
     if (!outcome) return [];
     const auth = this.token ? ' -H "Authorization: Bearer $NARASCREEN_TOKEN"' : "";
     return mediaPaths(outcome)
-      .filter((p) => this.isAllowed(p))
+      .filter((p) => this.fileAllowed(p))
       .slice(0, 6)
       .map((p) => `curl -s${auth} "${base}/v1/files?path=${encodeURIComponent(p)}" -o ${path.basename(p)}`);
   }
 
   // ── run planning: HTTP body → CLI argv ──
 
-  private planRun(body: Record<string, unknown>, runId: string) {
+  private planRun(body: Record<string, unknown>, runId: string, env?: Record<string, string>) {
     const command = body.command;
     if (typeof command !== "string" || !RUN_COMMANDS.includes(command)) {
       const hint = typeof command === "string" ? didYouMean(command, RUN_COMMANDS) : undefined;
@@ -796,18 +1030,24 @@ class NaraServer {
     if (given.length && doc.arg?.name !== "script" && !hasScriptFlag && doc.arg?.name !== "job") {
       throw usage(`"${command}" does not take a script`);
     }
+    // Scripts are validated (with the workspace rules) before the run is accepted.
     let scriptPath: string | undefined;
     let scope: string | undefined;
     if (body.script !== undefined) {
       const raw = this.inlineScript(body.script);
-      if (command !== "validate") scope = validateScript(raw, { dir: this.ws }).script.scope; // fail fast, before queueing
+      scope = this.admitScript(raw, this.ws, env).script.scope;
       scriptPath = path.join(this.dirs.scripts, `run-${runId}.demo-script.json`);
       writeFileAtomic(scriptPath, JSON.stringify(raw, null, 2) + "\n");
     } else if (given.length) {
-      const p = body.scriptPath ?? options.get("script");
-      if (typeof p !== "string" || !p.trim()) throw usage('"scriptPath" must be a file path');
-      scriptPath = path.resolve(this.ws, p);
-      if (command !== "validate") scope = loadScript(scriptPath).script.scope;
+      const loaded = this.loadScriptFile(body.scriptPath ?? options.get("script"), env);
+      scriptPath = loaded.path;
+      scope = loaded.script.scope;
+    }
+    const storage = options.get("storage-state");
+    if (typeof storage === "string") options.set("storage-state", this.inWorkspace(storage, "storage-state"));
+    const pageUrl = options.get("url");
+    if (typeof pageUrl === "string" && /^[a-z][a-z0-9+.-]*:/i.test(pageUrl) && !/^https?:\/\//i.test(pageUrl)) {
+      throw usage(`options.url must be an http(s) URL or a path: ${pageUrl}`);
     }
     if (doc.arg?.name === "script" && !scriptPath) {
       throw usage(`"${command}" needs a script`, 'Send "script" (the demo script as JSON) or "scriptPath" (a saved script, e.g. from POST /v1/scripts).');
@@ -822,7 +1062,7 @@ class NaraServer {
     const out = options.get("out");
     if (usesJob && typeof out === "string") {
       if (job) throw usage('Give either "job" or options.out, not both');
-      job = path.resolve(this.ws, out);
+      job = this.inWorkspace(out, "options.out");
     }
     if (usesJob && !job && scope) job = path.join(this.dirs.jobs, nameFrom(scope.toLowerCase()));
     if (doc.arg?.name === "job" && !job) {
@@ -832,7 +1072,7 @@ class NaraServer {
     let outDir: string | undefined;
     if (command === "inspect") {
       if (!scriptPath && !options.has("url")) throw usage('"inspect" needs options.url, or a script (with options.until)');
-      outDir = typeof out === "string" ? path.resolve(this.ws, out) : path.join(this.dirs.inspect, runId);
+      outDir = typeof out === "string" ? this.inWorkspace(out, "options.out") : path.join(this.dirs.inspect, runId);
     }
 
     const args: string[] = [command];
@@ -850,11 +1090,11 @@ class NaraServer {
 
   private resolveJob(v: unknown): string {
     if (typeof v !== "string" || !v.trim()) throw usage('"job" must be a job name or an absolute folder path');
-    if (path.isAbsolute(v)) return path.resolve(v);
+    if (path.isAbsolute(v)) return this.inWorkspace(v, "job");
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v)) {
-      throw usage(`Job name "${v}" may only use letters, digits, ".", "_" and "-"`, "Or pass an absolute folder path.");
+      throw usage(`Job name "${v}" may only use letters, digits, ".", "_" and "-"`, "Or pass an absolute folder path inside the workspace.");
     }
-    return path.join(this.dirs.jobs, v);
+    return this.inWorkspace(path.join(this.dirs.jobs, v), "job");
   }
 
   // ── run execution ──
@@ -862,10 +1102,37 @@ class NaraServer {
   private pump() {
     while (!this.stopping && this.heavyRunning < this.concurrency && this.queue.length) {
       const run = this.queue.shift()!;
-      run.heavySlot = true;
+      run.slot = "heavy";
       this.heavyRunning++;
       this.start(run);
     }
+    while (!this.stopping && this.lightRunning < LIGHT_CONCURRENCY && (this.lightQueue.length || this.lightWaiters.length)) {
+      const run = this.lightQueue.shift();
+      if (run) {
+        run.slot = "light";
+        this.lightRunning++;
+        this.start(run);
+      } else {
+        this.lightWaiters.shift()!();
+      }
+    }
+  }
+
+  /** A light slot for work outside runs (GET /v1/doctor). Resolves to its release function. */
+  private acquireLight(): Promise<() => void> {
+    return new Promise((resolve) => {
+      this.lightWaiters.push(() => {
+        this.lightRunning++;
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          this.lightRunning--;
+          this.pump();
+        });
+      });
+      this.pump();
+    });
   }
 
   private start(run: Run) {
@@ -880,13 +1147,14 @@ class NaraServer {
     }
     const child = spawn(process.execPath, [this.cliPath, ...rec.args, "--events", "json"], {
       cwd: this.ws,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: this.childEnv(run.env),
       stdio: ["ignore", "pipe", "pipe"],
       // Own process group (POSIX) so cancel can signal the CLI, its browser and ffmpeg together.
       detached: process.platform !== "win32",
       windowsHide: true,
     });
     run.child = child;
+    run.env = undefined; // the child has it; nothing else needs the values
     rec.pid = child.pid;
     this.persist(run);
     this.addEvent(run, { type: "log", message: `started: ${rec.cli}`, data: { runStatus: "running", pid: child.pid } });
@@ -900,6 +1168,10 @@ class NaraServer {
     child.stderr!.on("data", (chunk: string) => {
       const lines = (partial + chunk).split("\n");
       partial = lines.pop() ?? "";
+      if (partial.length > MAX_LINE) {
+        lines.push(partial); // an endless line: emit what we have (addEvent truncates it)
+        partial = "";
+      }
       for (const line of lines) this.onStderrLine(run, line);
     });
 
@@ -942,23 +1214,39 @@ class NaraServer {
         // not an event: fall through and keep it as a log line
       }
     }
-    run.stderrTail.push(line);
+    run.stderrTail.push(redact(line, run.secrets));
     if (run.stderrTail.length > 40) run.stderrTail.shift();
     this.addEvent(run, { type: "log", message: line });
   }
 
-  private addEvent(run: Run, ev: Omit<NaraEvent, "ts"> & { ts?: string }) {
+  private addEvent(run: Run, input: Omit<NaraEvent, "ts"> & { ts?: string }) {
+    const ev = run.secrets.length ? (redactJson(input, run.secrets) as typeof input) : input;
+    // A runaway child must not fill the disk: past the cap only milestones are kept.
+    if (run.rec.eventCount >= MAX_RUN_EVENTS && ev.type === "log") return;
+    const data = ev.data && JSON.stringify(ev.data).length > MAX_LINE * 4 ? { truncated: true } : ev.data;
     const full: RunEvent = {
       seq: ++run.rec.eventCount,
       ts: ev.ts ?? new Date().toISOString(),
       type: ev.type,
       ...(ev.stage ? { stage: ev.stage } : {}),
-      message: ev.message,
-      ...(ev.data ? { data: ev.data } : {}),
+      message: ev.message.length > MAX_LINE ? `${ev.message.slice(0, MAX_LINE)}… [truncated]` : ev.message,
+      ...(data ? { data } : {}),
     };
-    run.events?.push(full);
+    if (run.rec.eventCount === MAX_RUN_EVENTS) full.message += ` (event limit ${MAX_RUN_EVENTS} reached: further log lines are dropped)`;
+    // Written synchronously so the file is always the complete history replays read from.
+    if (run.eventLogPath) {
+      try {
+        fs.appendFileSync(run.eventLogPath, JSON.stringify(full) + "\n");
+      } catch {
+        run.eventLogPath = undefined;
+      }
+    }
+    run.events.push(full);
+    if (run.events.length > MAX_MEMORY_EVENTS) {
+      run.events.splice(0, run.events.length - MAX_MEMORY_EVENTS);
+      run.partial = true;
+    }
     run.rec.lastEvent = full;
-    run.eventLog?.write(JSON.stringify(full) + "\n");
     run.bus.emit("event", full);
   }
 
@@ -984,33 +1272,37 @@ class NaraServer {
         details: { exitCode: code, signal, stderrTail: run.stderrTail.slice(-20), stdoutTail: run.stdout.slice(-2000) },
       }));
     }
+    if (run.secrets.length && rec.outcome) rec.outcome = redactJson(rec.outcome, run.secrets) as Envelope;
+    run.secrets = [];
     if (code !== null) rec.exitCode = code;
     if (signal) rec.signal = signal;
     rec.finishedAt = new Date().toISOString();
-    // Results may point into folders the plan did not know about (e.g. a job named by the script).
-    const job = (rec.outcome?.result as { job?: unknown } | undefined)?.job;
-    if (typeof job === "string" && path.isAbsolute(job)) this.roots.add(job);
     run.child = undefined;
     run.stdout = "";
+    run.stderrTail = [];
     this.persist(run);
-    run.eventLog?.end();
-    run.eventLog = undefined;
+    // History now lives on disk only; memory holds just the record.
+    run.eventLogPath = undefined;
+    run.events = [];
+    run.partial = true;
     const secs = rec.startedAt ? ((Date.parse(rec.finishedAt) - Date.parse(rec.startedAt)) / 1000).toFixed(1) : "0";
     log(`run ${rec.runId}: ${rec.status} (${secs}s)`);
     run.bus.emit("end");
-    if (run.heavySlot) {
-      run.heavySlot = false;
-      this.heavyRunning--;
-      this.pump();
-    }
+    if (run.slot === "heavy") this.heavyRunning--;
+    if (run.slot === "light") this.lightRunning--;
+    run.slot = undefined;
+    this.pump();
+    this.pruneRuns();
   }
 
   private async cancel(run: Run, reason: string): Promise<void> {
     if (run.final) return;
     run.cancelReason = reason;
-    const queued = this.queue.indexOf(run);
-    if (queued >= 0 || !run.child) {
-      if (queued >= 0) this.queue.splice(queued, 1);
+    for (const q of [this.queue, this.lightQueue]) {
+      const i = q.indexOf(run);
+      if (i >= 0) q.splice(i, 1);
+    }
+    {
       if (!run.child) {
         this.finish(run, null, null);
         return;
@@ -1025,6 +1317,12 @@ class NaraServer {
     if (!run.final) this.finish(run, null, "SIGKILL");
   }
 
+  /** Environment of a CLI child: the server's, the client's `env` (already vetted),
+   *  and markers so the CLI shapes `next` hints for HTTP callers. */
+  private childEnv(clientEnv?: Record<string, string>): NodeJS.ProcessEnv {
+    return { ...process.env, ...clientEnv, NO_COLOR: "1", NARASCREEN_WORKSPACE: this.ws, NARASCREEN_CALLER: "http" };
+  }
+
   /** One-shot CLI call (GET /v1/doctor): returns its envelope. */
   private runCliOnce(args: string[], timeoutMs: number, command: string): Promise<Envelope> {
     return new Promise((resolve) => {
@@ -1034,14 +1332,16 @@ class NaraServer {
       }
       const child = spawn(process.execPath, [this.cliPath, ...args, "--events", "json"], {
         cwd: this.ws,
-        env: { ...process.env, NO_COLOR: "1" },
+        env: this.childEnv(),
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",
         windowsHide: true,
       });
       let stdout = "";
       let stderr = "";
-      child.stdout!.setEncoding("utf8").on("data", (c: string) => (stdout += c));
+      child.stdout!.setEncoding("utf8").on("data", (c: string) => {
+        if (stdout.length < MAX_STDOUT) stdout += c;
+      });
       child.stderr!.setEncoding("utf8").on("data", (c: string) => (stderr = (stderr + c).slice(-4000)));
       const timer = setTimeout(() => killTree(child, "SIGKILL"), timeoutMs);
       child.once("error", (err) => {
@@ -1077,6 +1377,15 @@ class NaraServer {
     return path.join(this.dirs.runs, `${id}.events.ndjson`);
   }
 
+  private readRunRecord(file: string): RunRecord | undefined {
+    try {
+      const rec = JSON.parse(fs.readFileSync(path.join(this.dirs.runs, file), "utf-8")) as RunRecord;
+      return rec.runId && RUN_ID_RE.test(rec.runId) && rec.command ? rec : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private persist(run: Run) {
     try {
       writeFileAtomic(this.runPath(run.rec.runId), JSON.stringify(run.rec, null, 2) + "\n");
@@ -1086,7 +1395,7 @@ class NaraServer {
   }
 
   private pastEvents(run: Run): RunEvent[] {
-    if (run.events) return run.events;
+    if (!run.partial) return run.events;
     try {
       return fs
         .readFileSync(this.eventsPath(run.rec.runId), "utf-8")
@@ -1106,17 +1415,13 @@ class NaraServer {
     } catch {
       return;
     }
-    for (const f of files) {
-      let rec: RunRecord;
-      try {
-        rec = JSON.parse(fs.readFileSync(path.join(this.dirs.runs, f), "utf-8")) as RunRecord;
-        if (!rec.runId || !rec.command) continue;
-      } catch {
-        continue;
-      }
+    // Newest first, and only as many as memory allows; older ones load on demand.
+    files.sort().reverse();
+    for (const f of files.slice(0, MAX_MEMORY_RUNS)) {
+      const rec = this.readRunRecord(f);
+      if (!rec) continue;
       const run = new Run(rec);
-      run.events = null;
-      for (const d of [rec.job, rec.outDir]) if (d) this.roots.add(d);
+      run.partial = true;
       if (!run.final && (rec.serverPid === process.pid || !isAlive(rec.serverPid))) {
         rec.status = "failed";
         rec.finishedAt = rec.finishedAt ?? new Date().toISOString();
@@ -1131,30 +1436,22 @@ class NaraServer {
 
   // ── files ──
 
-  private isAllowed(p: string): boolean {
-    for (const root of this.roots) {
-      if (isInside(p, root)) return true;
-      const real = realpathOrSelf(root);
-      if (real !== root && isInside(p, real)) return true;
-    }
-    return false;
-  }
-
   private async files({ req, res, url, base }: Ctx) {
     const p = url.searchParams.get("path");
     if (!p) throw usage('Missing ?path=<file>', "Pass an absolute path from a run result, e.g. outcome.result.videos[0].path.");
     if (p.includes("\0")) throw usage("Invalid path");
     const abs = path.resolve(this.ws, p);
-    const forbidden = () =>
-      usage(`Not allowed: ${abs}`, "Only files inside the workspace or inside a job/output folder of a run on this server can be downloaded.", 403);
-    if (!this.isAllowed(abs)) throw forbidden();
+    // The real location (symlinks followed) must be inside the real workspace. Checked
+    // before existence, so nothing outside can even be probed.
+    if (!this.fileAllowed(abs)) {
+      throw usage(`Not allowed: ${abs}`, `Only files inside the workspace (${this.ws}) can be downloaded.`, 403);
+    }
     let real: string;
     try {
       real = fs.realpathSync(abs);
     } catch {
       throw usage(`No such file: ${abs}`, undefined, 404);
     }
-    if (!this.isAllowed(real)) throw forbidden(); // a symlink pointing outside
     const st = fs.statSync(real);
     if (st.isDirectory()) {
       const entries = fs
@@ -1172,6 +1469,62 @@ class NaraServer {
     sendFile(req, res, real, st);
   }
 
+  /** PUT /v1/files: stream the raw body into <workspace>/uploads/<path>. */
+  private async upload({ req, res }: Ctx) {
+    const raw = (new URL(req.url ?? "/", "http://x").searchParams.get("path") ?? "").replace(/\\/g, "/");
+    const hint = 'Pass a relative name such as ?path=uploads/clip.mp3 (or clip.mp3); files always land in <workspace>/uploads/.';
+    if (!raw) throw usage("Missing ?path=<relative path>", hint);
+    if (path.isAbsolute(raw) || /^[A-Za-z]:/.test(raw)) throw usage(`Upload path must be relative: ${raw}`, hint);
+    const parts = raw.split("/").filter(Boolean);
+    if (parts[0] === "uploads") parts.shift();
+    if (!parts.length || parts.some((p) => p === ".." || p.startsWith(".") || !/^[A-Za-z0-9._-]+$/.test(p))) {
+      throw usage(`Invalid upload path: ${raw}`, `${hint} Use letters, digits, ".", "_" and "-" in names; no "..".`);
+    }
+    const ext = path.extname(parts[parts.length - 1]).toLowerCase();
+    if (!UPLOAD_EXTENSIONS.includes(ext)) throw usage(`Cannot upload "${ext || "(no extension)"}" files`, `Allowed: ${UPLOAD_EXTENSIONS.join(" ")}.`);
+    const tooBig = () => usage(`Upload larger than ${MAX_UPLOAD_BYTES / 1024 ** 3} GB`, undefined, 413);
+    if (Number(req.headers["content-length"] ?? 0) > MAX_UPLOAD_BYTES) {
+      req.resume();
+      throw tooBig();
+    }
+    const uploads = path.join(this.ws, "uploads");
+    fs.mkdirSync(uploads, { recursive: true });
+    const dest = path.join(uploads, ...parts);
+    // Every existing part of the destination, symlinks followed, must stay inside uploads/.
+    const uploadsReal = fs.realpathSync(uploads);
+    if (!isInside(realpathDeepest(dest), uploadsReal) || !isInside(realpathDeepest(path.dirname(dest)), uploadsReal)) {
+      throw usage(`Upload path escapes ${uploads}: ${raw}`, hint);
+    }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const tmp = `${dest}.upload-${crypto.randomBytes(4).toString("hex")}`;
+    const bytes = await new Promise<number>((resolve, reject) => {
+      const out = fs.createWriteStream(tmp, { flags: "wx" });
+      let n = 0;
+      const fail = (e: unknown) => {
+        req.unpipe(out);
+        out.destroy();
+        fs.rmSync(tmp, { force: true });
+        reject(e);
+      };
+      req.on("data", (c: Buffer) => {
+        n += c.length;
+        if (n > MAX_UPLOAD_BYTES) {
+          req.resume();
+          fail(tooBig());
+        }
+      });
+      req.on("error", fail);
+      out.on("error", fail);
+      out.on("finish", () => resolve(n));
+      req.pipe(out);
+    });
+    fs.renameSync(tmp, dest); // replaces a previous upload (a symlink at dest is replaced, never followed)
+    const relativePath = path.relative(this.ws, dest).split(path.sep).join("/");
+    sendEnvelope(res, 200, success("files.upload", { path: dest, relativePath, bytes }, {
+      next: [`Reference it in a script as "${relativePath}" (e.g. "music": {"path": "${relativePath}"}), then POST /v1/scripts`],
+    }));
+  }
+
   private sendError(res: http.ServerResponse, command: string, err: unknown) {
     if (res.headersSent) {
       res.destroy();
@@ -1181,7 +1534,7 @@ class NaraServer {
     const status = err instanceof HttpError ? err.status : httpStatusFor(e.code);
     if (status === 401) res.setHeader("WWW-Authenticate", 'Bearer realm="narascreen"');
     if (status === 413) res.setHeader("Connection", "close");
-    sendEnvelope(res, status, failure(command, e));
+    this.sendRedacted(res, status, failure(command, e));
   }
 }
 
@@ -1426,21 +1779,81 @@ function mediaPaths(env: Envelope): string[] {
   return found.sort((a, b) => a.rank - b.rank).map((f) => f.p);
 }
 
-/** Make relative storageState paths absolute (top level + useSession entries). */
-function absolutizeScriptPaths(script: Record<string, unknown>, dir: string): Record<string, unknown> {
-  const copy = JSON.parse(JSON.stringify(script)) as Record<string, unknown>;
-  const fix = (o: Record<string, unknown>) => {
-    const p = o.storageState;
-    if (typeof p === "string" && p && p !== "__NONE__" && !p.includes("${") && !path.isAbsolute(p)) o.storageState = path.resolve(dir, p);
+/** Call `fn` on every file path a script references (storageState, useSession,
+ *  source.video, music.path, narration audio incl. zoom targets); `fn` returns the
+ *  (possibly rewritten) path. Non-string values are left for validation to report. */
+function mapScriptFiles(script: Record<string, unknown>, fn: (p: string, at: string) => string) {
+  const one = (o: Record<string, unknown>, key: string, at: string) => {
+    if (typeof o[key] === "string" && o[key]) o[key] = fn(o[key] as string, at);
   };
-  fix(copy);
-  const entries = [
-    ...(Array.isArray(copy.setup) ? copy.setup : []),
-    ...(Array.isArray(copy.steps) ? copy.steps.flatMap((s) => (isObject(s) && Array.isArray(s.beat) ? s.beat : [])) : []),
-  ];
-  for (const e of entries) if (isObject(e) && e.act === "useSession") fix(e);
-  return copy;
+  const audio = (o: Record<string, unknown>, at: string) => {
+    if (isObject(o.audio)) for (const k of Object.keys(o.audio)) one(o.audio, k, `${at}.audio.${k}`);
+    else one(o, "audio", `${at}.audio`);
+  };
+  if (script.storageState !== "__NONE__") one(script, "storageState", "storageState");
+  if (isObject(script.source)) one(script.source, "video", "source.video");
+  if (isObject(script.music)) one(script.music, "path", "music.path");
+  const entries: [Record<string, unknown>, string][] = [];
+  if (Array.isArray(script.setup)) script.setup.forEach((e, i) => isObject(e) && entries.push([e, `setup[${i}]`]));
+  if (Array.isArray(script.steps)) {
+    script.steps.forEach((st, si) => {
+      if (isObject(st) && Array.isArray(st.beat)) st.beat.forEach((e, i) => isObject(e) && entries.push([e, `steps[${si}].beat[${i}]`]));
+    });
+  }
+  for (const [e, at] of entries) {
+    if (e.act === "useSession") one(e, "storageState", `${at}.storageState`);
+    audio(e, at);
+    if (Array.isArray(e.targets)) e.targets.forEach((t, k) => isObject(t) && audio(t, `${at}.targets[${k}]`));
+  }
 }
+
+/** Over HTTP a script may only make the browser/TTS talk HTTP(S) — no file:// pages to screenshot. */
+function checkScriptUrls(script: DemoScript) {
+  const issues: { path: string; message: string }[] = [];
+  const check = (u: unknown, at: string) => {
+    if (typeof u === "string" && !/^https?:\/\//i.test(u)) issues.push({ path: at, message: `must be an http(s) URL over HTTP: ${u}` });
+  };
+  const s = script as unknown as Record<string, unknown>;
+  check(s.baseUrl ?? "http://", "baseUrl");
+  if (isObject(s.tts)) check(s.tts.kokoroEndpoint ?? "http://", "tts.kokoroEndpoint");
+  const acts = [
+    ...(Array.isArray(s.setup) ? s.setup.map((e, i) => [e, `setup[${i}]`] as const) : []),
+    ...(Array.isArray(s.steps)
+      ? s.steps.flatMap((st, si) => (isObject(st) && Array.isArray(st.beat) ? st.beat.map((e, i) => [e, `steps[${si}].beat[${i}]`] as const) : []))
+      : []),
+  ];
+  for (const [e, at] of acts) if (isObject(e) && e.act === "goto" && e.url !== undefined) check(e.url, `${at}.url`);
+  if (issues.length) {
+    throw new AgentError("SCRIPT_INVALID", `${issues.length} URL(s) not allowed. First: ${issues[0].path}: ${issues[0].message}`, {
+      hint: "Use http:// or https:// URLs.",
+      where: { path: issues[0].path },
+      details: { issues },
+    });
+  }
+}
+
+/** JSON parse errors quote the start of the file; never echo a file's contents over HTTP. */
+function quietJsonErrors<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof AgentError && e.code === "SCRIPT_INVALID_JSON") {
+      throw new AgentError(e.code, e.message.split(": ")[0], { hint: e.hint, where: e.where });
+    }
+    if (e instanceof AgentError && e.code === "ENV_VAR_MISSING") {
+      const names = ((e.details?.variables as string[] | undefined) ?? ["NAME"]).map((n) => `"${n}": "…"`).join(", ");
+      throw new AgentError(e.code, e.message, {
+        hint: `Over HTTP, send the values with the request: "env": {${names}} (they are used for this request only and never stored).`,
+        where: e.where,
+        details: e.details,
+      });
+    }
+    throw e;
+  }
+}
+
+const tooBusy = () =>
+  usage("Too many runs are waiting", "Wait for some to finish (GET /v1/runs?status=queued) or cancel them, then retry.", 429);
 
 /** A safe file/folder name from user text ("../My Demo!" → "My-Demo"). */
 function sanitizeName(v: unknown): string {
@@ -1539,11 +1952,20 @@ function isInside(p: string, root: string): boolean {
   return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
 }
 
-function realpathOrSelf(p: string): string {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return p;
+/** realpath of the longest existing prefix of `p`, plus the rest: where `p` really
+ *  points (or would, once created), with every symlink in it followed. */
+function realpathDeepest(p: string): string {
+  const rest: string[] = [];
+  let cur = path.resolve(p);
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(cur), ...rest);
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return path.resolve(p);
+      rest.unshift(path.basename(cur));
+      cur = parent;
+    }
   }
 }
 
@@ -1570,6 +1992,11 @@ function safeEqual(a: string, b: string): boolean {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function isIpLiteral(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, "");
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || (h.includes(":") && /^[0-9a-f:.]+$/i.test(h));
 }
 
 function isLoopbackHost(host: string): boolean {

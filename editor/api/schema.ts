@@ -25,7 +25,7 @@ export const TTS_LANGUAGES = Object.keys(LANG_CODES) as [string, ...string[]];
 export interface Scope {
   /** CSS selector of the container, e.g. "form#signup" or "[data-section=billing]". */
   css?: string;
-  /** The nearest element that contains this text, e.g. a table row / card. */
+  /** The row/card around the visible element whose text is exactly this. */
   text?: string;
   /** Container by ARIA role (+ optional accessible name), e.g. dialog / row. */
   role?: string;
@@ -78,8 +78,9 @@ export const SELECTOR_KEYS = ["role", "label", "text", "placeholder", "testId", 
 
 /** Verbs that act on an element (need a selector). */
 export const TARGETED_ACTS: ActVerb[] = ["waitFor", "click", "fill", "select", "hover"];
-/** Verbs whose element's box becomes the default target of following fx. */
-export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll"];
+/** Verbs whose element's box becomes the default target of following fx
+ *  (when they have a selector; the box is measured after the act). */
+export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll", "waitFor", "press"];
 /** fx that need an element box (anchor or inherited from the previous act). */
 export const RECT_FX: FxVerb[] = ["zoom", "spotlight", "blur"];
 /** fx that draw over the video for a time window (duration may be "auto"). */
@@ -161,8 +162,8 @@ export interface FxEntry {
   rects?: Rect[];
   /** Keep the entry but leave it out of the video. */
   disabled?: boolean;
-  /** callout: the label text. */
-  text?: string;
+  /** callout: the label text, or one per language (falls back to en). */
+  text?: string | Record<string, string>;
   style?: "label" | "lower-third" | "step-counter";
   step?: number;
   /** callout: font size in px (default 28) and position relative to its element. */
@@ -288,7 +289,7 @@ const str = () => z.string().min(1);
 const ScopeSchema = z
   .object({
     css: str().optional().describe("CSS selector of the container to search inside."),
-    text: str().optional().describe("Search inside the nearest element containing this text (e.g. a table row)."),
+    text: str().optional().describe("Search inside the row/card/section around the visible element whose text is exactly this (e.g. a table row's name)."),
     role: str().optional().describe("Container ARIA role, e.g. dialog, row, form, navigation."),
     name: str().optional().describe("Accessible name of the `role` container."),
   })
@@ -419,7 +420,7 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
     radius: z.number().int().min(1).max(100).optional().describe("Blur strength (default 20)."),
   }, "Blur elements (hide secrets)."),
   fx("callout", {
-    text: str().describe("Text to show."),
+    text: z.union([str(), z.record(z.string(), str())]).describe("Text to show, or one per language like {\"en\": \"Settings\", \"hi\": \"सेटिंग्स\"} (falls back to en)."),
     style: z.enum(["label", "lower-third", "step-counter"]).optional().describe("label (default, next to the element) | lower-third (bottom banner) | step-counter (\"Step N: …\" next to the element)."),
     step: z.number().int().min(1).optional().describe("Step number for style step-counter."),
     anchor: SelectorSchema.optional(),
