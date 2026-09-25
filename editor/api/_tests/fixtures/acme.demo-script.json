@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "scope": "Acme Tasks tour",
+  "baseUrl": "http://127.0.0.1:4780",
+  "viewport": { "width": 1440, "height": 900 },
+  "setup": [
+    { "act": "goto", "path": "/#/login", "note": "Setup runs before recording starts, so signing in never appears in the video." },
+    { "act": "fill", "label": "Email", "value": "alex.morgan@example.com" },
+    { "act": "fill", "label": "Password", "value": "${env:ACME_PASSWORD}", "note": "Secrets come from the environment, never from the script file." },
+    { "act": "click", "role": "button", "name": "Sign in" },
+    { "act": "waitFor", "role": "heading", "name": "Dashboard" }
+  ],
+  "defaults": { "dwellMs": 1000, "typeDelayMs": 45 },
+  "languages": ["en"],
+  "output": { "quality": "medium" },
+  "steps": [
+    {
+      "id": "dashboard-overview",
+      "label": "The dashboard at a glance",
+      "beat": [
+        { "act": "waitFor", "role": "heading", "name": "Dashboard" },
+        { "fx": "callout", "style": "lower-third", "text": "Acme Tasks: plan, track and ship together" },
+        { "fx": "narrate", "narrate": "This is Acme Tasks. The dashboard shows how your team's week is going." }
+      ]
+    },
+    {
+      "id": "open-and-overdue",
+      "label": "Open and overdue work",
+      "beat": [
+        {
+          "fx": "spotlight",
+          "anchors": [
+            { "role": "article", "name": "Open tasks" },
+            { "role": "article", "name": "Overdue" }
+          ],
+          "note": "Two cards lit at once: they are on screen together."
+        },
+        { "fx": "narrate", "narrate": "Open work and anything overdue sit side by side, so nothing slips through." }
+      ]
+    },
+    {
+      "id": "weekly-progress",
+      "label": "Zoom in on weekly progress",
+      "beat": [
+        { "act": "hover", "role": "article", "name": "Completed this week" },
+        {
+          "fx": "zoom",
+          "targets": [
+            {
+              "anchor": { "role": "article", "name": "Completed this week" },
+              "narrate": "Twenty-eight tasks done this week, twelve percent more than last week."
+            },
+            {
+              "anchor": { "role": "region", "name": "Weekly progress" },
+              "narrate": "And Friday was the busiest day."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "open-tasks",
+      "label": "Open the task list",
+      "beat": [
+        { "act": "click", "role": "link", "name": "Tasks", "within": { "role": "navigation", "name": "Main" } },
+        { "act": "waitFor", "role": "heading", "name": "Tasks", "exact": true, "note": "exact: the dashboard also has an \"Open tasks\" heading." },
+        {
+          "fx": "callout",
+          "anchor": { "role": "table", "name": "Tasks" },
+          "text": "One shared list for the whole team",
+          "placement": "over",
+          "fontSize": 32
+        }
+      ]
+    },
+    {
+      "id": "create-task",
+      "label": "Create a task",
+      "beat": [
+        { "act": "click", "role": "button", "name": "New task" },
+        { "act": "waitFor", "role": "dialog", "name": "New task" },
+        {
+          "fx": "narrate",
+          "freeze": false,
+          "narrate": "Adding work takes seconds: a title, a priority, and a few details.",
+          "note": "freeze false: the voice plays over the typing instead of pausing the video."
+        },
+        { "act": "fill", "label": "Title", "value": "Prepare the quarterly report" },
+        { "fx": "callout", "style": "step-counter", "step": 1, "text": "Name the task", "duration": 2.5 },
+        { "act": "select", "label": "Priority", "option": "High" },
+        { "fx": "callout", "style": "step-counter", "step": 2, "text": "Set the priority", "duration": 2.5 },
+        { "fx": "speed", "factor": 2.5, "until": "next-act", "note": "Fast-forward while the description is typed." },
+        { "act": "fill", "label": "Description", "value": "Numbers from finance, plus one highlight per team." },
+        { "act": "click", "role": "button", "name": "Create task" },
+        { "act": "waitFor", "text": "Task created" },
+        { "fx": "spotlight", "anchor": { "role": "row", "name": "Prepare the quarterly report" } },
+        { "fx": "narrate", "narrate": "The new task appears at the top, and the whole team can see it right away." }
+      ]
+    },
+    {
+      "id": "export-csv",
+      "label": "Export the list",
+      "beat": [
+        { "act": "click", "role": "button", "name": "Export CSV" },
+        {
+          "fx": "skip",
+          "until": "next-act",
+          "note": "Cut the export spinner: the cut ends when the next action (waiting for the toast) is done."
+        },
+        { "act": "waitFor", "text": "Export ready" },
+        {
+          "fx": "callout",
+          "anchor": { "role": "button", "name": "Export CSV" },
+          "text": "Opens in any spreadsheet app",
+          "placement": "below",
+          "fontSize": 24
+        },
+        { "fx": "narrate", "narrate": "Need it in a spreadsheet? One click exports the list as a CSV file." }
+      ]
+    },
+    {
+      "id": "settings",
+      "label": "Notifications and the API key",
+      "beat": [
+        { "act": "click", "role": "link", "name": "Settings", "within": { "role": "navigation", "name": "Main" } },
+        { "act": "waitFor", "role": "heading", "name": "Settings", "exact": true },
+        {
+          "fx": "blur",
+          "anchor": { "label": "API key" },
+          "duration": 60,
+          "note": "A fixed duration longer than the rest of the video keeps the key hidden until the end; \"auto\" would unblur it once the next narration finishes."
+        },
+        { "act": "click", "role": "switch", "name": "Weekly summary" },
+        { "fx": "callout", "text": "Weekly summary: on", "placement": "above" },
+        {
+          "fx": "narrate",
+          "narrate": "In Settings, turn on the weekly summary for a Monday digest of what your team finished."
+        },
+        { "act": "click", "role": "button", "name": "Save changes" },
+        { "act": "waitFor", "text": "Settings saved" },
+        {
+          "fx": "narrate",
+          "narrate": "Your API key lives here too. We've blurred it, because it should always stay secret."
+        }
+      ]
+    },
+    {
+      "id": "wrap-up",
+      "label": "Wrap up",
+      "beat": [
+        { "fx": "narrate", "narrate": "That's Acme Tasks: plan the work, track progress, and keep everyone in the loop." },
+        { "fx": "pause", "seconds": 1.5, "note": "Hold the last frame for a moment before the video ends." }
+      ]
+    }
+  ]
+}

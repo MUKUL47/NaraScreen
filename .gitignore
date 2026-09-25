@@ -1,30 +1,49 @@
+# ─── Dependencies & build output ────────────────────────────────
 node_modules/
 dist/
+dist-ssr/
 dist-electron/
+dist-web/
 out/
 build/
+release/
+*.local
 
-# Demo session output (recordings, thumbnails, produced videos)
+# ─── Local runtimes & voice-engine experiments (large, per machine) ──
+kokoro-venv/
+translate-venv/
+editor/piper/
+venv/
+.venv/
+__pycache__/
+*.onnx
+*.onnx.json
+*.safetensors
+editor/indicf5-prototype/
+
+# ─── Generated media & output ───────────────────────────────────
 demo-output/
 output/
-
-# Media files
+narascreen-out/
+editor/api/_tests/.tmp/
 *.mp4
 *.wav
 *.mp3
 *.png
 !editor/public/**
-.claude
-# Environment
+
+# ─── Environment & secrets ──────────────────────────────────────
 .env
 .env.*
 !.env.example
 
-# OS files
-.DS_Store
-Thumbs.db
+# ─── Logs ───────────────────────────────────────────────────────
+logs/
+*.log
+*-debug.log*
 
-# IDE
+# ─── Editors & OS ───────────────────────────────────────────────
+.claude
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -33,16 +52,5 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
-
-# Logs
-*.log
-npm-debug.log*
-
-# Generated
-*.local
-dist-ssr
-release
-kokoro-venv
-translate-venv/
-editor/piper/
-dist-web/
+.DS_Store
+Thumbs.db

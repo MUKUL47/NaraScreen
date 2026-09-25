@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "scope": "Broken selector example",
+  "baseUrl": "http://127.0.0.1:4780",
+  "setup": [
+    { "act": "goto", "path": "/#/login" },
+    { "act": "fill", "label": "Email", "value": "alex.morgan@example.com" },
+    { "act": "fill", "label": "Password", "value": "${env:ACME_PASSWORD}" },
+    { "act": "click", "role": "button", "name": "Sign in" },
+    { "act": "waitFor", "role": "heading", "name": "Dashboard" }
+  ],
+  "defaults": { "timeoutMs": 3000 },
+  "steps": [
+    {
+      "id": "open-tasks",
+      "label": "Open the task list",
+      "beat": [
+        { "act": "goto", "path": "/#/tasks" },
+        { "act": "waitFor", "role": "heading", "name": "Tasks", "exact": true }
+      ]
+    },
+    {
+      "id": "add-task",
+      "label": "Click a button that does not exist",
+      "beat": [
+        {
+          "act": "click",
+          "role": "button",
+          "name": "Add task",
+          "note": "Deliberately wrong: the button is called \"New task\". `check` must fail with SELECTOR_NOT_FOUND and offer it in details.candidates."
+        },
+        { "fx": "narrate", "narrate": "This line is never spoken." }
+      ]
+    }
+  ]
+}

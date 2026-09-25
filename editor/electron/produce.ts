@@ -903,7 +903,10 @@ function executeInsertPass(
   project: Record<string, unknown>,
   emit: (msg: string) => void,
   remapTs: (ts: number) => number,
-): { narrationTimestamps: Array<{ start: number; end: number }> } {
+): {
+  narrationTimestamps: Array<{ start: number; end: number }>;
+  insertExpansions: Array<{ at: number; added: number }>;
+} {
   const totalDuration = probeDuration(inputPath);
 
   // Sort inserts by their remapped timestamp
@@ -916,6 +919,13 @@ function executeInsertPass(
 
   const segments: string[] = [];
   const narrationTimestamps: Array<{ start: number; end: number }> = [];
+  // Records how much wall-clock time each insert ADDS at its (post-skip/speed)
+  // input position. A freeze insert (pause/zoom/narrate-freeze) adds its full
+  // effect duration AT mappedTs without consuming source; a narrate-without-
+  // freeze consumes the section it plays over, so it adds (effectDur - consumed).
+  // Overlay timestamps are remapped through these so spotlights/callouts land on
+  // the SAME frame after inserts stretch the timeline (else they drift early).
+  const insertExpansions: Array<{ at: number; added: number }> = [];
   let cursor = 0;
   let segIdx = 0;
   let runningDuration = 0;
@@ -955,9 +965,10 @@ function executeInsertPass(
       }
     }
 
+    const totalEffectDur = insertPaths.reduce((s, p) => s + probeDuration(p), 0);
+
     // Track narration timestamps for music ducking
     if (narration) {
-      const totalEffectDur = insertPaths.reduce((s, p) => s + probeDuration(p), 0);
       narrationTimestamps.push({ start: runningDuration, end: runningDuration + totalEffectDur });
     }
 
@@ -967,13 +978,20 @@ function executeInsertPass(
       segIdx++;
     }
 
-    // Advance cursor — freeze inserts resume from same point, narrate-without-freeze advances
+    // Advance cursor — freeze inserts resume from same point, narrate-without-freeze advances.
+    // Record the net time ADDED at this input position for overlay remapping:
+    //  - freeze: consumes 0 source, adds the full effect duration.
+    //  - narrate-no-freeze: consumes `dur` source while playing `totalEffectDur`,
+    //    so it adds (totalEffectDur - dur) (≈0 when audio == played section).
     if (action.type === "zoom" || action.type === "pause" || action.freeze === true) {
+      insertExpansions.push({ at: mappedTs, added: totalEffectDur });
       cursor = mappedTs;
     } else {
       // Narrate without freeze — video played during narration, so skip past that section
       const narrDur = narration ? narration.audioDuration + 0.5 : 3;
       const dur = typeof action.resumeAfter === "number" ? action.resumeAfter : narrDur;
+      const consumed = Math.min(dur, totalDuration - mappedTs);
+      insertExpansions.push({ at: mappedTs, added: Math.max(0, totalEffectDur - consumed) });
       cursor = Math.min(mappedTs + dur, totalDuration);
     }
   }
@@ -989,7 +1007,7 @@ function executeInsertPass(
 
   if (segments.length === 0) {
     fs.copyFileSync(inputPath, outputPath);
-    return { narrationTimestamps };
+    return { narrationTimestamps, insertExpansions };
   }
 
   // Normalize & concat
@@ -1003,7 +1021,25 @@ function executeInsertPass(
   const concatList = path.join(tempDir, "insert_concat.txt");
   concatSegments(normalized, outputPath, concatList);
 
-  return { narrationTimestamps };
+  return { narrationTimestamps, insertExpansions };
+}
+
+// Build a remap from post-skip/speed time → final (post-insert) time. An insert
+// at `at` shifts everything strictly after it forward by `added`. An overlay
+// whose anchor is exactly the resumed frame of a freeze insert sits AFTER the
+// freeze, so `> at` (not `>=`) is correct: the spotlight rect was captured on
+// the frame the insert resumes to.
+function buildInsertRemap(
+  expansions: Array<{ at: number; added: number }>,
+): (ts: number) => number {
+  const sorted = [...expansions].sort((a, b) => a.at - b.at);
+  return (ts: number): number => {
+    let shift = 0;
+    for (const e of sorted) {
+      if (e.at < ts) shift += e.added;
+    }
+    return ts + shift;
+  };
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1101,51 +1137,11 @@ export async function produceTimelineVideo(
 
   const effectiveTotalDuration = probeDuration(effectiveRecording);
 
-  // ═══════════════════════════════════════════════════════════
-  // Pass 1: Overlay Effects — batched per type, split only on overlap
-  // Applied on original timestamps — no duration change
-  // ═══════════════════════════════════════════════════════════
-
-  // Validate: no overlapping spotlights (use multiple rects on one spotlight instead)
-  if (spotlightActions.length > 1) {
-    const sorted = [...spotlightActions].sort((a, b) => a.timestamp - b.timestamp);
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const endI = sorted[i].timestamp + (sorted[i].spotlightDuration ?? 3);
-      const startNext = sorted[i + 1].timestamp;
-      if (startNext < endI) {
-        throw new Error(
-          `Overlapping spotlights: one at ${sorted[i].timestamp.toFixed(1)}s-${endI.toFixed(1)}s overlaps with another at ${startNext.toFixed(1)}s. ` +
-          `Use multiple regions on a single spotlight action instead (click "Add Another Region" in the spotlight editor).`,
-        );
-      }
-    }
-  }
-
-  const overlayGroups: Array<{ type: string; actions: Action[]; apply: (input: string, actions: Action[], output: string, res: { width: number; height: number }, dur: number, emit: (msg: string) => void) => void }> = [
-    { type: "blur", actions: blurActions, apply: applyBlurBatch },
-    { type: "spotlight", actions: spotlightActions, apply: applySpotlightBatch },
-    { type: "callout", actions: calloutActions, apply: (i, a, o, _r, d, e) => applyCalloutBatch(i, a, o, d, e) },
-  ];
-
-  for (const { type, actions: typeActions, apply } of overlayGroups) {
-    if (typeActions.length === 0) continue;
-    const batches = batchNonOverlapping(typeActions);
-    const totalActions = typeActions.length;
-    emit(`\n[Overlay: ${type}] ${totalActions} action(s) → ${batches.length} pass(es)`);
-
-    for (let bi = 0; bi < batches.length; bi++) {
-      const batch = batches[bi];
-      const out = nextOutput();
-      emit(`  Pass ${bi + 1}/${batches.length} (${batch.length} ${type}${batch.length > 1 ? "s" : ""}):`);
-      apply(currentInput, batch, out, res, effectiveTotalDuration, emit);
-
-      if (fs.existsSync(out) && fs.statSync(out).size > 0) {
-        currentInput = out;
-      } else {
-        emit(`    Warning: ${type} batch pass produced no output, skipping`);
-      }
-    }
-  }
+  // NOTE: Overlay effects (blur/spotlight/callout) are applied LAST (after
+  // inserts), not here. Inserts (narrate freezes etc.) stretch the timeline, so
+  // an overlay burned in on the original timeline would land BEFORE its content
+  // (drift growing with each narration). We remap overlay timestamps through the
+  // skip/speed/insert expansions so each spotlight lands on the exact same frame.
 
   // ═══════════════════════════════════════════════════════════
   // Pass 2: Skip/Cut — remove skipped sections
@@ -1213,6 +1209,8 @@ export async function produceTimelineVideo(
 
   const insertActions = [...zoomActions, ...pauseActions, ...narrateActions];
   let narrationTimestamps: Array<{ start: number; end: number }> = [];
+  // original(post-skip/speed) → final time, accounting for insert stretching.
+  let insertRemap: (ts: number) => number = (ts) => ts;
 
   if (insertActions.length > 0) {
     // Pre-generate narration audio
@@ -1235,10 +1233,68 @@ export async function produceTimelineVideo(
       out, tempDir, res, project, emit, remapTs,
     );
     narrationTimestamps = result.narrationTimestamps;
+    insertRemap = buildInsertRemap(result.insertExpansions);
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
       emit("  Warning: Insert pass produced no output, skipping");
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Pass 5b: Overlay Effects (blur → spotlight → callout)
+  // Applied AFTER inserts, with timestamps remapped through skip/speed/insert so
+  // each overlay lands on the SAME frame its rect was captured on. (Burning them
+  // before inserts made spotlights drift early as narrations stretched the line.)
+  // ═══════════════════════════════════════════════════════════
+
+  const overlayRemap = (ts: number) => insertRemap(remapTs(ts));
+  const remapOverlayActions = (actions: Action[]): Action[] =>
+    actions
+      .map((a) => ({ ...a, timestamp: overlayRemap(a.timestamp) }))
+      .filter((a) => a.timestamp >= 0);
+
+  const remappedSpotlights = remapOverlayActions(spotlightActions);
+  const remappedBlur = remapOverlayActions(blurActions);
+  const remappedCallouts = remapOverlayActions(calloutActions);
+
+  // Validate: no overlapping spotlights (use multiple rects on one spotlight instead)
+  if (remappedSpotlights.length > 1) {
+    const sorted = [...remappedSpotlights].sort((a, b) => a.timestamp - b.timestamp);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const endI = sorted[i].timestamp + (sorted[i].spotlightDuration ?? 3);
+      const startNext = sorted[i + 1].timestamp;
+      if (startNext < endI) {
+        throw new Error(
+          `Overlapping spotlights: one at ${sorted[i].timestamp.toFixed(1)}s-${endI.toFixed(1)}s overlaps with another at ${startNext.toFixed(1)}s. ` +
+          `Use multiple regions on a single spotlight action instead (click "Add Another Region" in the spotlight editor).`,
+        );
+      }
+    }
+  }
+
+  const finalDuration = probeDuration(currentInput);
+  const overlayGroups: Array<{ type: string; actions: Action[]; apply: (input: string, actions: Action[], output: string, res: { width: number; height: number }, dur: number, emit: (msg: string) => void) => void }> = [
+    { type: "blur", actions: remappedBlur, apply: applyBlurBatch },
+    { type: "spotlight", actions: remappedSpotlights, apply: applySpotlightBatch },
+    { type: "callout", actions: remappedCallouts, apply: (i, a, o, _r, d, e) => applyCalloutBatch(i, a, o, d, e) },
+  ];
+
+  for (const { type, actions: typeActions, apply } of overlayGroups) {
+    if (typeActions.length === 0) continue;
+    const batches = batchNonOverlapping(typeActions);
+    emit(`\n[Overlay: ${type}] ${typeActions.length} action(s) → ${batches.length} pass(es)`);
+
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      const out = nextOutput();
+      emit(`  Pass ${bi + 1}/${batches.length} (${batch.length} ${type}${batch.length > 1 ? "s" : ""}):`);
+      apply(currentInput, batch, out, res, finalDuration, emit);
+      if (fs.existsSync(out) && fs.statSync(out).size > 0) {
+        currentInput = out;
+      } else {
+        emit(`    Warning: ${type} batch pass produced no output, skipping`);
+      }
     }
   }
 

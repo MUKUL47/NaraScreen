@@ -9,6 +9,9 @@
   "license": "MIT",
   "private": true,
   "main": "dist-electron/main.js",
+  "bin": {
+    "narascreen": "bin/narascreen"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -16,7 +19,9 @@
     "dist": "npm run build && node scripts/build-dist.js",
     "dist:linux": "npm run build && node scripts/build-dist.js --linux",
     "dist:mac": "npm run build && node scripts/build-dist.js --mac",
-    "dist:win": "npm run build && node scripts/build-dist.js --win"
+    "dist:win": "npm run build && node scripts/build-dist.js --win",
+    "narascreen": "tsx api/cli.ts",
+    "test:api": "tsx --test api/_tests/*.test.ts"
   },
   "build": {
     "appId": "com.narascreen.editor",
@@ -29,29 +34,53 @@
       "dist-electron/**/*"
     ],
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "category": "Video",
       "icon": "build/icon.png",
       "extraResources": [
-        { "from": "node_modules/ffmpeg-static/ffmpeg", "to": "bin/ffmpeg" },
-        { "from": "node_modules/ffprobe-static/bin/linux/${arch}/ffprobe", "to": "bin/ffprobe" }
+        {
+          "from": "node_modules/ffmpeg-static/ffmpeg",
+          "to": "bin/ffmpeg"
+        },
+        {
+          "from": "node_modules/ffprobe-static/bin/linux/${arch}/ffprobe",
+          "to": "bin/ffprobe"
+        }
       ]
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.video",
       "icon": "build/icon.png",
       "extraResources": [
-        { "from": "node_modules/ffmpeg-static/ffmpeg", "to": "bin/ffmpeg" },
-        { "from": "node_modules/ffprobe-static/bin/darwin/${arch}/ffprobe", "to": "bin/ffprobe" }
+        {
+          "from": "node_modules/ffmpeg-static/ffmpeg",
+          "to": "bin/ffmpeg"
+        },
+        {
+          "from": "node_modules/ffprobe-static/bin/darwin/${arch}/ffprobe",
+          "to": "bin/ffprobe"
+        }
       ]
     },
     "win": {
-      "target": ["portable"],
+      "target": [
+        "portable"
+      ],
       "icon": "build/icon.png",
       "extraResources": [
-        { "from": "node_modules/ffmpeg-static/ffmpeg.exe", "to": "bin/ffmpeg.exe" },
-        { "from": "node_modules/ffprobe-static/bin/win32/${arch}/ffprobe.exe", "to": "bin/ffprobe.exe" }
+        {
+          "from": "node_modules/ffmpeg-static/ffmpeg.exe",
+          "to": "bin/ffmpeg.exe"
+        },
+        {
+          "from": "node_modules/ffprobe-static/bin/win32/${arch}/ffprobe.exe",
+          "to": "bin/ffprobe.exe"
+        }
       ]
     },
     "nsis": {
@@ -71,6 +100,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.61.0",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -81,10 +111,13 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "marked": "^16.4.2",
+    "tsx": "^4.22.4",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.0",
     "vite": "^7.3.1",
     "vite-plugin-electron": "^0.29.0",
-    "vite-plugin-electron-renderer": "^0.14.6"
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "zod": "^4.6.5"
   }
 }

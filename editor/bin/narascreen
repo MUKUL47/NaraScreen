@@ -1,0 +1,118 @@
+#!/usr/bin/env node
+// ─── narascreen launcher ─────────────────────────────────────────────
+//
+// Runs api/cli.ts with this checkout's own tsx, from any working directory and
+// through symlinks (npm link, `ln -s …/bin/narascreen ~/.local/bin/`). Plain
+// Node, no shell, so it behaves the same on Linux, macOS and Windows.
+//
+// The CLI runs IN THIS PROCESS (tsx's loader is registered, then cli.ts is
+// required) rather than under `tsx`'s own CLI. Why: tsx's CLI relays signals to
+// its child and SIGKILLs it if it doesn't acknowledge within ~60 ms — but while
+// the renderer is inside a synchronous ffmpeg call the CLI can't, so a cancel
+// (Ctrl+C, or `serve` cancelling a run) would kill it before it prints its
+// envelope and leave ffmpeg orphaned. In-process, the CLI's own handler runs as
+// soon as ffmpeg returns. Exit code and stdio are the process's own, so the
+// contract holds end to end: stdout = one JSON envelope, stderr = events.
+//
+// Node versions without module.register (< 18.19 / < 20.6) fall back to
+// spawning tsx's CLI with inherited stdio and the exit code passed through.
+
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const { pathToFileURL } = require("url");
+
+// Node already resolves symlinks for the main module; realpath again to be sure.
+const editorDir = path.resolve(path.dirname(fs.realpathSync(__filename)), "..");
+const cliPath = path.join(editorDir, "api", "cli.ts");
+const tsconfig = path.join(editorDir, "api", "tsconfig.json");
+const tsxDir = path.join(editorDir, "node_modules", "tsx");
+const args = process.argv.slice(2);
+
+/** Same envelope shape as api/output.ts — only for failures before the CLI runs. */
+function fail(code, exitCode, message, hint) {
+  const command = args.find((a) => !a.startsWith("-")) || "narascreen";
+  const env = { ok: false, command, error: { code, message, hint }, warnings: [], next: [] };
+  process.stdout.write(JSON.stringify(env, null, 2) + "\n");
+  process.exitCode = exitCode;
+}
+
+function notInstalled() {
+  fail(
+    "ENVIRONMENT_NOT_READY",
+    2,
+    `NaraScreen's dependencies are not installed (tsx not found in ${path.join(editorDir, "node_modules")})`,
+    `Run: cd "${editorDir}" && npm install`,
+  );
+}
+
+function crashed(e) {
+  const msg = e && e.message ? e.message : String(e);
+  fail("INTERNAL", 4, `The NaraScreen CLI failed to start: ${msg}`, `Check that "${editorDir}" is intact and dependencies are installed (npm install).`);
+}
+
+function runInProcess() {
+  // tsx reads the tsconfig path from here (what its --tsconfig flag sets), so a
+  // tsconfig in the caller's cwd can never change how NaraScreen compiles.
+  process.env.TSX_TSCONFIG_PATH = tsconfig;
+  const loader = path.join(tsxDir, "dist", "loader.mjs");
+  if (!fs.existsSync(loader)) return notInstalled();
+  import(pathToFileURL(loader).href).then(
+    () => {
+      try {
+        require(cliPath); // cli.ts starts itself and prints the envelope
+      } catch (e) {
+        crashed(e);
+      }
+    },
+    (e) => crashed(e),
+  );
+}
+
+function runViaTsxCli() {
+  const { spawn } = require("child_process");
+  let file;
+  let pre = [];
+  let shell = false;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(tsxDir, "package.json"), "utf-8"));
+    const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin && pkg.bin.tsx;
+    if (rel && fs.existsSync(path.join(tsxDir, rel))) {
+      file = process.execPath; // tsx's JS entry run by this Node: no .cmd shim / shell on Windows
+      pre = [path.join(tsxDir, rel)];
+    }
+  } catch {
+    // fall through to the shim
+  }
+  if (!file) {
+    const win = process.platform === "win32";
+    const shim = path.join(editorDir, "node_modules", ".bin", win ? "tsx.cmd" : "tsx");
+    if (!fs.existsSync(shim)) return notInstalled();
+    file = shim;
+    shell = win;
+  }
+  const child = spawn(file, [...pre, "--tsconfig", tsconfig, cliPath, ...args], { stdio: "inherit", shell, windowsHide: true });
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  for (const sig of signals) {
+    process.on(sig, () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill(sig);
+    });
+  }
+  child.on("error", (e) => crashed(e));
+  child.on("exit", (code, signal) => {
+    if (code !== null) {
+      process.exitCode = code;
+      return;
+    }
+    for (const sig of signals) process.removeAllListeners(sig);
+    try {
+      process.kill(process.pid, signal); // died from a signal: mirror it
+    } catch {
+      process.exitCode = 4;
+    }
+  });
+}
+
+if (typeof require("module").register === "function") runInProcess();
+else runViaTsxCli();
