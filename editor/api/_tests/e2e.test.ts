@@ -66,6 +66,7 @@ const state: {
   made?: boolean;
   recordAt?: string;
   recordingMtime?: number;
+  recordingSec?: number;
   videoSec?: number;
 } = {};
 
@@ -273,6 +274,24 @@ function makeTone(file: string, freqs: number[], seconds: number) {
   assert.ok(res.status === 0 && fs.existsSync(file), `ffmpeg could not generate ${file} (status ${res.status})`);
 }
 const readJobJson = () => JSON.parse(fs.readFileSync(path.join(JOB, "job.json"), "utf-8")) as Rec;
+const readTrace = (job: string): Rec[] =>
+  fs.readFileSync(path.join(job, "trace.jsonl"), "utf-8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as Rec);
+
+/** Mean absolute luma difference between the same box in two video frames (0–255). */
+function regionDiff(videoA: string, tA: number, videoB: string, tB: number, rect: number[]): number {
+  const [x, y, w, h] = rect.map((n) => Math.round(n));
+  const crop = `crop=${w}:${h}:${x}:${y}`;
+  const res = ffmpegSync([
+    "-v", "error",
+    "-ss", String(Math.max(0, tA)), "-i", videoA,
+    "-ss", String(Math.max(0, tB)), "-i", videoB,
+    "-filter_complex", `[0:v]${crop}[a];[1:v]${crop}[b];[a][b]blend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-`,
+    "-frames:v", "1", "-f", "null", "-",
+  ]);
+  const m = /YAVG=([\d.]+)/.exec(res.stdout.toString());
+  assert.ok(m, `could not compare frames with ffmpeg (status ${res.status})`);
+  return Number(m[1]);
+}
 
 // ─── the tests ───────────────────────────────────────────────────────
 
@@ -515,8 +534,7 @@ describe("narascreen CLI, end to end", () => {
 
     const recording = path.join(JOB, "recordings", "recording.mp4");
     assertFile(recording, "recordings/recording.mp4");
-    const trace = fs.readFileSync(path.join(JOB, "trace.jsonl"), "utf-8").split("\n").filter((l) => l.trim());
-    assert.equal(trace.length, entryCount(acmeRaw), "trace.jsonl has one line per step entry");
+    assert.equal(readTrace(JOB).length, entryCount(acmeRaw), "trace.jsonl has one line per step entry");
     for (const f of ["job.json", "script.json", "demo-project.json", "demo-project.en.json"]) assertFile(path.join(JOB, f), f);
 
     const v = res.videos[0] as Rec;
@@ -548,7 +566,27 @@ describe("narascreen CLI, end to end", () => {
     state.made = true;
     state.recordAt = job.record.at;
     state.recordingMtime = fs.statSync(recording).mtimeMs;
+    state.recordingSec = recSec;
     state.videoSec = videoSec;
+  });
+
+  test("make: the blur really hides the API key in the final video", async (t) => {
+    if (!needsMake(t)) return;
+    // The acme video ends on Settings with the key still on screen and the blur
+    // (duration 60) still active, so the last second of the final video must
+    // differ from the raw recording inside the key's box. Unblurred ≈ 0.5
+    // (compression noise); blurred text ≈ 10.
+    const slot = readTrace(JOB).find((e) => e.beat === "settings" && e.fx === "blur");
+    assert.ok(slot?.rect, `trace.jsonl has no rect for the settings blur: ${JSON.stringify(slot)}`);
+    const final = path.join(JOB, "video", "final_en.mp4");
+    const recording = path.join(JOB, "recordings", "recording.mp4");
+    const diff = regionDiff(final, (state.videoSec ?? 0) - 1, recording, (state.recordingSec ?? 0) - 0.5, slot.rect);
+    t.diagnostic(`mean pixel difference in the blurred box: ${diff.toFixed(2)}`);
+    assert.ok(
+      diff > 3,
+      `the API key is NOT blurred at the end of ${final} (mean |final - raw| in ${JSON.stringify(slot.rect)} = ${diff.toFixed(2)}, expected > 3). ` +
+        `See ${path.join(JOB, "logs")} for a skipped blur pass.`,
+    );
   });
 
   test("make again: unchanged script reuses the recording (recorded: false)", { timeout: 20 * MIN }, async (t) => {

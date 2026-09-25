@@ -749,14 +749,19 @@ export function cutSpeedClip(
   const args = [
     "-y",
     "-ss", startTime.toFixed(3),
-    "-i", inputPath,
+    // Input option: read exactly (end - start) of source; the output is then
+    // (end - start) / speedFactor long. (As an output option it capped the
+    // OUTPUT instead, consuming speedFactor x the range of source.)
     "-t", (endTime - startTime).toFixed(3),
-    "-vf", `setpts=${pts}*PTS`,
+    "-i", inputPath,
+    // fps=30 resamples the re-timed frames onto the 30 fps grid exactly
+    // (letting the encoder do it duplicated a few frames at the start).
+    "-vf", `setpts=${pts}*PTS,fps=30`,
     "-c:v", "libx264", "-preset", "fast", "-crf", "18",
     "-pix_fmt", "yuv420p",
   ];
   if (hasAudio) {
-    args.push("-af", `atempo=${speedFactor}`);
+    args.push("-af", atempoChain(speedFactor));
     args.push("-c:a", "aac", "-b:a", "192k");
   } else {
     args.push("-an");
@@ -764,6 +769,17 @@ export function cutSpeedClip(
   args.push(outputPath);
 
   ffmpegSync(args);
+}
+
+/** atempo only accepts 0.5–2.0 per instance on older ffmpeg (0.5–100 on
+ *  newer): chain instances so any factor works, e.g. 0.25 → 0.5,0.5. */
+export function atempoChain(factor: number): string {
+  const parts: number[] = [];
+  let f = factor;
+  while (f < 0.5) { parts.push(0.5); f /= 0.5; }
+  while (f > 2) { parts.push(2); f /= 2; }
+  parts.push(f);
+  return parts.map((x) => `atempo=${Number(x.toFixed(6))}`).join(",");
 }
 
 /** Mix background music into the final video */
@@ -796,12 +812,17 @@ export function mixBackgroundMusic(
     volumeFilter = `volume=${volume},${enableParts.join(",")}`;
   }
 
+  // A video without an audio track (e.g. a screen recording with no
+  // narration inserts) gets the music as its only audio, cut to its length.
+  const mix = hasAudioStream(videoPath)
+    ? `[1:a]${volumeFilter},aloop=-1:2e9[music];[0:a][music]amix=inputs=2:duration=shortest:dropout_transition=2[aout]`
+    : `[1:a]${volumeFilter},aloop=-1:2e9,atrim=0:${probeDuration(videoPath).toFixed(3)}[aout]`;
   ffmpegSync([
     "-y",
     "-i", videoPath,
     "-i", musicPath,
     "-filter_complex",
-    `[1:a]${volumeFilter},aloop=-1:2e9[music];[0:a][music]amix=inputs=2:duration=shortest:dropout_transition=2[aout]`,
+    mix,
     "-map", "0:v",
     "-map", "[aout]",
     "-c:v", "copy",

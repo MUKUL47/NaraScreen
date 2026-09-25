@@ -12,6 +12,7 @@ import { z } from "zod";
 import { AgentError } from "./errors";
 import { DEFAULT_VOICES, LANG_CODES } from "../src/lib/voices";
 import { probeDuration, probeResolution } from "../electron/ffmpeg";
+import { ARIA_ROLES } from "./page-elements";
 import {
   ActEntrySchema,
   BeatSchema,
@@ -148,7 +149,7 @@ function interpolateEnv(value: unknown, env: NodeJS.ProcessEnv): unknown {
       "ENV_VAR_MISSING",
       `Environment variable${names.length > 1 ? "s" : ""} not set: ${names.join(", ")}`,
       {
-        hint: `The script references \${env:NAME} placeholders. Export them before running, e.g. ${names[0]}=... narascreen <command> …`,
+        hint: `The script references \${env:NAME} placeholders. CLI: export them before running (e.g. ${names[0]}=... narascreen <command> …). HTTP: they come from the environment \`narascreen serve\` was started with — restart it with the variable set.`,
         where: { path: missing[0].path },
         details: { variables: names, usedAt: missing.map((m) => m.path) },
       },
@@ -568,12 +569,23 @@ function checkSelector(s: Selector, p: string, issues: ScriptIssue[], required: 
   if (s.name != null && s.role == null) {
     issues.push({ path: `${p}.name`, message: "`name` only works together with `role`" });
   }
+  checkRole(s.role, `${p}.role`, issues);
+  checkRole(s.within?.role, `${p}.within.role`, issues);
   const w = s.within;
   if (w) {
     const ways = [w.css, w.text, w.role].filter((x) => x != null).length;
     if (ways !== 1) issues.push({ path: `${p}.within`, message: "within needs exactly one of css | text | role" });
     if (w.name != null && w.role == null) issues.push({ path: `${p}.within.name`, message: "within.name needs within.role" });
   }
+}
+
+function checkRole(role: string | undefined, p: string, issues: ScriptIssue[]) {
+  if (role == null || (ARIA_ROLES as readonly string[]).includes(role)) return;
+  issues.push({
+    path: p,
+    message: `unknown ARIA role "${role}"`,
+    hint: didYouMean(role, [...ARIA_ROLES]) ?? "use a role from `narascreen inspect` output (button, link, textbox, heading, row, dialog, …)",
+  });
 }
 
 function checkNarration(

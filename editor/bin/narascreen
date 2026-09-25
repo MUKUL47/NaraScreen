@@ -31,9 +31,9 @@ const tsxDir = path.join(editorDir, "node_modules", "tsx");
 const args = process.argv.slice(2);
 
 /** Same envelope shape as api/output.ts — only for failures before the CLI runs. */
-function fail(code, exitCode, message, hint) {
+function fail(code, exitCode, message, hint, next = []) {
   const command = args.find((a) => !a.startsWith("-")) || "narascreen";
-  const env = { ok: false, command, error: { code, message, hint }, warnings: [], next: [] };
+  const env = { ok: false, command, error: { code, message, hint }, warnings: [], next };
   process.stdout.write(JSON.stringify(env, null, 2) + "\n");
   process.exitCode = exitCode;
 }
@@ -43,7 +43,8 @@ function notInstalled() {
     "ENVIRONMENT_NOT_READY",
     2,
     `NaraScreen's dependencies are not installed (tsx not found in ${path.join(editorDir, "node_modules")})`,
-    `Run: cd "${editorDir}" && npm install`,
+    "Install NaraScreen's dependencies, then run the command again.",
+    [`cd "${editorDir}" && npm install`],
   );
 }
 

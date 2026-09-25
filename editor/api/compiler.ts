@@ -3,22 +3,25 @@
 // PURE: no video, no filesystem. Joins each `fx` entry in the script with its
 // trace entry (by {beat, i}) and emits one NaraScreen action (the shape
 // electron/produce.ts consumes). `act` entries emit nothing — they only drove
-// the browser.
+// the browser (but range fx may end at one). Disabled fx emit nothing either;
+// the script-level `music` becomes one music action.
 //
 // The one non-trivial job is "auto" overlay durations (spotlight / callout /
 // blur that should stay up while the narration that follows is spoken). The
-// producer inserts freeze frames (pause, zoom, narrate) at fx timestamps and
-// draws overlays AFTER that, remapping only their START through the inserts:
-// an overlay starting at source time t_i is drawn from placed(t_i) to
-// placed(t_i) + duration on the final timeline. So the duration has to include
-// every insert the overlay lives through. `modelTimeline` reproduces the
-// producer's insert pass (order, lengths, bookkeeping) so those numbers match
-// what produce.ts really renders — see the notes on each insert kind below.
+// producer first cuts skips and applies speed ramps, then inserts freeze frames
+// (pause, zoom, narrate) at fx timestamps, and draws overlays LAST, remapping
+// only their START: an overlay whose source time is t_i is drawn from
+// placed(t_i) to placed(t_i) + duration on the final timeline. So the duration
+// has to include everything the overlay lives through. `modelTimeline`
+// reproduces the producer's skip/speed remap and insert pass (order, lengths,
+// bookkeeping) so these numbers match what produce.ts really renders.
 
 import { AgentError, type AgentErrorInit } from "./errors";
-import { resolveNarration, type NarrationClip } from "./narration";
+import { narrationSlots, resolveAudio, resolveNarration, type NarrationClip, type NarrationSource } from "./narration";
+import { RANGE_DEFAULT_UNTIL } from "./schema";
 import {
   BUILTIN_DEFAULTS,
+  isAct,
   isFx,
   type DemoDefaults,
   type DemoScript,
@@ -41,15 +44,27 @@ export class CompileError extends AgentError {
   }
 }
 
+export interface CompileOptions {
+  /** Recording length — where "step-end" of the last step (and every range) ends.
+   *  Without it: the last trace timestamp + 0.5 s. */
+  durationSec?: number;
+}
+
 /** Overlay fallback when no narration follows (and the schema's default). */
 export const AUTO_FALLBACK_SEC = 3;
 /** Shortest overlay "auto" ever produces. */
 export const AUTO_MIN_SEC = 0.5;
 /** Overlays stay up this long after their narration's last word. */
 export const NARRATION_TAIL_SEC = 0.5;
-/** Gap kept before a zoom / the next overlay of the same kind. */
+/** Gap kept before a zoom / range boundary / the next overlay of the same kind. */
 const CAP_GAP_SEC = 0.05;
+/** Ranges shorter than this are dropped (the producer ignores them too). */
+const MIN_RANGE_SEC = 0.05;
 const FPS = 30; // produce.ts renders inserts at 30 fps
+const CALLOUT_FONT = 28;
+const EDGE = 8; // keep callout panels this far inside the frame
+
+type Speaker = ReturnType<typeof narrationSlots>[number];
 
 // ─── one fx entry, joined with its trace slot ────────────────────────
 
@@ -61,9 +76,22 @@ interface Slot {
   fx: FxEntry;
   t: number;
   action: NaraAction;
-  clip?: NarrationClip;
+  /** narration clips of this entry (one, or one per speaking zoom target) */
+  clips: NarrationClip[];
   /** overlay whose duration is unset / "auto" */
   auto: boolean;
+}
+
+interface EmitCtx {
+  d: DemoDefaults;
+  lang: string;
+  viewport: { width: number; height: number };
+  ctx: string;
+  where: AgentErrorInit["where"];
+  /** `${step}:${i}` — zoom targets append `:t${k}` */
+  key: string;
+  speakers: Map<string, Speaker>;
+  clips?: Map<string, NarrationClip>;
 }
 
 function indexTrace(trace: TraceEntry[]): Map<string, TraceEntry> {
@@ -72,61 +100,125 @@ function indexTrace(trace: TraceEntry[]): Map<string, TraceEntry> {
   return m;
 }
 
+function isOverlay(fx: FxEntry): boolean {
+  return fx.fx === "spotlight" || fx.fx === "callout" || fx.fx === "blur";
+}
+function isRange(fx: FxEntry): fx is FxEntry & { fx: "speed" | "skip" | "mute" } {
+  return fx.fx === "speed" || fx.fx === "skip" || fx.fx === "mute";
+}
+
 function overlayDuration(fx: FxEntry): { value: number; auto: boolean } {
   return typeof fx.duration === "number" ? { value: fx.duration, auto: false } : { value: AUTO_FALLBACK_SEC, auto: true };
 }
 
-function narrates(fx: FxEntry): boolean {
-  return fx.fx === "narrate" || (fx.fx === "zoom" && fx.narrate != null);
-}
-
-/** Build one NaraScreen action from an fx entry + its resolved time/rect.
- *  Overlay durations set here are provisional when "auto" (resolved later). */
-function emitAction(
-  fx: FxEntry,
-  id: string,
-  timestamp: number,
-  rect: Rect | undefined,
-  d: DemoDefaults,
-  ctx: string,
-  where: AgentErrorInit["where"],
+/** The fields that make one narration audible to the producer.
+ *  Recorded audio WITH text goes in audioPath (+ narrations) because the
+ *  producer drops the text of customAudioPath — and with it the subtitles. */
+function narrationFields(
+  src: NarrationSource,
   lang: string,
   clip: NarrationClip | undefined,
-): NaraAction {
-  const base: NaraAction = { id, type: fx.fx, timestamp };
-  const fail = (msg: string, hint?: string) => new CompileError(`${ctx}: ${msg}`, { where, hint });
+  fail: (msg: string, hint?: string) => CompileError,
+  what: string,
+): Pick<NaraAction, "narrations" | "audioPath" | "customAudioPath"> {
+  const narr = resolveNarration(src, lang);
+  const audio = resolveAudio(src, lang);
+  if (audio) {
+    return narr
+      ? { narrations: { [narr.lang]: narr.text }, audioPath: { [narr.lang]: audio.path } }
+      : { customAudioPath: audio.path };
+  }
+  if (!narr) throw fail(`${what} (for lang "${lang}")`, `Add "${lang}" (or "en") to this entry's narrate map, or give it \`audio\`.`);
+  return { narrations: { [narr.lang]: narr.text }, ...(clip ? { audioPath: { [narr.lang]: clip.audioPath } } : {}) };
+}
+
+/** A label callout as one positioned panel: above its element by default,
+ *  below when there is no room, or over it; kept inside the frame (text width
+ *  estimated at 0.6·fontSize per character). Lower-thirds only get a panel
+ *  when they set a fontSize (else the producer centers its own banner). */
+function calloutPanel(
+  fx: FxEntry,
+  rect: Rect | undefined,
+  vp: { width: number; height: number },
+): NonNullable<NaraAction["calloutPanels"]>[number] | undefined {
+  const text = fx.text!;
+  const shown = fx.style === "step-counter" && fx.step ? `Step ${fx.step}: ${text}` : text;
+  if (fx.style === "lower-third") {
+    if (fx.fontSize == null) return undefined;
+    const f = fx.fontSize;
+    const w = Math.round(0.6 * f * shown.length);
+    // Same baseline rule as the producer's own lower-third (36 px → h − 80).
+    return { text, rect: [Math.max(EDGE, Math.round((vp.width - w) / 2)), vp.height - 44 - f, w, f], fontSize: f };
+  }
+  if (!rect) return undefined;
+  const f = fx.fontSize ?? CALLOUT_FONT;
+  const w = Math.round(0.6 * f * shown.length);
+  const [rx, ry, , rh] = rect;
+  let y: number;
+  const placement = fx.placement ?? "above";
+  if (placement === "over") y = ry;
+  else if (placement === "below") y = ry + rh + 12;
+  else y = ry - f - 16 < EDGE ? ry + rh + 12 : ry - f - 16;
+  const x = Math.max(EDGE, Math.min(rx, vp.width - w - EDGE));
+  y = Math.max(EDGE, Math.min(y, vp.height - f - EDGE));
+  return { text, rect: [Math.round(x), Math.round(y), w, f], fontSize: f };
+}
+
+/** Build one NaraScreen action from an fx entry + its trace slot.
+ *  Overlay durations set here are provisional when "auto" (resolved later);
+ *  range end timestamps are filled in by the caller. */
+function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { action: NaraAction; clips: NarrationClip[] } {
+  const base: NaraAction = { id, type: fx.fx, timestamp: tr.t };
+  const fail = (msg: string, hint?: string) => new CompileError(`${c.ctx}: ${msg}`, { where: c.where, hint });
+  const rects: Rect[] = tr.rects?.length ? tr.rects : tr.rect ? [tr.rect] : [];
+  const clips: NarrationClip[] = [];
+  const clipOf = (key: string) => {
+    const clip = c.clips?.get(key);
+    if (clip) clips.push(clip);
+    return clip;
+  };
+  const done = () => ({ action: base, clips });
 
   switch (fx.fx) {
     case "zoom": {
-      if (!rect) throw fail("zoom needs a rect (anchor an element)");
-      base.zoomDuration = fx.zoomDuration ?? d.zoomDuration;
-      base.zoomHold = fx.zoomHold ?? d.zoomHold;
-      if (fx.narrate != null) {
-        const narr = resolveNarration(fx, lang);
-        if (!narr) throw fail(`zoom narration has no text for language "${lang}"`, `Add "${lang}" (or "en") to this entry's narrate map.`);
+      base.zoomDuration = fx.zoomDuration ?? c.d.zoomDuration;
+      base.zoomHold = fx.zoomHold ?? c.d.zoomHold;
+      if (fx.targets?.length) {
+        if (rects.length < fx.targets.length) {
+          throw fail(`zoom has ${fx.targets.length} targets but the recording measured ${rects.length} rect(s)`);
+        }
+        // Each target holds for its own narration (the producer's zoomTargets).
+        base.zoomTargets = fx.targets.map((_, k) => {
+          const sp = c.speakers.get(`${c.key}:t${k}`);
+          if (!sp) return { rect: rects[k] };
+          return { rect: rects[k], ...narrationFields(sp.src, c.lang, clipOf(sp.key), fail, `zoom target ${k} has no narration`) };
+        });
+        return done();
+      }
+      if (!rects[0]) throw fail("zoom needs a rect (anchor an element)");
+      const sp = c.speakers.get(c.key);
+      if (sp) {
         // zoomTargets (not zoomRect) is how the producer attaches audio to a
         // zoom: the hold stretches to the clip.
-        const target: NonNullable<NaraAction["zoomTargets"]>[number] = { rect, narrations: { [narr.lang]: narr.text } };
-        if (clip) target.audioPath = { [narr.lang]: clip.audioPath };
-        base.zoomTargets = [target];
+        base.zoomTargets = [{ rect: rects[0], ...narrationFields(sp.src, c.lang, clipOf(sp.key), fail, "zoom narration has no text") }];
       } else {
-        base.zoomRect = rect;
+        base.zoomRect = rects[0];
       }
-      return base;
+      return done();
     }
     case "spotlight": {
-      if (!rect) throw fail("spotlight needs a rect (anchor an element)");
-      base.spotlightRects = [rect];
+      if (!rects.length) throw fail("spotlight needs a rect (anchor an element)");
+      base.spotlightRects = rects;
       base.dimOpacity = fx.dimOpacity ?? 0.7;
       base.spotlightDuration = overlayDuration(fx).value;
-      return base;
+      return done();
     }
     case "blur": {
-      if (!rect) throw fail("blur needs a rect (anchor an element)");
-      base.blurRects = [rect];
+      if (!rects.length) throw fail("blur needs a rect (anchor an element)");
+      base.blurRects = rects;
       base.blurRadius = fx.radius ?? 20;
       base.blurDuration = overlayDuration(fx).value;
-      return base;
+      return done();
     }
     case "callout": {
       if (!fx.text) throw fail("callout needs text", "Add a `text` to the callout entry.");
@@ -134,27 +226,31 @@ function emitAction(
       base.calloutStyle = fx.style ?? "label";
       base.calloutDuration = overlayDuration(fx).value;
       if (fx.step != null) base.calloutStep = fx.step;
-      // lower-third is auto-centered by the producer; positioned styles use the
-      // anchor's top-left as the label origin.
-      if (base.calloutStyle !== "lower-third" && rect) {
-        base.calloutPosition = [rect[0], rect[1]];
-      }
-      return base;
+      const panel = calloutPanel(fx, rects[0], c.viewport);
+      if (panel) base.calloutPanels = [panel];
+      return done();
     }
     case "pause": {
       if (fx.seconds != null) base.resumeAfter = fx.seconds;
-      return base;
+      return done();
     }
     case "narrate": {
-      const narr = resolveNarration(fx, lang);
-      if (!narr) throw fail(`narrate needs text (for lang "${lang}")`, `Add "${lang}" (or "en") to this entry's narrate map.`);
-      base.narrations = { [narr.lang]: narr.text };
-      if (clip) base.audioPath = { [narr.lang]: clip.audioPath };
+      const sp = c.speakers.get(c.key);
+      if (!sp) throw fail(`narrate needs text (for lang "${c.lang}")`, "Give it `narrate` text or an `audio` file.");
+      Object.assign(base, narrationFields(sp.src, c.lang, clipOf(sp.key), fail, "narrate needs text"));
       // Freeze the frame while speaking unless told otherwise; the producer
       // fits the freeze to the clip.
       base.freeze = fx.freeze ?? true;
-      return base;
+      base.showSubtitles = fx.subtitles ?? true;
+      if (fx.subtitleSize != null) base.subtitleSize = fx.subtitleSize;
+      return done();
     }
+    case "speed":
+      base.speedFactor = fx.factor ?? 2;
+      return done();
+    case "skip":
+    case "mute":
+      return done();
     default:
       throw fail(`unknown fx "${(fx as FxEntry).fx}"`);
   }
@@ -162,10 +258,11 @@ function emitAction(
 
 /**
  * Compile a demo-script + its run trace into NaraScreen actions, ordered by
- * timestamp. `clips` (from synthesizeNarrations, keyed `${step}:${entry}`)
- * attaches pre-generated audio and drives "auto" overlay durations; without
- * clips every auto overlay gets the 3 s fallback. Non-fatal problems are
- * appended to `warnings`. Throws CompileError on any unjoinable entry.
+ * timestamp. `clips` (from synthesizeNarrations, keyed `${step}:${entry}` or
+ * `${step}:${entry}:t${k}`) attaches pre-generated audio and drives "auto"
+ * overlay durations; without clips every auto overlay gets the 3 s fallback.
+ * Non-fatal problems are appended to `warnings`. Throws CompileError on any
+ * unjoinable entry.
  */
 export function compile(
   script: DemoScript,
@@ -173,15 +270,18 @@ export function compile(
   lang = "en",
   clips?: Map<string, NarrationClip>,
   warnings: string[] = [],
+  opts: CompileOptions = {},
 ): NaraAction[] {
   const d: DemoDefaults = { ...BUILTIN_DEFAULTS, ...script.defaults };
   const byKey = indexTrace(trace);
+  const speakers = new Map(narrationSlots(script).map((sp) => [sp.key, sp]));
+  const endOfRecording = opts.durationSec ?? Math.max(0, ...trace.map((e) => e.t)) + 0.5;
   const slots: Slot[] = [];
   let n = 0;
 
   script.steps.forEach((beat, s) => {
     beat.beat.forEach((entry, i) => {
-      if (!isFx(entry)) return; // act entries produce no action
+      if (!isFx(entry) || entry.disabled) return; // acts and disabled fx produce no action
       const path = `steps[${s}].beat[${i}]`;
       const where = { step: beat.id, entry: i, path };
       const ctx = `${path} (${entry.fx}, step "${beat.id}")`;
@@ -192,35 +292,142 @@ export function compile(
       if (tr.kind !== "fx" || tr.fx !== entry.fx) {
         throw new CompileError(`${ctx}: script/recording mismatch — the trace has ${tr.kind}:${tr.fx ?? tr.act} here`, { where });
       }
-      const clip = narrates(entry) ? clips?.get(`${beat.id}:${i}`) : undefined;
-      if (clips && narrates(entry) && !clip && resolveNarration(entry, lang)) {
-        throw new CompileError(`${ctx}: no narration audio was generated for this entry`, {
-          where,
-          hint: "Run produce again; if it repeats, report it (the TTS step skipped this entry).",
-        });
+      if (clips) {
+        for (const [key, sp] of speakers) {
+          if (sp.step !== beat.id || sp.entry !== i || clips.has(key)) continue;
+          if (resolveNarration(sp.src, lang) || resolveAudio(sp.src, lang)) {
+            throw new CompileError(`${sp.path}: no narration audio was generated for this entry`, {
+              where: { ...where, path: sp.path },
+              hint: "Run produce again; if it repeats, report it (the TTS step skipped this entry).",
+            });
+          }
+        }
       }
-      const action = emitAction(entry, `action-${++n}`, tr.t, tr.rect, d, ctx, where, lang, clip);
-      action.name = `${beat.id} #${i} ${entry.fx}`;
-      const auto = (entry.fx === "spotlight" || entry.fx === "callout" || entry.fx === "blur") && overlayDuration(entry).auto;
-      slots.push({ s, i, step: beat.id, path, fx: entry, t: tr.t, action, clip, auto });
+      const key = `${beat.id}:${i}`;
+      const out = emitAction(entry, `action-${++n}`, tr, { d, lang, viewport: script.viewport, ctx, where, key, speakers, clips });
+      out.action.name = `${beat.id} #${i} ${entry.fx}`;
+      if (isRange(entry)) setRangeEnd(out.action, rangeEnd(script, byKey, s, i, entry, tr.t, endOfRecording, opts.durationSec));
+      const auto = isOverlay(entry) && overlayDuration(entry).auto;
+      slots.push({ s, i, step: beat.id, path, fx: entry, t: tr.t, action: out.action, clips: out.clips, auto });
     });
   });
 
+  const kept = tidyRanges(slots, warnings);
   // NaraScreen expects actions ordered by timestamp (stable: script order on ties).
-  const actions = slots.map((sl) => sl.action).sort((a, b) => a.timestamp - b.timestamp);
+  const actions = kept.map((sl) => sl.action).sort((a, b) => a.timestamp - b.timestamp);
+  if (script.music) {
+    actions.unshift({
+      id: `action-${++n}`,
+      type: "music",
+      timestamp: 0,
+      name: "music",
+      musicPath: script.music.path,
+      musicVolume: script.music.volume ?? 0.5,
+      musicDuckTo: script.music.duckTo ?? 0.2,
+    });
+  }
   const clipSec = new Map<string, number>();
   for (const c of clips?.values() ?? []) clipSec.set(c.audioPath, c.durationSec);
   const tl = modelTimeline(actions, (p) => clipSec.get(p));
 
-  resolveOverlays(slots, actions, tl, warnings);
+  resolveOverlays(kept, actions, tl, warnings);
   return actions;
+}
+
+// ─── ranges (speed / skip / mute) ────────────────────────────────────
+
+function setRangeEnd(a: NaraAction, end: number) {
+  if (a.type === "speed") a.speedEndTimestamp = end;
+  else if (a.type === "skip") a.skipEndTimestamp = end;
+  else if (a.type === "mute") a.muteEndTimestamp = end;
+}
+function rangeEndOf(a: NaraAction): number {
+  return (a.type === "speed" ? a.speedEndTimestamp : a.type === "skip" ? a.skipEndTimestamp : a.muteEndTimestamp) ?? a.timestamp;
+}
+
+/** Where a range ends, in recording seconds:
+ *   seconds → t + seconds;  "next-act" → the next act of this step (stamped
+ *   when it finished);  "step-end" → the first slot of the next step (or the
+ *   recording end);  "<step-id>" → the end of that step, same rule. */
+function rangeEnd(
+  script: DemoScript,
+  byKey: Map<string, TraceEntry>,
+  s: number,
+  i: number,
+  fx: FxEntry & { fx: "speed" | "skip" | "mute" },
+  t: number,
+  endOfRecording: number,
+  durationSec: number | undefined,
+): number {
+  const clamp = (x: number) => (durationSec != null ? Math.min(x, durationSec) : x);
+  if (fx.seconds != null) return clamp(t + fx.seconds);
+  const stepEnd = (k: number): number => {
+    const next = script.steps[k + 1];
+    if (!next) return endOfRecording;
+    const ts = next.beat.map((_, j) => byKey.get(`${next.id}:${j}`)?.t).filter((x): x is number => x != null);
+    return ts.length ? Math.min(...ts) : endOfRecording;
+  };
+  const until = fx.until ?? RANGE_DEFAULT_UNTIL[fx.fx];
+  if (until === "next-act") {
+    const beat = script.steps[s];
+    for (let j = i + 1; j < beat.beat.length; j++) {
+      const tr = isAct(beat.beat[j]) ? byKey.get(`${beat.id}:${j}`) : undefined;
+      if (tr) return clamp(tr.t);
+    }
+    return clamp(stepEnd(s)); // validation requires an act; be lenient
+  }
+  if (until === "step-end") return clamp(stepEnd(s));
+  const k = script.steps.findIndex((b) => b.id === until);
+  return clamp(stepEnd(k >= 0 ? k : s));
+}
+
+/** The producer assumes speed ranges (and skip ranges) don't overlap: clip a
+ *  later start to the earlier end, drop what becomes empty, and flag effects
+ *  that sit inside a skipped stretch. Returns the slots to keep. */
+function tidyRanges(slots: Slot[], warnings: string[]): Slot[] {
+  const dropped = new Set<Slot>();
+  for (const kind of ["speed", "skip", "mute"] as const) {
+    const ranges = slots.filter((sl) => sl.fx.fx === kind).sort((a, b) => a.action.timestamp - b.action.timestamp);
+    let prev: Slot | undefined;
+    for (const sl of ranges) {
+      const end = rangeEndOf(sl.action);
+      if (end - sl.action.timestamp < MIN_RANGE_SEC) {
+        warnings.push(`${sl.path} (${kind}): the range is empty (${sl.action.timestamp.toFixed(2)}s–${end.toFixed(2)}s), so it is left out. Check \`until\`/\`seconds\`.`);
+        dropped.add(sl);
+        continue;
+      }
+      if (kind !== "mute" && prev && sl.action.timestamp < rangeEndOf(prev.action)) {
+        const start = rangeEndOf(prev.action);
+        if (end - start < MIN_RANGE_SEC) {
+          warnings.push(`${sl.path} (${kind}): lies entirely inside the ${kind} at ${prev.path}, so it is left out.`);
+          dropped.add(sl);
+          continue;
+        }
+        warnings.push(`${sl.path} (${kind}): starts inside the ${kind} at ${prev.path}; it now begins where that one ends (${start.toFixed(1)}s of the recording).`);
+        sl.action.timestamp = start;
+      }
+      prev = sl;
+    }
+  }
+  const kept = slots.filter((sl) => !dropped.has(sl));
+  for (const skip of kept.filter((sl) => sl.fx.fx === "skip")) {
+    const [a, b] = [skip.action.timestamp, rangeEndOf(skip.action)];
+    for (const sl of kept) {
+      if (sl === skip || sl.fx.fx === "skip" || !(sl.t > a + 0.01 && sl.t < b - 0.01)) continue;
+      warnings.push(
+        `${sl.path} (${sl.fx.fx}) happens inside the skipped stretch of ${skip.path} (${a.toFixed(1)}s–${b.toFixed(1)}s): it will be cut ` +
+          `(it lands on the cut point). Move it after the skipped part, or end the skip earlier.`,
+      );
+    }
+  }
+  return kept;
 }
 
 // ─── the producer's timeline, modelled ───────────────────────────────
 
 export interface InsertSpan {
   action: NaraAction;
-  /** source time the insert happens at */
+  /** where the insert happens, in post-skip/speed seconds (produce.ts's mappedTs) */
   at: number;
   /** seconds of video the insert itself contributes */
   length: number;
@@ -230,38 +437,85 @@ export interface InsertSpan {
   delta: number;
   /** real start on the final timeline */
   start: number;
+  /** zoom: each target's hold, relative to `start` */
+  holds?: { start: number; length: number; narrated: boolean }[];
 }
 
 export interface Timeline {
   /** inserts in the producer's processing order */
   inserts: InsertSpan[];
+  /** recording seconds → post-skip/speed seconds (produce.ts remapTs) */
+  mapped(t: number): number;
   /** final-timeline time at which produce.ts starts drawing an overlay whose
-   *  source timestamp is `t` (buildInsertRemap: inserts strictly before t) */
+   *  recording timestamp is `t` (insertRemap ∘ remapTs: inserts strictly before) */
   placed(t: number): number;
-  /** Σ delta — the final video ≈ recording duration + this */
+  /** real final-timeline time of post-skip/speed position `m` */
+  realAt(m: number): number;
+  /** post-skip/speed positions where the picture jumps (skip cut) or changes pace (speed edge) */
+  boundaries: { at: number; action: NaraAction }[];
+  /** Σ delta over the inserts */
   addedSec: number;
+  /** length of the rendered video for a recording of `recordingSec` */
+  finalDuration(recordingSec: number): number;
 }
 
 function frames(sec: number): number {
   return Math.max(Math.round(FPS * sec), 2) / FPS;
 }
 
-function firstAudioSec(paths: Record<string, string> | undefined, audioSec: (p: string) => number | undefined): number | undefined {
-  for (const p of Object.values(paths ?? {})) {
-    const s = audioSec(p);
+/** Like the producer's findNarration: customAudioPath first, then audioPath. */
+function narrationSec(
+  src: { customAudioPath?: string; audioPath?: Record<string, string> },
+  audioSec: (p: string) => number | undefined,
+): number | undefined {
+  for (const p of [src.customAudioPath, ...Object.values(src.audioPath ?? {})]) {
+    const s = p ? audioSec(p) : undefined;
     if (s != null && s > 0) return s;
   }
   return undefined;
 }
 
+type Range = { start: number; end: number };
+
+// Ports of produce.ts buildSkipRemap / remapRanges / buildSpeedRemap.
+function skipRemap(ranges: Range[]): (t: number) => number {
+  return (t) => {
+    let offset = 0;
+    for (const r of ranges) {
+      if (r.end <= t) offset += r.end - r.start;
+      else if (r.start < t) return r.start - offset;
+    }
+    return t - offset;
+  };
+}
+function remapRanges<T extends Range>(ranges: T[], remap: (t: number) => number): T[] {
+  return ranges.map((r) => ({ ...r, start: remap(r.start), end: remap(r.end) })).filter((r) => r.end > r.start + 0.05);
+}
+function speedRemap(ranges: (Range & { factor: number })[]): (t: number) => number {
+  return (t) => {
+    let out = 0;
+    let cursor = 0;
+    for (const r of ranges) {
+      if (t <= r.start) return out + (t - cursor);
+      out += r.start - cursor;
+      cursor = r.start;
+      if (t <= r.end) return out + (t - r.start) / r.factor;
+      out += (r.end - r.start) / r.factor;
+      cursor = r.end;
+    }
+    return out + (t - cursor);
+  };
+}
+
 /**
- * How produce.ts's insert pass (executeInsertPass) lays out `actions`, which must
- * be in project order (timestamp-sorted). Mirrors, per insert kind:
- *  - order: [...zooms, ...pauses, ...narrates] stable-sorted by timestamp, so on
- *    equal timestamps zooms go first, then pauses, then narrations.
+ * How produce.ts lays out `actions` (project order, i.e. timestamp-sorted):
+ *  - skip ranges are cut, then speed ranges (remapped through the cuts) are
+ *    re-timed; inserts and overlays use the remapped positions.
+ *  - insert order: [...zooms, ...pauses, ...narrates] stable-sorted by position,
+ *    so on equal positions zooms go first, then pauses, then narrations.
  *  - zoom: per target, zoom-in + hold + zoom-out; in/out = max(round(30·zoomDuration), 2)
- *    frames; hold = zoomHold, or — when narrated — the clip (the hold is cut with
- *    `-shortest`, so its audio+0.5 s video is trimmed to the audio).
+ *    frames; hold = zoomHold, or — when that target is narrated — its clip (the
+ *    hold is cut with `-shortest`, so its audio+0.5 s of video is trimmed to the audio).
  *  - pause: resumeAfter seconds, else 3.
  *  - narrate, freeze: a freeze of audio+0.5 s muxed with the audio under
  *    `-shortest` → really the clip length (3 s when there is no audio).
@@ -270,29 +524,54 @@ function firstAudioSec(paths: Record<string, string> | undefined, audioSec: (p: 
  *    really shortens the timeline by 0.5 s.
  */
 export function modelTimeline(actions: NaraAction[], audioSec: (audioPath: string) => number | undefined): Timeline {
+  const skips = actions
+    .filter((a) => a.type === "skip" && a.skipEndTimestamp)
+    .map((a) => ({ start: a.timestamp, end: a.skipEndTimestamp!, action: a }))
+    .sort((a, b) => a.start - b.start);
+  const skipMap = skipRemap(skips);
+  const speeds = remapRanges(
+    actions
+      .filter((a) => a.type === "speed" && a.speedEndTimestamp && a.speedFactor)
+      .map((a) => ({ start: a.timestamp, end: a.speedEndTimestamp!, factor: a.speedFactor!, action: a }))
+      .sort((a, b) => a.start - b.start),
+    skipMap,
+  );
+  const speedMap = speedRemap(speeds);
+  const mapped = (t: number) => speedMap(skipMap(t));
+
   const isZoom = (a: NaraAction) => a.type === "zoom" && !!(a.zoomRect || a.zoomTargets?.length);
   const ordered = [
     ...actions.filter(isZoom),
     ...actions.filter((a) => a.type === "pause"),
     ...actions.filter((a) => a.type === "narrate"),
-  ].sort((a, b) => a.timestamp - b.timestamp);
+  ]
+    .map((a) => ({ a, at: mapped(a.timestamp) }))
+    .sort((x, y) => x.at - y.at);
 
   const inserts: InsertSpan[] = [];
   let shift = 0;
-  for (const a of ordered) {
+  for (const { a, at } of ordered) {
     let length: number;
     let added: number;
     let delta: number;
+    let holds: InsertSpan["holds"];
     if (a.type === "zoom") {
-      const inOut = 2 * frames(a.zoomDuration ?? 1);
-      const targets: { audioPath?: Record<string, string> }[] = a.zoomTargets?.length ? a.zoomTargets : [{}];
-      length = targets.reduce((sum, tg) => sum + inOut + (firstAudioSec(tg.audioPath, audioSec) ?? frames(a.zoomHold ?? 2)), 0);
-      added = delta = length;
+      const half = frames(a.zoomDuration ?? 1);
+      const targets: { customAudioPath?: string; audioPath?: Record<string, string> }[] = a.zoomTargets?.length ? a.zoomTargets : [{}];
+      holds = [];
+      let off = 0;
+      for (const tg of targets) {
+        const s = narrationSec(tg, audioSec);
+        off += half;
+        const hold = s ?? frames(a.zoomHold ?? 2);
+        holds.push({ start: off, length: hold, narrated: s != null });
+        off += hold + half;
+      }
+      length = added = delta = off;
     } else if (a.type === "pause") {
-      length = typeof a.resumeAfter === "number" ? a.resumeAfter : 3;
-      added = delta = length;
+      length = added = delta = typeof a.resumeAfter === "number" ? a.resumeAfter : 3;
     } else {
-      const clip = firstAudioSec(a.audioPath, audioSec);
+      const clip = narrationSec(a, audioSec);
       let planned = clip != null ? clip + NARRATION_TAIL_SEC : 3;
       if (typeof a.resumeAfter === "number") planned = a.resumeAfter;
       length = clip != null ? Math.min(planned, clip) : planned;
@@ -303,14 +582,27 @@ export function modelTimeline(actions: NaraAction[], audioSec: (audioPath: strin
         delta = length - planned;
       }
     }
-    inserts.push({ action: a, at: a.timestamp, length, added, delta, start: a.timestamp + shift });
+    inserts.push({ action: a, at, length, added, delta, start: at + shift, ...(holds ? { holds } : {}) });
     shift += delta;
   }
 
+  const boundaries = [
+    ...skips.map((r) => ({ at: mapped(r.start), action: r.action })),
+    ...speeds.flatMap((r) => [
+      { at: speedMap(r.start), action: r.action },
+      { at: speedMap(r.end), action: r.action },
+    ]),
+  ].sort((x, y) => x.at - y.at);
+
+  const sumBefore = (m: number, key: "added" | "delta") => inserts.reduce((sum, sp) => (sp.at < m ? sum + sp[key] : sum), 0);
   return {
     inserts,
-    placed: (t: number) => t + inserts.reduce((sum, sp) => (sp.at < t ? sum + sp.added : sum), 0),
+    mapped,
+    placed: (t) => mapped(t) + sumBefore(mapped(t), "added"),
+    realAt: (m) => m + sumBefore(m, "delta"),
+    boundaries,
     addedSec: shift,
+    finalDuration: (recordingSec) => mapped(recordingSec) + shift,
   };
 }
 
@@ -330,38 +622,44 @@ function overlayDurationOf(a: NaraAction): number {
 }
 
 /**
- * AUTO duration of overlay i (drawn from P = placed(t_i)):
+ * AUTO duration of overlay i, drawn from P = placed(t_i):
  *   target = start(j) + cover(j) − P   for the first later entry j in the same
- *            step that narrates and has a clip; cover = clip + 0.5 for narrate,
- *            min(zoomIn + clip + 0.5, zoom length) for a narrated zoom
- *            (only reachable by lower-third callouts, see below);
- *   target = 3 when no such j.
- *   Caps: never into a zoom — start(z) − P − 0.05 for the first zoom at/after
- *   t_i (warning); never past the next overlay of the same fx type —
- *   placed(t_k) − P − 0.05. Minimum 0.5 s.
- * start(j) − P = (t_j − t_i) + Σ real lengths of the inserts between them, so this
- * is the spec's "(t_j − t_i) + inserts between + narration" with the producer's
- * real insert lengths. Lower-third callouts are exempt from the zoom stop: they
- * are not tied to an element, so drawing them over zoomed frames is correct.
+ *            step that narrates and has a clip; cover = clip + 0.5 for narrate;
+ *            for a zoom, the end of its last narrated hold + 0.5 (capped at the
+ *            zoom's length) — only reachable by lower-third callouts, see below;
+ *   target = 3 when there is no such j.
+ *   Caps (each keeps a 0.05 s gap):
+ *    - never into a zoom: start(z) − P for the first zoom at/after t_i (warning);
+ *    - never across a skip cut or a speed-range edge: realAt(b) − P (warning);
+ *    - never past the next overlay of the same fx type: placed(t_k) − P.
+ *   Minimum 0.5 s.
+ * start(j) − P = (t_j − t_i) + Σ real lengths of the inserts between them — the
+ * spec's "(t_j − t_i) + inserts between + narration", with the lengths the
+ * producer really renders. Lower-third callouts are not tied to an element, so
+ * the zoom/range caps don't apply to them (drawn over zoomed or re-timed frames
+ * they are still correct).
  */
 function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, warnings: string[]) {
   const spanOf = new Map<NaraAction, InsertSpan>(tl.inserts.map((sp) => [sp.action, sp]));
   const slotOf = new Map<NaraAction, Slot>(slots.map((sl) => [sl.action, sl]));
   const orderOf = new Map<NaraAction, number>(actions.map((a, k) => [a, k]));
+  const pathOf = (a: NaraAction) => slotOf.get(a)?.path ?? a.name ?? a.id;
 
   for (const sl of slots) {
-    if (sl.fx.fx !== "spotlight" && sl.fx.fx !== "callout" && sl.fx.fx !== "blur") continue;
+    if (!isOverlay(sl.fx)) continue;
+    const m = tl.mapped(sl.t);
     const P = tl.placed(sl.t);
-    const firstZoom = tl.inserts.find((sp) => sp.action.type === "zoom" && sp.at >= sl.t);
+    const zoomAfter = (sameStep: boolean) =>
+      tl.inserts.find((sp) => sp.action.type === "zoom" && sp.at >= m && (!sameStep || slotOf.get(sp.action)?.step === sl.step));
 
     if (!sl.auto) {
       // Explicit durations are the author's call — only flag a blur whose window
       // reaches a zoom in its step: zoomed frames come from the unblurred video.
       const dur = overlayDurationOf(sl.action);
-      const z = tl.inserts.find((sp) => sp.action.type === "zoom" && sp.at >= sl.t && slotOf.get(sp.action)?.step === sl.step);
+      const z = zoomAfter(true);
       if (sl.fx.fx === "blur" && z && P + dur > z.start) {
         warnings.push(
-          `${sl.path} (blur): its ${sec(dur)} window runs into the zoom at ${slotOf.get(z.action)?.path}. ` +
+          `${sl.path} (blur): its ${sec(dur)} window runs into the zoom at ${pathOf(z.action)}. ` +
             `Zoomed frames are made from the unblurred recording, so what the blur hides can show — end the blur before the zoom or drop the zoom.`,
         );
       }
@@ -370,40 +668,48 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
 
     // target: until the first narration that follows in this step ends
     let target = AUTO_FALLBACK_SEC;
-    const j = slots.find((o) => o.s === sl.s && o.i > sl.i && narrates(o.fx) && o.clip);
+    const j = slots.find((o) => o.s === sl.s && o.i > sl.i && (o.fx.fx === "narrate" || o.fx.fx === "zoom") && o.clips.length);
     const span = j && spanOf.get(j.action);
-    if (j?.clip && span) {
-      const cover =
-        j.fx.fx === "narrate"
-          ? j.clip.durationSec + NARRATION_TAIL_SEC
-          : Math.min(frames(j.action.zoomDuration ?? 1) + j.clip.durationSec + NARRATION_TAIL_SEC, span.length);
+    if (j && span) {
+      let cover: number;
+      if (j.fx.fx === "narrate") {
+        cover = j.clips[0].durationSec + NARRATION_TAIL_SEC;
+      } else {
+        const last = [...(span.holds ?? [])].reverse().find((h) => h.narrated);
+        cover = Math.min((last ? last.start + last.length : span.length) + NARRATION_TAIL_SEC, span.length);
+      }
       target = span.start + cover - P;
     }
 
-    let dur = target;
-    let stoppedBy: InsertSpan | undefined;
+    // caps
+    const caps: { at: number; why: "zoom" | "range" | "same"; action: NaraAction }[] = [];
     const rectBound = !(sl.fx.fx === "callout" && (sl.fx.style ?? "label") === "lower-third");
-    if (rectBound && firstZoom) {
-      const cap = firstZoom.start - P - CAP_GAP_SEC;
-      if (cap < dur) {
-        dur = cap;
-        stoppedBy = firstZoom;
-      }
+    if (rectBound) {
+      const z = zoomAfter(false);
+      if (z) caps.push({ at: z.start - P - CAP_GAP_SEC, why: "zoom", action: z.action });
+      const b = tl.boundaries.find((x) => x.at > m + 1e-6);
+      if (b) caps.push({ at: tl.realAt(b.at) - P - CAP_GAP_SEC, why: "range", action: b.action });
     }
-    const k = orderOf.get(sl.action)!;
-    const nextSame = actions.slice(k + 1).find((a) => a.type === sl.action.type);
-    if (nextSame) dur = Math.min(dur, tl.placed(nextSame.timestamp) - P - CAP_GAP_SEC);
-    dur = Math.max(AUTO_MIN_SEC, round3(dur));
+    const nextSame = actions.slice(orderOf.get(sl.action)! + 1).find((a) => a.type === sl.action.type);
+    if (nextSame) caps.push({ at: tl.placed(nextSame.timestamp) - P - CAP_GAP_SEC, why: "same", action: nextSame });
+    const binding = caps.filter((c) => c.at < target).sort((x, y) => x.at - y.at)[0];
+    const dur = Math.max(AUTO_MIN_SEC, round3(binding ? binding.at : target));
     setOverlayDuration(sl.action, dur);
 
-    if (stoppedBy) {
-      const zPath = slotOf.get(stoppedBy.action)?.path ?? `the zoom at ${sec(stoppedBy.at)}`;
+    if (binding?.why === "zoom") {
       warnings.push(
-        `${sl.path} (${sl.fx.fx}): "auto" duration stops at the zoom at ${zPath} after ${sec(dur)}` +
+        `${sl.path} (${sl.fx.fx}): "auto" duration stops at the zoom at ${pathOf(binding.action)} after ${sec(dur)}` +
           (j ? ` (the narration it was waiting for ends later)` : "") +
           ` — overlays can't continue through a zoom because zoomed frames are rescaled` +
           (sl.fx.fx === "blur" ? ", and the zoom shows the unblurred frame" : "") +
           `. Move the ${sl.fx.fx} after the zoom, or narrate before zooming.`,
+      );
+    } else if (binding?.why === "range") {
+      const kind = binding.action.type;
+      warnings.push(
+        `${sl.path} (${sl.fx.fx}): "auto" duration stops after ${sec(dur)} where the ${kind} at ${pathOf(binding.action)} ` +
+          `${kind === "skip" ? "cuts the video" : "changes the playback speed"} — the ${sl.fx.fx} would no longer line up with its element there. ` +
+          `Move the ${sl.fx.fx} (or its narration) so it doesn't span the ${kind}.`,
       );
     }
   }
@@ -412,8 +718,8 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
   // explicit durations can cause it — say which ones before rendering.
   for (const o of spotlightOverlaps(actions, tl)) {
     warnings.push(
-      `${slotOf.get(o.first)?.path} (spotlight): on screen until ${sec(o.firstEnd)} but the spotlight at ` +
-        `${slotOf.get(o.next)?.path} starts at ${sec(o.nextStart)} — overlapping spotlights fail to render ` +
+      `${pathOf(o.first)} (spotlight): on screen until ${sec(o.firstEnd)} but the spotlight at ` +
+        `${pathOf(o.next)} starts at ${sec(o.nextStart)} — overlapping spotlights fail to render ` +
         `(SPOTLIGHT_OVERLAP). Shorten the first one's duration or use "auto".`,
     );
   }
@@ -434,12 +740,13 @@ export interface SpotlightOverlap {
 export function spotlightOverlaps(actions: NaraAction[], tl: Timeline): SpotlightOverlap[] {
   const spots = actions
     .filter((a) => a.type === "spotlight")
-    .map((a) => ({ a, start: tl.placed(a.timestamp), end: tl.placed(a.timestamp) + overlayDurationOf(a) }));
+    .map((a) => ({ a, m: tl.mapped(a.timestamp), start: tl.placed(a.timestamp), end: tl.placed(a.timestamp) + overlayDurationOf(a) }))
+    .sort((x, y) => x.start - y.start);
   const out: SpotlightOverlap[] = [];
   for (let q = 0; q + 1 < spots.length; q++) {
     const [cur, nxt] = [spots[q], spots[q + 1]];
     if (nxt.start < cur.end - 0.01) {
-      const insertsBetween = tl.inserts.filter((sp) => sp.at >= cur.a.timestamp && sp.at < nxt.a.timestamp).length;
+      const insertsBetween = tl.inserts.filter((sp) => sp.at >= cur.m && sp.at < nxt.m).length;
       out.push({ first: cur.a, next: nxt.a, firstEnd: cur.end, nextStart: nxt.start, insertsBetween });
     }
   }

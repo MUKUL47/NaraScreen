@@ -1132,7 +1132,7 @@ function errText(err: unknown): string {
 
 /** First line of an error without Playwright's "locator.click: " prefix. */
 function firstLine(err: unknown): string {
-  return errText(err).split("\n")[0].replace(/^[a-zA-Z]+\.[a-zA-Z]+: /, "").trim();
+  return errText(err).split("\n")[0].replace(/^[a-zA-Z]+\.[a-zA-Z]+: /, "").replace(/^Error: /, "").trim();
 }
 
 function firstLines(s: string, n: number): string {

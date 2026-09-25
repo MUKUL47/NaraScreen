@@ -26,6 +26,7 @@ export type ErrorCode =
   | "TTS_FAILED"
   | "SPOTLIGHT_OVERLAP"
   | "VIDEO_NOT_FOUND"
+  | "CANCELLED"
   // 2 — the machine is missing something (run `narascreen doctor`)
   | "TTS_UNAVAILABLE"
   | "FFMPEG_MISSING"
@@ -59,6 +60,7 @@ const EXIT_BY_CODE: Record<ErrorCode, number> = {
   TTS_FAILED: 1,
   SPOTLIGHT_OVERLAP: 1,
   VIDEO_NOT_FOUND: 1,
+  CANCELLED: 1,
   TTS_UNAVAILABLE: 2,
   FFMPEG_MISSING: 2,
   BROWSER_MISSING: 2,
@@ -145,6 +147,7 @@ export const ERROR_HELP: Record<ErrorCode, string> = {
   TTS_FAILED: "The speech engine rejected a narration (often an unknown voice id). See details, check `voices`.",
   SPOTLIGHT_OVERLAP: "Two spotlights overlap in time. Give the first a shorter duration, or use one spotlight.",
   VIDEO_NOT_FOUND: "There is no produced video for that language yet. Run `produce` first.",
+  CANCELLED: "The run was cancelled (POST /v1/runs/:id/cancel). Start it again if you still need it.",
   TTS_UNAVAILABLE: "The speech engine (Kokoro) is not reachable. Start it (see `doctor`), then retry.",
   FFMPEG_MISSING: "ffmpeg/ffprobe not found or missing required filters. Install ffmpeg (see `doctor`).",
   BROWSER_MISSING: "Playwright's Chromium is not installed. Run the fix command from `doctor`.",

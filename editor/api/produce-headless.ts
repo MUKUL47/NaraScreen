@@ -1,11 +1,13 @@
 // ─── produce-headless: one job + one language → final_<lang>.mp4 ─────
 //
-//   tts      synthesizeNarrations → audio/tts_<hash>.wav (cached by content)
+//   tts      synthesizeNarrations → audio/tts_<hash>.wav (cached by content;
+//            recorded `audio` files are used in place)
 //   compile  script + trace + clips → NaraScreen actions (auto durations fitted
 //            to the real clip lengths)
 //   render   demo-project.json → produceTimelineVideo — the SAME pipeline the
 //            desktop app uses, unchanged. The audio is pre-generated, so the
 //            producer only copies it (its own silent TTS fallback never runs).
+//   size     optional letterbox pass to an output resolution preset
 //
 // The job folder doubles as a desktop session: demo-project.json has the
 // DemoProject shape (src/types.ts), so a human can open the job in NaraScreen
@@ -17,20 +19,23 @@
 import * as fs from "fs";
 import * as path from "path";
 import { produceTimelineVideo } from "../electron/produce";
-import { hasAudioStream, probeDuration, probeResolution } from "../electron/ffmpeg";
+import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../electron/ffmpeg";
 import { DEFAULT_VOICES } from "../src/lib/voices";
 import { compile, modelTimeline, spotlightOverlaps } from "./compiler";
 import { AgentError } from "./errors";
 import { jobPaths } from "./job";
 import { scriptVoice, synthesizeNarrations } from "./narration";
 import { stage, warn, type Log } from "./output";
-import { DEFAULT_KOKORO_ENDPOINT, type DemoScript } from "./schema";
+import { DEFAULT_KOKORO_ENDPOINT, QUALITY_CRF, RESOLUTIONS, type DemoScript, type Quality, type ResolutionName } from "./schema";
 import type { NaraAction, TraceEntry } from "./types";
 
 export interface ProduceResult {
   lang: string;
   videoPath: string;
   durationSec: number;
+  /** final frame size (after any resolution preset) */
+  width: number;
+  height: number;
   projectPath: string;
   logPath: string;
   actions: number;
@@ -38,8 +43,18 @@ export interface ProduceResult {
   warnings: string[];
 }
 
+export interface ProduceOptions {
+  /** overrides script.output.resolution (CLI --resolution) */
+  resolution?: ResolutionName;
+  /** overrides script.output.quality (CLI --quality) */
+  quality?: Quality;
+}
+
 /** A rendered video this far off the modelled length lost an effect. */
 const DURATION_TOLERANCE_SEC = 2;
+/** Renderer log lines meaning an effect pass failed and was left out
+ *  (skip/speed/insert/overlay passes, and a music file that vanished). */
+const SKIPPED_PASS = /produced no output, skipping|music file not found, skipping/i;
 
 /** The desktop app's project file (src/types.ts DemoProject). */
 export function buildProject(
@@ -83,6 +98,7 @@ export async function produceLanguage(
   trace: TraceEntry[],
   lang: string,
   log: Log,
+  opts: ProduceOptions = {},
 ): Promise<ProduceResult> {
   const p = jobPaths(jobDir);
   if (!fs.existsSync(p.recording)) {
@@ -90,15 +106,19 @@ export async function produceLanguage(
       hint: "Record first: `narascreen record <script> --out <job>` (or `narascreen make <script>`).",
     });
   }
+  const recordingSec = probeDuration(p.recording);
+  const quality = opts.quality ?? script.output?.quality ?? "high";
+  const resolution = opts.resolution ?? script.output?.resolution ?? "native";
+
   // Compile once without audio first: a script/trace mismatch should fail in
   // milliseconds, not after minutes of speech synthesis.
-  compile(script, trace, lang);
+  compile(script, trace, lang, undefined, [], { durationSec: recordingSec });
 
   const clips = await synthesizeNarrations(script, lang, p.audioDir, log);
 
   stage("compile", `Compiling effects [${lang}]`, { lang });
   const warnings: string[] = [];
-  const actions = compile(script, trace, lang, clips, warnings);
+  const actions = compile(script, trace, lang, clips, warnings, { durationSec: recordingSec });
   for (const w of warnings) warn(w);
   log(`${actions.length} actions (${actions.map((a) => a.type).join(", ") || "none"})`);
   const clipSec = new Map([...clips.values()].map((c) => [c.audioPath, c.durationSec]));
@@ -126,25 +146,33 @@ export async function produceLanguage(
   // the desktop app opens (the most recently produced language).
   fs.writeFileSync(path.join(p.root, "demo-project.json"), json);
 
-  stage("render", `Rendering video/final_${lang}.mp4 (${actions.length} actions)`, { lang, actions: actions.length });
+  stage("render", `Rendering video/final_${lang}.mp4 (${actions.length} actions)`, { lang, actions: actions.length, quality, resolution });
   fs.mkdirSync(p.logsDir, { recursive: true });
   const logPath = path.join(p.logsDir, `produce-${lang}.log`);
   fs.writeFileSync(logPath, "");
   const videoPath = path.join(p.videoDir, `final_${lang}.mp4`);
   fs.rmSync(videoPath, { force: true }); // never mistake a stale video for this run's
   const rendererWarnings: string[] = [];
+  // The renderer never throws when an ffmpeg pass fails — it logs and carries
+  // on without that pass. A video missing an effect (a secret left unblurred,
+  // a narration not inserted) must never be delivered, so those lines fail.
+  const skippedPasses: string[] = [];
   const emit = (msg: string) => {
     fs.appendFileSync(logPath, msg + "\n");
     for (const line of msg.split("\n")) {
       const l = line.trim();
       if (!l) continue;
-      if (/^warning\b/i.test(l)) rendererWarnings.push(`renderer [${lang}]: ${l.replace(/^warning:?\s*/i, "")}`);
+      if (SKIPPED_PASS.test(l)) skippedPasses.push(l);
+      else if (/^warning\b/i.test(l)) rendererWarnings.push(`renderer [${lang}]: ${l.replace(/^warning:?\s*/i, "")}`);
       log(l);
     }
   };
 
+  const crf = QUALITY_CRF[quality];
   try {
-    await produceTimelineVideo(p.root, emit, lang);
+    // The renderer's own `resolution` argument stays unset: it would mix frame
+    // sizes between passes. Size presets are applied afterwards (letterbox).
+    await produceTimelineVideo(p.root, emit, lang, undefined, undefined, crf);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     emit(`ERROR: ${message}`);
@@ -156,26 +184,43 @@ export async function produceLanguage(
     throw renderFailed(`The renderer failed [${lang}]: ${message}`, logPath);
   }
 
-  const durationSec = fs.existsSync(videoPath) ? probeDuration(videoPath) : 0;
-  if (!(durationSec > 0)) throw renderFailed(`The renderer produced no playable video at ${videoPath}`, logPath);
-  // Narration must never go missing silently: if we generated clips, the
-  // video has to carry sound, and its length has to match the timeline.
-  if (clips.size > 0 && !hasAudioStream(videoPath)) {
-    throw renderFailed(`${videoPath} has no audio track although ${clips.size} narration clip(s) were generated`, logPath);
+  if (skippedPasses.length) {
+    throw renderFailed(`The renderer skipped part of the video [${lang}]: ${skippedPasses[0].replace(/^warning:\s*/i, "")}`, logPath, {
+      pass: skippedPasses[0],
+      ...(skippedPasses.length > 1 ? { passes: skippedPasses } : {}),
+      rejectedVideo: reject(videoPath, lang),
+    });
   }
-  const expected = probeDuration(p.recording) + timeline.addedSec;
+  let durationSec = fs.existsSync(videoPath) ? probeDuration(videoPath) : 0;
+  if (!(durationSec > 0)) throw renderFailed(`The renderer produced no playable video at ${videoPath}`, logPath);
+  // Narration must never go missing silently: if we have clips, the video has
+  // to carry sound, and its length has to match the timeline.
+  if (clips.size > 0 && !hasAudioStream(videoPath)) {
+    throw renderFailed(`${videoPath} has no audio track although ${clips.size} narration clip(s) were generated`, logPath, {
+      rejectedVideo: reject(videoPath, lang),
+    });
+  }
+  const expected = timeline.finalDuration(recordingSec);
   if (Math.abs(durationSec - expected) > Math.max(DURATION_TOLERANCE_SEC, expected * 0.05)) {
     rendererWarnings.push(
       `final_${lang}.mp4 is ${durationSec.toFixed(1)}s but the timeline adds up to ~${expected.toFixed(1)}s — ` +
         `an effect may have been skipped. Check ${logPath} and the preview.`,
     );
   }
+
+  if (resolution !== "native") {
+    resizeTo(videoPath, RESOLUTIONS[resolution], crf, emit, logPath);
+    durationSec = probeDuration(videoPath);
+  }
+  const { width, height } = probeResolution(videoPath);
   for (const w of rendererWarnings) warn(w);
 
   return {
     lang,
     videoPath,
     durationSec,
+    width,
+    height,
     projectPath,
     logPath,
     actions: actions.length,
@@ -189,6 +234,37 @@ export async function produceLanguage(
     })),
     warnings: [...warnings, ...rendererWarnings],
   };
+}
+
+/** Move an incomplete render away from final_<lang>.mp4 (kept for debugging)
+ *  so nothing downstream mistakes it for the product. */
+function reject(videoPath: string, lang: string): string | undefined {
+  if (!fs.existsSync(videoPath)) return undefined;
+  const to = path.join(path.dirname(videoPath), `rejected_${lang}.mp4`);
+  fs.renameSync(videoPath, to);
+  return to;
+}
+
+/** Scale to fit the preset and pad (letterbox) to its exact size, in place. */
+function resizeTo(video: string, size: { width: number; height: number }, crf: number, emit: (m: string) => void, logPath: string) {
+  const now = probeResolution(video);
+  if (now.width === size.width && now.height === size.height) return;
+  const { width: W, height: H } = size;
+  emit(`\n[Output] Letterboxing ${now.width}x${now.height} → ${W}x${H} (CRF ${crf})...`);
+  const tmp = video.replace(/\.mp4$/, ".resized.mp4");
+  const args = [
+    "-y", "-i", video,
+    "-vf", `scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1`,
+    "-c:v", "libx264", "-preset", "fast", "-crf", String(crf), "-pix_fmt", "yuv420p",
+  ];
+  if (hasAudioStream(video)) args.push("-c:a", "copy");
+  args.push(tmp);
+  const r = ffmpegSync(args);
+  if (r.status !== 0 || !fs.existsSync(tmp) || !(probeDuration(tmp) > 0)) {
+    fs.rmSync(tmp, { force: true });
+    throw renderFailed(`Could not scale ${video} to ${W}x${H} (ffmpeg exit ${r.status})`, logPath);
+  }
+  fs.renameSync(tmp, video);
 }
 
 /** steps[s].beat[i] of a compiled action (its name is `<step> #<entry> <fx>`). */
@@ -208,7 +284,7 @@ function spotlightOverlap(message: string, init: { where?: ReturnType<typeof ent
   });
 }
 
-function renderFailed(message: string, logPath: string): AgentError {
+function renderFailed(message: string, logPath: string, extra: Record<string, unknown> = {}): AgentError {
   let lastLines: string[] = [];
   try {
     lastLines = fs.readFileSync(logPath, "utf-8").split("\n").filter((l) => l.trim()).slice(-20);
@@ -217,6 +293,6 @@ function renderFailed(message: string, logPath: string): AgentError {
   }
   return new AgentError("RENDER_FAILED", message, {
     hint: "Run `narascreen doctor` (ffmpeg and its drawtext/ass filters must be available), then produce again. details.logPath has the full renderer log.",
-    details: { logPath, lastLines },
+    details: { logPath, ...extra, lastLines },
   });
 }

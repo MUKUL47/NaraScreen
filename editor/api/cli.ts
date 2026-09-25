@@ -542,7 +542,8 @@ function failureNext(ctx: Ctx, e: AgentError): string[] {
     case "BROWSER_MISSING":
       return [cli("doctor", ...(s ? ["--script", s] : []))];
     case "SCRIPT_NOT_FOUND":
-      return s ? [cli("init", "--url", "<site-url>", "--out", s)] : [];
+      // Creating one needs the site's URL, which only the caller knows.
+      return [cli("help", "init")];
     case "SCRIPT_INVALID":
     case "SCRIPT_INVALID_JSON":
     case "ENV_VAR_MISSING":
@@ -902,7 +903,7 @@ const HANDLERS: Record<string, Handler> = {
     }
     return {
       result: report,
-      next: ctx.known.script ? [cli("validate", ctx.known.script)] : [cli("init", "--url", "<site-url>")],
+      next: ctx.known.script ? [cli("validate", ctx.known.script)] : [cli("manual")],
     };
   },
 
@@ -1220,10 +1221,12 @@ const HANDLERS: Record<string, Handler> = {
     const { startServer } = await import("./server");
     const srv = await startServer({ port, host, token, workspace, concurrency });
     server = srv;
-    const auth = token ? ["-H", "Authorization: Bearer <token>"] : [];
+    // /v1 needs the token, which is never echoed back; the docs routes are public.
+    const next = [`curl -s ${q(`${srv.url}/docs.md`)}`];
+    if (!token) next.unshift(`curl -s ${q(`${srv.url}/v1/health`)}`);
     return {
       result: { url: srv.url, docs: `${srv.url}/docs`, workspace, auth: token ? "bearer" : "none" },
-      next: [["curl", "-s", ...auth, `${srv.url}/v1/health`].map(q).join(" "), `curl -s ${q(`${srv.url}/docs.md`)}`],
+      next,
       stay: true,
     };
   },

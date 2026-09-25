@@ -15,6 +15,8 @@ import { AgentError } from "../errors.ts";
 import {
   checkTts,
   clipFileName,
+  narrationSlots,
+  resolveAudio,
   resolveNarration,
   resolveTtsTarget,
   resolveVoice,
@@ -217,6 +219,70 @@ test("engine down → TTS_UNAVAILABLE with an actionable hint", async () => {
     assert.match(e.message, /not reachable/);
     assert.match(e.hint ?? "", /narascreen doctor/);
     assert.match(e.hint ?? "", /docker run/);
+    return true;
+  });
+});
+
+// ── recorded audio, zoom targets, disabled ───────────────────
+
+test("resolveAudio: one file for every language; a map picks lang, else en", () => {
+  assert.deepEqual(resolveAudio({ audio: "/a.wav" }, "hi"), { lang: "hi", path: "/a.wav" });
+  assert.deepEqual(resolveAudio({ audio: { en: "/en.wav", hi: "/hi.wav" } }, "hi"), { lang: "hi", path: "/hi.wav" });
+  assert.deepEqual(resolveAudio({ audio: { en: "/en.wav" } }, "es"), { lang: "en", path: "/en.wav" });
+  assert.equal(resolveAudio({ audio: { hi: "/hi.wav" } }, "es"), null);
+  assert.equal(resolveAudio({ narrate: "x" }, "en"), null);
+});
+
+test("narrationSlots: keys `${step}:${i}` and `${step}:${i}:t${k}`; disabled entries left out", () => {
+  const sc = script(DEFAULT_KOKORO_ENDPOINT, [{ id: "s", beat: [
+    { fx: "narrate", narrate: "a" },
+    { fx: "narrate", narrate: "off", disabled: true },
+    { fx: "zoom", voice: "am_adam", targets: [{ anchor: { text: "A" }, narrate: "one" }, { anchor: { text: "B" } }, { anchor: { text: "C" }, audio: "/c.wav" }] },
+    { fx: "zoom", audio: "/z.wav" },
+    { fx: "spotlight", anchor: { text: "x" } },
+  ] }]);
+  const slots = narrationSlots(sc);
+  assert.deepEqual(slots.map((x) => [x.key, x.path]), [
+    ["s:0", "steps[0].beat[0]"],
+    ["s:2:t0", "steps[0].beat[2].targets[0]"],
+    ["s:2:t2", "steps[0].beat[2].targets[2]"],
+    ["s:3", "steps[0].beat[3]"],
+  ]);
+  assert.equal(slots[1].src.voice, "am_adam", "a target inherits the zoom's voice");
+});
+
+test("recorded audio: used in place (voice \"recorded\", no TTS request); text kept for subtitles", async () => {
+  const dir = newDir("rec");
+  const file = path.join(dir, "take1.wav");
+  fs.writeFileSync(file, wav(0.8));
+  const before = requests.length;
+  const sc = script(`${base}/ok/v1/audio/speech`, [{ id: "s", beat: [
+    { fx: "narrate", audio: file, narrate: "Recorded line." },
+    { fx: "zoom", targets: [{ anchor: { text: "A" }, narrate: "Spoken." }, { anchor: { text: "B" }, audio: { en: file } }] },
+  ] }]);
+  const clips = await synthesizeNarrations(sc, "en", path.join(dir, "audio"), () => {});
+  assert.deepEqual([...clips.keys()], ["s:0", "s:1:t0", "s:1:t1"]);
+  const rec = clips.get("s:0")!;
+  assert.equal(rec.voice, "recorded");
+  assert.equal(rec.audioPath, file);
+  assert.equal(rec.text, "Recorded line.");
+  assert.equal(rec.cached, false);
+  assert.ok(Math.abs(rec.durationSec - 0.8) < 0.05);
+  assert.equal(clips.get("s:1:t1")!.audioPath, file);
+  assert.equal(clips.get("s:1:t0")!.voice, "af_heart");
+  assert.equal(requests.length, before + 1, "only the spoken target hit the engine");
+});
+
+test("unreadable recorded audio → TTS_FAILED (\"could not be read\")", async () => {
+  const dir = newDir("badrec");
+  const junk = path.join(dir, "junk.mp3");
+  fs.writeFileSync(junk, "not audio at all");
+  const sc = script(`${base}/ok/v1/audio/speech`, [{ id: "s", beat: [{ act: "wait", ms: 1 }, { fx: "narrate", audio: junk }] }]);
+  await assert.rejects(synthesizeNarrations(sc, "en", dir, () => {}), (e: unknown) => {
+    assert.ok(e instanceof AgentError);
+    assert.equal(e.code, "TTS_FAILED");
+    assert.match(e.hint ?? "", /could not be read/);
+    assert.equal(e.where?.path, "steps[0].beat[1]");
     return true;
   });
 });

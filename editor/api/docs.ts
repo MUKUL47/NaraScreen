@@ -395,7 +395,7 @@ function objectType(s: JsonSchema, field: string, links: Links): string {
   if (s.propertyNames || typeof s.additionalProperties === "object") {
     const key = s.propertyNames?.enum && isLanguageEnum(s.propertyNames.enum) ? LINK.langs : "string";
     const val = typeof s.additionalProperties === "object" ? typeOf(s.additionalProperties) : "any";
-    return `map ${key} → ${val}`;
+    return `map\u00a0${key}\u00a0→\u00a0${val}`;
   }
   if (ownTable(s)) return "object";
   const keys = Object.keys(s.properties ?? {});

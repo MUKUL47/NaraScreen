@@ -156,7 +156,14 @@ function applyBlurBatch(
 
       const sep = filterChain ? ";" : "";
       filterChain += `${sep}[${lastLabel}]split[base${idx}][src${idx}]`;
-      filterChain += `;[src${idx}]crop=${w}:${h}:${x}:${y},boxblur=${radius}:${radius}[blur${idx}]`;
+      // boxblur rejects radii larger than half the region (luma) / a quarter of it
+      // (chroma — yuv420p halves it), so small regions like one input field would
+      // fail and silently stay unblurred. Clamp per plane; keep the pass count.
+      const side = Math.min(w, h);
+      const lumaR = Math.max(1, Math.min(radius, Math.floor(side / 2)));
+      const chromaR = Math.max(0, Math.min(radius, Math.floor(side / 4)));
+      const power = Math.max(2, Math.min(radius, 20));
+      filterChain += `;[src${idx}]crop=${w}:${h}:${x}:${y},boxblur=luma_radius=${lumaR}:luma_power=${power}:chroma_radius=${chromaR}:chroma_power=${power}[blur${idx}]`;
       filterChain += `;[base${idx}][blur${idx}]overlay=${x}:${y}:enable='${enableExpr}'[out${idx}]`;
       lastLabel = `out${idx}`;
       idx++;
@@ -640,6 +647,8 @@ function buildSingleZoom(
   holdDuration: number,
   narration: NarrationResult | undefined,
   emit: (msg: string) => void,
+  /** Burn this narration's subtitles into the hold (null/undefined = none). */
+  subtitleSize?: number | null,
 ): string[] {
   const [zx, zy, zw, zh] = zoomRect;
   const { width: outW, height: outH } = res;
@@ -678,6 +687,14 @@ function buildSingleZoom(
   holdArgs.push(holdPath);
   ffmpegSync(holdArgs);
   paths.push(holdPath);
+
+  // Subtitles belong on the hold — that is where the narration plays.
+  if (narration?.text && subtitleSize) {
+    const subPath = path.join(tempDir, `zoomsub_${tag}.ass`);
+    const subOutPath = path.join(tempDir, `zoomholdsub_${tag}.mp4`);
+    generateSubtitleFile(narration.text, narration.audioDuration, subPath, res, subtitleSize);
+    if (burnSubtitles(holdPath, subPath, subOutPath)) paths[paths.length - 1] = subOutPath;
+  }
 
   // Zoom-out
   const zoomOutPath = path.join(tempDir, `zoomout_${tag}.mp4`);
@@ -792,6 +809,7 @@ function buildZoomInsert(
     const paths = buildSingleZoom(
       target.rect, framePath, tempDir, segIdx, i, res,
       zoomDuration, thisHold, narrForThis, emit,
+      action.showSubtitles !== false ? action.subtitleSize ?? 28 : null,
     );
     allPaths.push(...paths);
   }
@@ -954,8 +972,8 @@ function executeInsertPass(
       insertPaths = buildNarrateInsert(action, inputPath, tempDir, segIdx, res, totalDuration, narration, emit, mappedTs);
     }
 
-    // Apply subtitles if narration has text
-    if (narration?.text && action.showSubtitles !== false && insertPaths.length > 0) {
+    // Apply subtitles if narration has text (zooms burn theirs into each hold)
+    if (narration?.text && action.showSubtitles !== false && insertPaths.length > 0 && action.type !== "zoom") {
       const lastPath = insertPaths[insertPaths.length - 1];
       const subPath = path.join(tempDir, `sub_${String(segIdx).padStart(3, "0")}.ass`);
       const subOutPath = path.join(tempDir, `subseg_${String(segIdx).padStart(3, "0")}.mp4`);

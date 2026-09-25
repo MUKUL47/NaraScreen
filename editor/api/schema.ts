@@ -472,7 +472,7 @@ export const DefaultsSchema = z
 export const TtsSchema = z
   .object({
     kokoroEndpoint: z.url().optional().describe(`Kokoro OpenAI-compatible speech endpoint (default ${DEFAULT_KOKORO_ENDPOINT}).`),
-    voices: z.record(z.enum(TTS_LANGUAGES), str()).optional().describe("Voice per language, e.g. {\"en\": \"af_heart\"}."),
+    voices: z.partialRecord(z.enum(TTS_LANGUAGES), str()).optional().describe("Voice per language, e.g. {\"en\": \"af_heart\"}."),
     speed: z.number().min(0.5).max(2).optional().describe("Speech speed (default 1)."),
     voiceEn: str().optional().describe("Legacy: English voice. Prefer voices.en."),
     voiceHi: str().optional().describe("Legacy: Hindi voice. Prefer voices.hi."),
@@ -506,7 +506,7 @@ export const DemoScriptSchema = z
     music: z
       .object({
         path: str().describe("Audio file (mp3/wav/m4a/ogg), relative to this script. Loops to fill the video."),
-        volume: z.number().min(0).max(1).optional().describe("Music volume (default 0.5)."),
+        volume: z.number().gt(0).max(1).optional().describe("Music volume, above 0 up to 1 (default 0.5). To drop the music, remove `music`."),
         duckTo: z.number().min(0).max(1).optional().describe("Volume while narration plays (default 0.2)."),
       })
       .strict()

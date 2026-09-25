@@ -60,5 +60,5 @@ function findBinary(name: "ffmpeg" | "ffprobe"): string {
 export const FFMPEG_PATH = findBinary("ffmpeg");
 export const FFPROBE_PATH = findBinary("ffprobe");
 
-console.log(`[bin-paths] ffmpeg: ${FFMPEG_PATH}`);
-console.log(`[bin-paths] ffprobe: ${FFPROBE_PATH}`);
+console.error(`[bin-paths] ffmpeg: ${FFMPEG_PATH}`);
+console.error(`[bin-paths] ffprobe: ${FFPROBE_PATH}`);

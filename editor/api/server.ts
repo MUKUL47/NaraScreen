@@ -102,8 +102,8 @@ export const ROUTES: RouteDoc[] = [
   },
   {
     method: "GET",
-    path: "/v1/doctor",
-    summary: "Checks ffmpeg, the browser and the speech engine (runs `narascreen doctor`). Call this first.",
+    path: "/v1/doctor?scriptPath=<file>",
+    summary: "Checks ffmpeg, the browser and the speech engine (runs `narascreen doctor`; `scriptPath` also checks that script's speech endpoint). Call this first.",
     response: "`{ ready, checks: [{ id, ok, required, detail, fix? }] }`; `503 ENVIRONMENT_NOT_READY` (same details) when something required is missing.",
   },
   {
@@ -970,7 +970,7 @@ class NaraServer {
     const env = forced ?? parseEnvelope(run.stdout);
     if (run.cancelReason && !(env?.ok && code === 0)) {
       rec.status = "cancelled";
-      rec.outcome = failure(rec.command, new AgentError("INTERNAL", `Run cancelled. ${run.cancelReason}`, {
+      rec.outcome = failure(rec.command, new AgentError("CANCELLED", `Run cancelled. ${run.cancelReason}`, {
         hint: "Start it again with POST /v1/runs when you want the result.",
         details: { cancelled: true },
       }));
@@ -1404,12 +1404,17 @@ function isNaraEvent(v: unknown): v is NaraEvent {
 const MEDIA_EXT = /\.(mp4|webm|jpe?g|png)$/i;
 const MEDIA_KEYS = ["path", "video", "contactSheet", "screenshot", "fullPageScreenshot", "recording"];
 
-/** Absolute media paths in an envelope, most useful first (videos, contact sheets, screenshots; not every frame). */
+/** Absolute media paths in an envelope, most useful first: final videos, contact sheets,
+ *  screenshots, then the rest (the raw recording). Individual preview frames are skipped. */
 function mediaPaths(env: Envelope): string[] {
-  const found: string[] = [];
+  const found: { p: string; rank: number }[] = [];
+  const rankOf = (p: string, key: string) =>
+    /(^|[\\/])final_[^\\/]*\.mp4$/.test(p) ? 0 : key === "contactSheet" ? 1 : /screenshot/i.test(key) ? 2 : 3;
   const walk = (v: unknown, key: string) => {
     if (typeof v === "string") {
-      if (MEDIA_KEYS.includes(key) && path.isAbsolute(v) && MEDIA_EXT.test(v) && !found.includes(v)) found.push(v);
+      if (MEDIA_KEYS.includes(key) && path.isAbsolute(v) && MEDIA_EXT.test(v) && !found.some((f) => f.p === v)) {
+        found.push({ p: v, rank: rankOf(v, key) });
+      }
     } else if (Array.isArray(v)) {
       if (key !== "frames") v.forEach((x) => walk(x, key));
     } else if (isObject(v)) {
@@ -1418,7 +1423,7 @@ function mediaPaths(env: Envelope): string[] {
   };
   walk(env.result, "");
   walk(env.error?.details, "");
-  return found;
+  return found.sort((a, b) => a.rank - b.rank).map((f) => f.p);
 }
 
 /** Make relative storageState paths absolute (top level + useSession entries). */
