@@ -163,7 +163,7 @@ export async function startScreencast(
       args.push("-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", outputPath);
 
       // Generous but finite: a wedged ffmpeg must not hang the run forever.
-      const timeoutMs = Math.max(10 * 60_000, endT * 20_000);
+      const timeoutMs = Math.ceil(Math.max(10 * 60_000, endT * 20_000));
       const res = spawnSync(FFMPEG_PATH, args, { stdio: ["ignore", "ignore", "pipe"], maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs });
       if (res.error || res.status !== 0) {
         const tail = (res.stderr?.toString() ?? "").trim().split("\n").slice(-8).join("\n");
