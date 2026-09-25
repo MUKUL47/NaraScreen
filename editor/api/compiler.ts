@@ -78,8 +78,10 @@ interface Slot {
   action: NaraAction;
   /** narration clips of this entry (one, or one per speaking zoom target) */
   clips: NarrationClip[];
-  /** overlay whose duration is unset / "auto" */
-  auto: boolean;
+  /** how the overlay's duration is decided (only meaningful for overlays) */
+  mode: DurationMode;
+  /** "step-end" / "end": the recording time the window ends at */
+  windowEnd?: number;
 }
 
 interface EmitCtx {
@@ -107,8 +109,22 @@ function isRange(fx: FxEntry): fx is FxEntry & { fx: "speed" | "skip" | "mute" }
   return fx.fx === "speed" || fx.fx === "skip" || fx.fx === "mute";
 }
 
-function overlayDuration(fx: FxEntry): { value: number; auto: boolean } {
-  return typeof fx.duration === "number" ? { value: fx.duration, auto: false } : { value: AUTO_FALLBACK_SEC, auto: true };
+/** fixed seconds · "auto" (until the next narration in the step) · "step-end"
+ *  (until the step ends) · "end" (until the video ends) */
+type DurationMode = "fixed" | "auto" | "step-end" | "end";
+
+function overlayDuration(fx: FxEntry): { value: number; mode: DurationMode } {
+  if (typeof fx.duration === "number") return { value: fx.duration, mode: "fixed" };
+  return { value: AUTO_FALLBACK_SEC, mode: fx.duration === "step-end" || fx.duration === "end" ? fx.duration : "auto" };
+}
+
+/** Where step k ends in recording time: the first slot of the next step, or
+ *  the recording end for the last step (shared by ranges and overlays). */
+function stepEndTime(script: DemoScript, byKey: Map<string, TraceEntry>, k: number, endOfRecording: number): number {
+  const next = script.steps[k + 1];
+  if (!next) return endOfRecording;
+  const ts = next.beat.map((_, j) => byKey.get(`${next.id}:${j}`)?.t).filter((x): x is number => x != null);
+  return ts.length ? Math.min(...ts) : endOfRecording;
 }
 
 /** The fields that make one narration audible to the producer.
@@ -307,8 +323,9 @@ export function compile(
       const out = emitAction(entry, `action-${++n}`, tr, { d, lang, viewport: script.viewport, ctx, where, key, speakers, clips });
       out.action.name = `${beat.id} #${i} ${entry.fx}`;
       if (isRange(entry)) setRangeEnd(out.action, rangeEnd(script, byKey, s, i, entry, tr.t, endOfRecording, opts.durationSec));
-      const auto = isOverlay(entry) && overlayDuration(entry).auto;
-      slots.push({ s, i, step: beat.id, path, fx: entry, t: tr.t, action: out.action, clips: out.clips, auto });
+      const mode = overlayDuration(entry).mode;
+      const windowEnd = mode === "end" ? endOfRecording : mode === "step-end" ? stepEndTime(script, byKey, s, endOfRecording) : undefined;
+      slots.push({ s, i, step: beat.id, path, fx: entry, t: tr.t, action: out.action, clips: out.clips, mode, windowEnd });
     });
   });
 
@@ -361,12 +378,7 @@ function rangeEnd(
 ): number {
   const clamp = (x: number) => (durationSec != null ? Math.min(x, durationSec) : x);
   if (fx.seconds != null) return clamp(t + fx.seconds);
-  const stepEnd = (k: number): number => {
-    const next = script.steps[k + 1];
-    if (!next) return endOfRecording;
-    const ts = next.beat.map((_, j) => byKey.get(`${next.id}:${j}`)?.t).filter((x): x is number => x != null);
-    return ts.length ? Math.min(...ts) : endOfRecording;
-  };
+  const stepEnd = (k: number) => stepEndTime(script, byKey, k, endOfRecording);
   const until = fx.until ?? RANGE_DEFAULT_UNTIL[fx.fx];
   if (until === "next-act") {
     const beat = script.steps[s];
@@ -633,6 +645,9 @@ function overlayDurationOf(a: NaraAction): number {
  *    - never across a skip cut or a speed-range edge: realAt(b) − P (warning);
  *    - never past the next overlay of the same fx type: placed(t_k) − P.
  *   Minimum 0.5 s.
+ * "step-end" / "end": target = realAt(mapped(end of step / recording)) − P, with
+ * the same caps — except a blur keeps covering (zooms inside it are warned
+ * about) and only spotlights yield to the next overlay of their kind.
  * start(j) − P = (t_j − t_i) + Σ real lengths of the inserts between them — the
  * spec's "(t_j − t_i) + inserts between + narration", with the lengths the
  * producer really renders. Lower-third callouts are not tied to an element, so
@@ -652,7 +667,7 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
     const zoomAfter = (sameStep: boolean) =>
       tl.inserts.find((sp) => sp.action.type === "zoom" && sp.at >= m && (!sameStep || slotOf.get(sp.action)?.step === sl.step));
 
-    if (!sl.auto) {
+    if (sl.mode === "fixed") {
       // Explicit durations are the author's call — only flag a blur whose window
       // reaches a zoom in its step: zoomed frames come from the unblurred video.
       const dur = overlayDurationOf(sl.action);
@@ -666,11 +681,18 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
       continue;
     }
 
-    // target: until the first narration that follows in this step ends
+    // target: "auto" → until the first narration that follows in this step
+    // ends; "step-end"/"end" → until that point on the final timeline (so the
+    // inserts, cuts and speed changes in between are all counted).
     let target = AUTO_FALLBACK_SEC;
-    const j = slots.find((o) => o.s === sl.s && o.i > sl.i && (o.fx.fx === "narrate" || o.fx.fx === "zoom") && o.clips.length);
+    const auto = sl.mode === "auto";
+    const j = auto
+      ? slots.find((o) => o.s === sl.s && o.i > sl.i && (o.fx.fx === "narrate" || o.fx.fx === "zoom") && o.clips.length)
+      : undefined;
     const span = j && spanOf.get(j.action);
-    if (j && span) {
+    if (!auto) {
+      target = tl.realAt(tl.mapped(sl.windowEnd!)) - P;
+    } else if (j && span) {
       let cover: number;
       if (j.fx.fx === "narrate") {
         cover = j.clips[0].durationSec + NARRATION_TAIL_SEC;
@@ -684,13 +706,28 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
     // caps
     const caps: { at: number; why: "zoom" | "range" | "same"; action: NaraAction }[] = [];
     const rectBound = !(sl.fx.fx === "callout" && (sl.fx.style ?? "label") === "lower-third");
-    if (rectBound) {
+    // A blur told to last to the step/video end is hiding something: it keeps
+    // covering through later freezes; zooms inside it are only warned about.
+    const keepsCovering = sl.fx.fx === "blur" && !auto;
+    if (keepsCovering) {
+      const inside = tl.inserts.filter((sp) => sp.action.type === "zoom" && sp.at >= m && sp.start < P + target);
+      for (const z of inside) {
+        warnings.push(
+          `${sl.path} (blur, "${sl.mode}"): the zoom at ${pathOf(z.action)} falls inside the blur — zoomed frames are made from the ` +
+            `unblurred recording and are NOT blurred, so what the blur hides can show. Drop that zoom or zoom somewhere else.`,
+        );
+      }
+    }
+    if (rectBound && !keepsCovering) {
       const z = zoomAfter(false);
       if (z) caps.push({ at: z.start - P - CAP_GAP_SEC, why: "zoom", action: z.action });
       const b = tl.boundaries.find((x) => x.at > m + 1e-6);
       if (b) caps.push({ at: tl.realAt(b.at) - P - CAP_GAP_SEC, why: "range", action: b.action });
     }
-    const nextSame = actions.slice(orderOf.get(sl.action)! + 1).find((a) => a.type === sl.action.type);
+    // "auto" never runs into the next overlay of its kind; the explicit end
+    // modes only yield to the next spotlight (overlapping spotlights fail).
+    const capSame = auto || sl.action.type === "spotlight";
+    const nextSame = capSame ? actions.slice(orderOf.get(sl.action)! + 1).find((a) => a.type === sl.action.type) : undefined;
     if (nextSame) caps.push({ at: tl.placed(nextSame.timestamp) - P - CAP_GAP_SEC, why: "same", action: nextSame });
     const binding = caps.filter((c) => c.at < target).sort((x, y) => x.at - y.at)[0];
     const dur = Math.max(AUTO_MIN_SEC, round3(binding ? binding.at : target));
@@ -698,7 +735,7 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
 
     if (binding?.why === "zoom") {
       warnings.push(
-        `${sl.path} (${sl.fx.fx}): "auto" duration stops at the zoom at ${pathOf(binding.action)} after ${sec(dur)}` +
+        `${sl.path} (${sl.fx.fx}): "${sl.mode}" duration stops at the zoom at ${pathOf(binding.action)} after ${sec(dur)}` +
           (j ? ` (the narration it was waiting for ends later)` : "") +
           ` — overlays can't continue through a zoom because zoomed frames are rescaled` +
           (sl.fx.fx === "blur" ? ", and the zoom shows the unblurred frame" : "") +
@@ -707,7 +744,7 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
     } else if (binding?.why === "range") {
       const kind = binding.action.type;
       warnings.push(
-        `${sl.path} (${sl.fx.fx}): "auto" duration stops after ${sec(dur)} where the ${kind} at ${pathOf(binding.action)} ` +
+        `${sl.path} (${sl.fx.fx}): "${sl.mode}" duration stops after ${sec(dur)} where the ${kind} at ${pathOf(binding.action)} ` +
           `${kind === "skip" ? "cuts the video" : "changes the playback speed"} — the ${sl.fx.fx} would no longer line up with its element there. ` +
           `Move the ${sl.fx.fx} (or its narration) so it doesn't span the ${kind}.`,
       );

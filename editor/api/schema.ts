@@ -170,7 +170,7 @@ export interface FxEntry {
   placement?: "above" | "below" | "over";
   /** spotlight/callout/blur: seconds on screen, or "auto" (default) =
    *  until the next narration in the same beat finishes, else 3s. */
-  duration?: number | "auto";
+  duration?: number | "auto" | "step-end" | "end";
   zoomDuration?: number;
   zoomHold?: number;
   dimOpacity?: number;
@@ -358,8 +358,8 @@ const AudioSchema = z
   .union([str(), z.record(z.string(), str())])
   .describe("Pre-recorded audio file (wav/mp3/m4a/ogg/webm) used instead of generated speech, or one per language. Paths are relative to the script. Add `narrate` text too if you want subtitles.");
 const DurationSchema = z
-  .union([z.number().positive().max(120), z.literal("auto")])
-  .describe("Seconds on screen, or \"auto\" (default): until the next narration in this step ends, else 3s.");
+  .union([z.number().positive().max(120), z.enum(["auto", "step-end", "end"])])
+  .describe("Seconds on screen, or \"auto\" (default: until the next narration in this step ends, else 3s), \"step-end\" (until this step ends), or \"end\" (until the end of the video — e.g. to keep a secret blurred).");
 const RectSchema = z
   .tuple([z.number().min(0), z.number().min(0), z.number().positive(), z.number().positive()])
   .describe("[x, y, width, height] in source-video pixels. Video-source scripts only (browser scripts use anchors).");

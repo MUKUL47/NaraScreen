@@ -127,8 +127,8 @@
         {
           "fx": "blur",
           "anchor": { "label": "API key" },
-          "duration": 60,
-          "note": "A fixed duration longer than the rest of the video keeps the key hidden until the end; \"auto\" would unblur it once the next narration finishes."
+          "duration": "end",
+          "note": "\"end\" keeps the key blurred to the end of the video; \"auto\" would unblur it once the next narration finishes."
         },
         { "act": "click", "role": "switch", "name": "Weekly summary" },
         { "fx": "callout", "text": "Weekly summary: on", "placement": "above" },

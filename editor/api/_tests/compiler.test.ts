@@ -785,6 +785,72 @@ test("modelTimeline: skip + speed remap inserts, overlay starts and the final le
   assert.deepEqual(tl.boundaries.map((b) => b.at), [2, 3, 5]);
 });
 
+// ── "step-end" / "end" overlay durations ─────────────────────
+
+test("step-end: until the next step starts, on the final timeline (inserts in between counted)", () => {
+  const script = baseScript([
+    { id: "a", beat: [{ fx: "spotlight", anchor: { text: "x" }, duration: "step-end" }, { fx: "pause", seconds: 1 }, { fx: "narrate", narrate: "Hi." }] },
+    { id: "b", beat: [{ act: "click", text: "Next" }, { fx: "callout", style: "lower-third", text: "Last", duration: "step-end" }] },
+  ]);
+  const trace: TraceEntry[] = [
+    { beat: "a", i: 0, kind: "fx", fx: "spotlight", t: 2, rect: R },
+    { beat: "a", i: 1, kind: "fx", fx: "pause", t: 3 },
+    { beat: "a", i: 2, kind: "fx", fx: "narrate", t: 4 },
+    { beat: "b", i: 0, kind: "act", act: "click", t: 7, rect: R },
+    { beat: "b", i: 1, kind: "fx", fx: "callout", t: 8 },
+  ];
+  const warnings: string[] = [];
+  const actions = compile(script, trace, "en", clips({ "a:2": 2 }), warnings, { durationSec: 12 });
+  assert.equal(byName(actions, "a #0 spotlight").spotlightDuration, 8); // (7 − 2) + pause 1 + clip 2
+  assert.equal(byName(actions, "b #1 callout").calloutDuration, 4); // last step → recording end: 12 − 8
+  assert.deepEqual(warnings, []);
+});
+
+test("end: a blur keeps covering to the end of the video through freezes; zooms inside it are warned about", () => {
+  const script = baseScript([
+    { id: "a", beat: [{ fx: "blur", anchor: { label: "API key" }, duration: "end" }] },
+    { id: "b", beat: [{ fx: "narrate", narrate: "Still hidden." }, { fx: "zoom" }] },
+  ]);
+  const trace: TraceEntry[] = [
+    { beat: "a", i: 0, kind: "fx", fx: "blur", t: 2, rect: R },
+    { beat: "b", i: 0, kind: "fx", fx: "narrate", t: 5 },
+    { beat: "b", i: 1, kind: "fx", fx: "zoom", t: 8, rect: R2 },
+  ];
+  const warnings: string[] = [];
+  const actions = compile(script, trace, "en", clips({ "b:0": 2 }), warnings, { durationSec: 12 });
+  // final video = 12 + 2 (narration) + 3.6 (zoom); the blur starts at 2
+  assert.equal(byName(actions, "a #0 blur").blurDuration, 15.6);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /steps\[0\]\.beat\[0\] \(blur, "end"\): the zoom at steps\[1\]\.beat\[1\].*NOT blurred/);
+});
+
+test("end: spotlight/callout still stop at a zoom (warning) and spotlights yield to the next spotlight; callouts don't", () => {
+  const script = baseScript([
+    { id: "a", beat: [
+      { fx: "spotlight", anchor: { text: "a" }, duration: "end" },
+      { fx: "callout", style: "lower-third", text: "Title", duration: "end" },
+      { fx: "callout", text: "Label", anchor: { text: "b" }, duration: 1 },
+      { fx: "spotlight", anchor: { text: "b" }, duration: "end" },
+      { fx: "zoom" },
+    ] },
+  ]);
+  const trace: TraceEntry[] = [
+    { beat: "a", i: 0, kind: "fx", fx: "spotlight", t: 1, rect: R },
+    { beat: "a", i: 1, kind: "fx", fx: "callout", t: 1 },
+    { beat: "a", i: 2, kind: "fx", fx: "callout", t: 2, rect: R2 },
+    { beat: "a", i: 3, kind: "fx", fx: "spotlight", t: 3, rect: R2 },
+    { beat: "a", i: 4, kind: "fx", fx: "zoom", t: 6, rect: R2 },
+  ];
+  const warnings: string[] = [];
+  const actions = compile(script, trace, "en", undefined, warnings, { durationSec: 10 });
+  assert.equal(byName(actions, "a #0 spotlight").spotlightDuration, 1.95, "yields to the next spotlight");
+  assert.equal(byName(actions, "a #3 spotlight").spotlightDuration, 2.95, "stops before the zoom");
+  // lower-third: not rect-bound, not capped by the label → 10 + 3.6 − 1
+  assert.equal(byName(actions, "a #1 callout").calloutDuration, 12.6);
+  assert.equal(warnings.length, 1, warnings.join("\n"));
+  assert.match(warnings[0], /beat\[3\] \(spotlight\): "end" duration stops at the zoom/);
+});
+
 // ── error paths ──────────────────────────────────────────────
 
 test("missing trace entry → CompileError (COMPILE_FAILED) naming the entry", () => {
