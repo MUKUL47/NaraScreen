@@ -431,7 +431,7 @@ disappeared before you reached it (act on it sooner or don't target it).
 | `narrate` | Voiceover; the frame freezes while it plays (`freeze: false` = video keeps moving) | no | length of the speech + 0.5 s |
 | `zoom` | Smooth zoom into the element on a frozen frame, hold, zoom out. Add `narrate` to talk while zoomed in | yes | `zoomDuration` in + hold + out; hold = speech length when narrated, else `zoomHold` |
 | `spotlight` | Everything except the element is dimmed; `padding` (px) leaves extra room around it, `feather` (px) gives it a soft edge, `converge` (s) animates it closing in from the whole screen | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
-| `arrow` | An animated arrow points at the element: one smooth, gently curved line that draws itself to the element, a chevron head riding its tip; optional `text` label in a rounded pill at its tail. White halo + soft shadow, so it reads on light and dark pages. The page stays bright (a lighter touch than spotlight) | yes | `auto` (default), `step-end`, `end`, or seconds |
+| `arrow` | An animated arrow points at the element: one smooth, gently curved line that draws itself to the element, a chevron head riding its tip; optional `text` label in a rounded pill at its tail; optional `highlight` pencil loop around the element. White halo + soft shadow, so it reads on light and dark pages. The page stays bright (a lighter touch than spotlight) | yes | `auto` (default), `step-end`, `end`, or seconds |
 | `callout` | Text label: `label` (at the element), `lower-third` (bottom banner), `step-counter` ("Step N: …") | `label`/`step-counter`: yes | `auto` or seconds |
 | `blur` | The element is blurred (hide secrets) | yes | `step-end` (default), `end` (rest of the video), `auto`, or seconds |
 | `pause` | Frame freezes silently | no | `seconds` (default 3) |
@@ -478,7 +478,21 @@ to zoom into several elements one after another on the same frozen frame, each w
 - It comes from the first side with room — bottom-left, bottom-right, top-left, top-right, left, right,
   below, above — or the one you set with `from` (same names).
 - `color` is `#RRGGBB` (default `#F97316`, orange; a white halo and soft shadow keep it readable on light and dark pages). `fontSize` sizes the label (default 24).
+- The bend follows the direction, so it always curves into the target from below/above: from the
+  bottom-left it arcs like `)`, from the bottom-right like `(` (the top ones mirror them). Straight
+  `left`/`right`/`below`/`above` arrows arc gently toward the middle of the screen.
 - `text` can be per language, like callouts: `{"en": "Click here", "hi": "यहाँ क्लिक करें"}`.
+- `"highlight": true`: once the arrow lands, a hand-drawn pencil loop circles the element, holds for about
+  0.9 s, then wipes away from its start like a laser-pointer trail (the arrow and label stay). The loop
+  follows the element's shape — round on icons, flatter on wide rows — and stays inside the frame.
+  `highlightColor` (`#RRGGBB`) colours it; default is the arrow's `color`. It needs about 0.7 s after the
+  arrow lands (the arrow's duration minus ~0.6 s); shorter arrows skip it. Anchor the one element you mean
+  (a title, a button), not its whole row, so the loop is tight:
+
+  ```json
+  { "fx": "arrow", "anchor": { "text": "Prepare the quarterly report", "within": { "role": "row", "name": "Prepare the quarterly report" } },
+    "text": "Your new task", "highlight": true, "highlightColor": "#2563EB" }
+  ```
 - Without `anchor` it points at the element of the act just before it, like spotlight. In video-source
   scripts give `rect` (and `at`).
 - Point, then talk: put a `narrate` right after it — with the default `auto` duration the arrow stays

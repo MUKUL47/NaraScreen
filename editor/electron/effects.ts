@@ -42,6 +42,10 @@ export interface Action {
   /** calloutStyle "arrow": direction the arrow comes from (default: first that fits) and its colour */
   arrowFrom?: string;
   arrowColor?: string;
+  /** calloutStyle "arrow": after it lands, circle the element with a pencil loop that then wipes away */
+  arrowHighlight?: boolean;
+  /** The highlight loop's colour (default: arrowColor). */
+  arrowHighlightColor?: string;
   /** spotlight: soft edge width in px (default 0 = hard edge) */
   spotlightFeather?: number;
   /** spotlight: seconds the lit box takes to close in from the whole frame (default 0 = no animation) */

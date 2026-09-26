@@ -424,7 +424,7 @@ type Pt = [number, number];
 
 /** The arrow as shapes (video px): the curve it follows and, for any drawn length
  *  along it, the stroke so far and the chevron at its end. Exported for tests. */
-export function arrowShape(g: { tail: Pt; tip: Pt; scale: number }): {
+export function arrowShape(g: { tail: Pt; tip: Pt; scale: number }, frameCenter?: Pt): {
   point(t: number): Pt;
   length: number;
   at(s: number): Pt;
@@ -438,8 +438,19 @@ export function arrowShape(g: { tail: Pt; tip: Pt; scale: number }): {
   const ux = (px - tx) / len;
   const uy = (py - ty) / len;
   // A gentle bow: the control point sits off the straight line by 16% of the length.
+  // Its side follows the direction: a diagonal bows toward the corner (tip x, tail y),
+  // so it leaves the tail sideways and arrives at the target vertically — bottom-left →
+  // top-right is a ")", bottom-right → top-left a "(", and the top ones mirror them.
+  // Straight across/up/down arrows bow toward the frame's centre, away from the edge.
   const bow = 0.16 * len;
-  const c: Pt = [(tx + px) / 2 + uy * bow, (ty + py) / 2 - ux * bow];
+  const mx = (tx + px) / 2;
+  const my = (ty + py) / 2;
+  const nx = uy;
+  const ny = -ux;
+  let side = (px - mx) * nx + (ty - my) * ny;
+  if (Math.abs(side) < 0.2 * len) side = frameCenter ? (frameCenter[0] - mx) * nx + (frameCenter[1] - my) * ny : 1;
+  const sgn = side < 0 ? -1 : 1;
+  const c: Pt = [mx + nx * bow * sgn, my + ny * bow * sgn];
   const point = (t: number): Pt => {
     const a = (1 - t) * (1 - t);
     const b = 2 * (1 - t) * t;
@@ -567,6 +578,108 @@ function assPolygon(layer: number, start: number, end: number, pts: Pt[], tags: 
   );
 }
 
+/**
+ * A hand-drawn loop around a box (video px), like a pencil circle: it hugs the
+ * element's shape (a circle for square things, flatter and boxier for wide rows),
+ * spirals out a little and overshoots its start, with a slight wobble and tilt.
+ * Kept inside the frame. Exported for tests.
+ */
+export function pencilLoop(rect: [number, number, number, number], res: { width: number; height: number }, scale: number): Pt[] {
+  const [x, y, w, h] = rect;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const pad = 6 * scale;
+  const grow = 7 * scale; // how far the overshoot spirals out
+  const wob = 2.5 * scale;
+  const margin = 6 * scale + grow + wob;
+  // Superellipse |x/rx|^n + |y/ry|^n = 1: n = 2 is an ellipse, higher is boxier.
+  const aspect = Math.max(w, h) / Math.max(1, Math.min(w, h));
+  const n = 2 + Math.min(4, (aspect - 1) * 0.6);
+  const k = Math.pow(2, 1 / n); // equal stretch that puts the box's corners on the curve
+  const maxRx = Math.max(12 * scale, Math.min(cx - margin, res.width - cx - margin));
+  const maxRy = Math.max(10 * scale, Math.min(cy - margin, res.height - cy - margin));
+  let rx = Math.min((w / 2) * k + pad, maxRx);
+  let ry = Math.min((h / 2) * k + pad, maxRy);
+  // Squeezed by the frame on one axis: open the other to clear the corners, but only a
+  // little (a full-width row's loop may clip the row's far ends; it must not cover the next row).
+  const fit = (half: number, r: number) => Math.pow(Math.min(0.95, half / r), n);
+  if (rx < (w / 2) * k + pad) ry = Math.min(maxRy, h / 2 + 1.5 * pad, (h / 2 + pad) / Math.pow(1 - fit(w / 2, rx), 1 / n));
+  else if (ry < (h / 2) * k + pad) rx = Math.min(maxRx, w / 2 + 1.5 * pad, (w / 2 + pad) / Math.pow(1 - fit(h / 2, ry), 1 / n));
+  // Tilt a few degrees, but never enough to lift a wide loop into the next row.
+  const tilt = -Math.min((3 * Math.PI) / 180, Math.atan((0.12 * ry) / rx));
+  const a0 = (-160 * Math.PI) / 180; // starts upper left, goes clockwise
+  const sweep = 2 * Math.PI + 0.45; // a little past a full turn
+  const e = 2 / n;
+  const N = 120;
+  return Array.from({ length: N + 1 }, (_, i): Pt => {
+    const u = i / N;
+    const a = a0 + sweep * u;
+    const c = Math.cos(a);
+    const sn = Math.sin(a);
+    const off = grow * u + wob * Math.sin(3 * a + 1);
+    // On a flat (or tall) loop the spiral and wobble shrink across the thin side, so it stays snug.
+    const ex = Math.sign(c) * Math.pow(Math.abs(c), e) * rx + c * off * Math.max(0.3, Math.min(1, rx / ry));
+    const ey = Math.sign(sn) * Math.pow(Math.abs(sn), e) * ry + sn * off * Math.max(0.3, Math.min(1, ry / rx));
+    return [cx + ex * Math.cos(tilt) - ey * Math.sin(tilt), cy + ex * Math.sin(tilt) + ey * Math.cos(tilt)];
+  });
+}
+
+/** The part of a polyline between arc lengths s0 and s1. */
+function polySlice(pts: Pt[], cum: number[], s0: number, s1: number): Pt[] {
+  const at = (s: number): Pt => {
+    let i = 1;
+    while (i < cum.length - 1 && cum[i] < s) i++;
+    const f = (s - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]);
+    return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * f, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * f];
+  };
+  const out: Pt[] = [at(s0)];
+  for (let i = 1; i < pts.length - 1; i++) if (cum[i] > s0 && cum[i] < s1) out.push(pts[i]);
+  out.push(at(s1));
+  return out;
+}
+
+/**
+ * ASS events for the arrow's `highlight`: once the arrow has landed, a pencil loop is
+ * drawn around the element, held for a moment, then wiped away from its start like a
+ * laser-pointer trail. Squeezed to fit the time left; skipped when there is too little.
+ */
+function highlightEvents(rect: [number, number, number, number], res: { width: number; height: number }, scale: number, color: string, from: number, end: number): string[] {
+  const avail = end - from - 0.05;
+  if (avail < 0.6) return [];
+  const drawSec = Math.min(0.55, avail * 0.3);
+  const eraseSec = Math.min(0.45, avail * 0.25);
+  const holdSec = Math.max(0, Math.min(0.9, avail - drawSec - eraseSec));
+  const pts = pencilLoop(rect, res, scale);
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const total = cum[cum.length - 1];
+  const th = 4 * scale;
+  const halo = `\\1c&HFFFFFF&\\3c&HFFFFFF&\\bord${(1.6 * scale).toFixed(1)}\\shad0`;
+  const fill = `\\1c${color}\\bord0\\shad0`;
+  const out: string[] = [];
+  // The loop crosses itself where it overshoots: drawn as short pieces (each a simple
+  // polygon) so no fill rule can punch a hole where the stroke overlaps.
+  const frame = (t0: number, t1: number, s0: number, s1: number) => {
+    if (s1 - s0 < 1) return;
+    const pieces = Math.max(1, Math.ceil((s1 - s0) / (total / 4)));
+    const step = (s1 - s0) / pieces;
+    const polys = Array.from({ length: pieces }, (_, k) => capsule(polySlice(pts, cum, s0 + k * step, s0 + (k + 1) * step), th));
+    for (const poly of polys) out.push(assPolygon(2, t0, t1, poly, halo, 0, 0, ""));
+    for (const poly of polys) out.push(assPolygon(3, t0, t1, poly, fill, 0, 0, ""));
+  };
+  const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+  const easeIn = (u: number) => u * u;
+  const nDraw = Math.max(1, Math.round(drawSec * ARROW_DRAW_FPS));
+  const nErase = Math.max(1, Math.round(eraseSec * ARROW_DRAW_FPS));
+  const drawAt = (k: number) => from + (drawSec * k) / nDraw;
+  for (let k = 0; k < nDraw; k++) frame(drawAt(k), drawAt(k + 1), 0, total * easeInOut((k + 1) / nDraw));
+  const eraseFrom = from + drawSec + holdSec;
+  frame(drawAt(nDraw), eraseFrom, 0, total);
+  const eraseAt = (k: number) => eraseFrom + (eraseSec * k) / nErase;
+  for (let k = 0; k < nErase - 1; k++) frame(eraseAt(k), eraseAt(k + 1), total * easeIn((k + 1) / nErase), total);
+  return out;
+}
+
 /** Frames per second of the arrow's draw-in (one ASS event per frame). */
 const ARROW_DRAW_FPS = 30;
 
@@ -583,7 +696,7 @@ function arrowEvents(action: Action, res: { width: number; height: number }, sta
   if (Math.hypot(g.tip[0] - g.tail[0], g.tip[1] - g.tail[1]) < 4) return [];
   const hex = action.arrowColor ?? ARROW_DEFAULT_COLOR;
   const color = assBgr(hex);
-  const shape = arrowShape(g);
+  const shape = arrowShape(g, [res.width / 2, res.height / 2]);
   const th = shape.thickness;
   const fill = `\\1c${color}\\bord0\\shad0`;
   const halo = `\\1c&HFFFFFF&\\3c&HFFFFFF&\\bord${(2.2 * g.scale).toFixed(1)}\\shad0`;
@@ -607,6 +720,7 @@ function arrowEvents(action: Action, res: { width: number; height: number }, sta
   for (let k = 0; k < steps - 1; k++) frame(at(k), at(k + 1), shape.length * easeOut((k + 1) / steps), "");
   const drawnAt = at(steps - 1);
   frame(drawnAt, end, shape.length, "\\fad(0,200)");
+  if (action.arrowHighlight) out.push(...highlightEvents(panel.rect, res, g.scale, action.arrowHighlightColor ? assBgr(action.arrowHighlightColor) : color, start + drawSec + 0.1, end));
 
   if (panel.text) {
     const { cx, cy, pw, ph, fs } = arrowLabelBox(g, shape, panel.text, panel.fontSize || 24, res);

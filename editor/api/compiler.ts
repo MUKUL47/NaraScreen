@@ -292,6 +292,8 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
       base.calloutDuration = overlayDuration(fx).value;
       if (fx.from) base.arrowFrom = fx.from;
       if (fx.color) base.arrowColor = fx.color;
+      if (fx.highlight) base.arrowHighlight = true;
+      if (fx.highlight && fx.highlightColor) base.arrowHighlightColor = fx.highlightColor;
       return done();
     }
     case "pause": {

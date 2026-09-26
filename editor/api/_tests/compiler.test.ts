@@ -108,6 +108,19 @@ test("spotlight feather: passed to the renderer only when set", () => {
   assert.equal("spotlightFeather" in hard, false, "no field → the renderer's hard-edge path, as before");
 });
 
+test("arrow highlight: flag and loop colour passed only when set; colour needs the flag", () => {
+  const trace: TraceEntry[] = [{ beat: "b1", i: 0, kind: "fx", fx: "arrow", t: 1, rect: [10, 10, 100, 40] }];
+  const one = (fx: Record<string, unknown>) => compile(baseScript([{ id: "b1", beat: [{ fx: "arrow", anchor: { text: "A" }, duration: 3, ...fx }] }]), trace)[0];
+  const hl = one({ highlight: true, highlightColor: "#2563EB", color: "#10B981" });
+  assert.equal(hl.arrowHighlight, true);
+  assert.equal(hl.arrowHighlightColor, "#2563EB");
+  assert.equal(hl.arrowColor, "#10B981");
+  const plain = one({});
+  assert.equal("arrowHighlight" in plain, false, "no flag → no loop, as before");
+  assert.equal("arrowHighlightColor" in plain, false);
+  assert.equal("arrowHighlightColor" in one({ highlightColor: "#2563EB" }), false, "a colour alone does not turn the loop on");
+});
+
 test("spotlight converge: passed to the renderer only when set", () => {
   const trace: TraceEntry[] = [{ beat: "b1", i: 0, kind: "fx", fx: "spotlight", t: 1, rect: [10, 10, 100, 40] }];
   const anim = compile(baseScript([{ id: "b1", beat: [{ fx: "spotlight", anchor: { text: "A" }, converge: 0.6, duration: 2 }] }]), trace)[0];

@@ -30,7 +30,7 @@ import { exitCodeFor, type ErrorCode } from "../errors.ts";
 import type { Envelope, NaraEvent } from "../output.ts";
 import { DEFAULT_VOICES } from "../../src/lib/voices.ts";
 import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../../electron/ffmpeg.ts";
-import { arrowGeometry, arrowLabelBox, arrowShape, ARROW_DEFAULT_COLOR } from "../../electron/produce.ts";
+import { arrowGeometry, arrowLabelBox, arrowShape, pencilLoop, ARROW_DEFAULT_COLOR } from "../../electron/produce.ts";
 import { ensureFlutterBuild, startFlutterFixture } from "../plugins/flutter/fixture/serve.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,6 +57,7 @@ const SCRIPT = {
   upload: path.join(RUN, "upload.demo-script.json"),
   arrow: path.join(RUN, "arrow.demo-script.json"),
   converge: path.join(RUN, "converge.demo-script.json"),
+  highlight: path.join(RUN, "highlight.demo-script.json"),
   flutter: path.join(RUN, "flutter.demo-script.json"),
   cards: path.join(RUN, "cards.demo-script.json"),
 };
@@ -922,6 +923,74 @@ describe("narascreen CLI, end to end", () => {
     const box = arrowLabelBox(g, shape, "Click here", 24, { width: 1280, height: 720 });
     const pill = pixelAt(video, at + 2, box.cx + box.pw / 2 - box.ph * 0.3, box.cy);
     assert.ok(isArrow(pill), `label pill in the arrow colour: ${pill}`);
+  });
+
+  test("arrow curve: its bend follows the direction — ) from the lower left, ( from the lower right, mirrored from the top", () => {
+    const res = { width: 1280, height: 720 };
+    const target: [number, number, number, number] = [560, 300, 160, 60];
+    // Where the curve's middle sits relative to the straight tail→tip line's middle.
+    const bend = (from: string) => {
+      const g = arrowGeometry(target, res, from as never);
+      const s = arrowShape(g, [res.width / 2, res.height / 2]);
+      const [mx, my] = s.point(0.5);
+      return [mx - (g.tail[0] + g.tip[0]) / 2, my - (g.tail[1] + g.tip[1]) / 2];
+    };
+    const expect: Record<string, [number, number]> = {
+      "bottom-left": [1, 1], // ")": bulges to the lower right, arrives going up
+      "bottom-right": [-1, 1], // "("
+      "top-left": [1, -1],
+      "top-right": [-1, -1],
+    };
+    for (const [from, [sx, sy]] of Object.entries(expect)) {
+      const [dx, dy] = bend(from);
+      assert.ok(Math.sign(dx) === sx && Math.sign(dy) === sy, `${from}: bend (${dx.toFixed(1)}, ${dy.toFixed(1)}) should point (${sx}, ${sy})`);
+    }
+    // Straight arrows arc toward the middle of the screen: this target sits just above it, so
+    // arrows coming across bow down; an upward one near the left edge bows right.
+    assert.ok(bend("left")[1] > 0 && bend("right")[1] > 0, `across arrows bow toward the centre: ${bend("left")}, ${bend("right")}`);
+    const g = arrowGeometry([40, 330, 60, 60], res, "below");
+    const s = arrowShape(g, [res.width / 2, res.height / 2]);
+    assert.ok(s.point(0.5)[0] > (g.tail[0] + g.tip[0]) / 2, "an upward arrow near the left edge bows right, into the frame");
+  });
+
+  test("arrow highlight: a pencil loop around the element once the arrow lands, then wiped away from its start", { timeout: 10 * MIN }, async () => {
+    const grey = path.join(RUN, "grey-hl.mp4");
+    const gen = ffmpegSync(["-y", "-f", "lavfi", "-i", "color=c=0x808080:s=1280x720:r=30:d=6", "-pix_fmt", "yuv420p", grey]);
+    assert.equal(gen.status, 0, "ffmpeg could not generate the grey video");
+    const target: [number, number, number, number] = [560, 300, 160, 60];
+    writeJson(SCRIPT.highlight, {
+      version: 1,
+      scope: "Highlight",
+      source: { video: grey },
+      steps: [{ id: "point", beat: [{ fx: "arrow", at: 1, rect: target, duration: 3, highlight: true, highlightColor: "#2563EB" }] }],
+    });
+    expectOk(await cli(["validate", SCRIPT.highlight]), "validate");
+    const r = await cli(["make", SCRIPT.highlight, "--out", path.join(RUN, "job-highlight")], { timeoutMs: 8 * MIN });
+    const video = (expectOk(r, "make").videos as Rec[])[0].path as string;
+    assertFile(video, "highlight video", r);
+    // Timing, as the renderer computes it for a 3 s arrow at 1 s: the arrow is drawn by 1.5 s,
+    // the loop draws from 1.6 s to 2.15 s, holds to 3.05 s, and is wiped by 3.5 s.
+    const loop = pencilLoop(target, { width: 1280, height: 720 }, arrowGeometry(target, { width: 1280, height: 720 }).scale);
+    const cum = [0];
+    for (let i = 1; i < loop.length; i++) cum.push(cum[i - 1] + Math.hypot(loop[i][0] - loop[i - 1][0], loop[i][1] - loop[i - 1][1]));
+    const along = (f: number) => loop[cum.findIndex((c) => c >= f * cum[cum.length - 1])];
+    const isBlue = ([r2, g2, b2]: number[]) => b2 > 170 && r2 < 90 && g2 < 130;
+    const early = along(0.1);
+    const late = along(0.8);
+    // Before the arrow lands: no loop.
+    assert.ok(!isBlue(pixelAt(video, 1.4, ...early)), `no loop before the arrow lands: ${pixelAt(video, 1.4, ...early)}`);
+    // Holding: the whole loop, in highlightColor.
+    for (const f of [0.1, 0.35, 0.6, 0.8]) {
+      const p = along(f);
+      assert.ok(isBlue(pixelAt(video, 2.6, ...p)), `loop at ${f * 100}% drawn at 2.6s: ${pixelAt(video, 2.6, ...p)}`);
+    }
+    // Being wiped: its start is gone, its end still there.
+    assert.ok(!isBlue(pixelAt(video, 3.3, ...early)) && isBlue(pixelAt(video, 3.3, ...late)), `wiped from its start at 3.3s: ${pixelAt(video, 3.3, ...early)} / ${pixelAt(video, 3.3, ...late)}`);
+    // Gone, while the arrow itself stays to the end of its duration.
+    assert.ok(!isBlue(pixelAt(video, 3.7, ...late)), `loop gone at 3.7s: ${pixelAt(video, 3.7, ...late)}`);
+    const shape = arrowShape(arrowGeometry(target, { width: 1280, height: 720 }), [640, 360]);
+    const mid = shape.at(shape.length * 0.5);
+    assert.ok(isArrow(pixelAt(video, 3.7, ...mid)), `arrow still there at 3.7s: ${pixelAt(video, 3.7, ...mid)}`);
   });
 
   test("spotlight converge: the lit box closes in from the whole frame only when converge is set", { timeout: 10 * MIN }, async () => {

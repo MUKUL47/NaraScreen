@@ -187,6 +187,10 @@ export interface FxEntry {
   /** arrow: the side it comes from (default: the first that fits, bottom-left first) and its colour. */
   from?: ArrowFrom;
   color?: string;
+  /** arrow: once it lands, circle the element with a pencil loop that then wipes away. */
+  highlight?: boolean;
+  /** arrow: the pencil loop's colour (default: the arrow's colour). */
+  highlightColor?: string;
   /** spotlight/callout/blur/arrow: seconds on screen, or "auto" (default) =
    *  until the next narration in the same beat finishes, else 3s. */
   duration?: number | "auto" | "step-end" | "end";
@@ -518,8 +522,10 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
     from: z.enum(ARROW_FROM).optional().describe("Side the arrow comes from (default: the first that fits on screen — bottom-left, bottom-right, top-left, top-right, left, right, below, above)."),
     color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("Arrow colour as #RRGGBB (default #F97316, orange — with a white halo and soft shadow it reads on light and dark pages)."),
     fontSize: z.number().int().min(12).max(96).optional().describe("Label text size in px (default 24)."),
+    highlight: z.boolean().optional().describe("Once the arrow lands, circle the element with a hand-drawn pencil loop; it holds for a moment, then wipes away like a laser-pointer trail (default false). Needs about 0.7 s after the arrow lands, else skipped."),
+    highlightColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("The pencil loop's colour as #RRGGBB (default: the arrow's `color`). Only used with highlight."),
     duration: DurationSchema.optional(),
-  }, "Point at an element with an animated arrow: one smooth, gently curved line that draws itself to the element, a chevron head riding its tip; optional label in a rounded pill at its tail. White halo + soft shadow keep it readable on any page. Like spotlight, but the rest of the screen stays bright."),
+  }, "Point at an element with an animated arrow: one smooth, gently curved line that draws itself to the element (its bend follows its direction: from the lower left it arcs like \")\", from the lower right like \"(\"), a chevron head riding its tip; optional pencil-loop highlight around the element once it lands; optional label in a rounded pill at its tail. White halo + soft shadow keep it readable on any page. Like spotlight, but the rest of the screen stays bright."),
   fx("blur", {
     anchor: SelectorSchema.optional(),
     anchors: z.array(SelectorSchema).min(1).max(10).optional().describe("Several elements blurred at once. Use instead of anchor."),

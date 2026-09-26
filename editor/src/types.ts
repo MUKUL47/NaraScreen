@@ -89,6 +89,8 @@ export interface TimelineAction {
   /** calloutStyle "arrow": points at calloutPanels[0].rect (its text = optional label at the tail) */
   arrowFrom?: "left" | "right" | "above" | "below" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
   arrowColor?: string; // "#RRGGBB" (default orange #F97316)
+  arrowHighlight?: boolean; // after the arrow lands: pencil loop around the target, then wiped away
+  arrowHighlightColor?: string; // "#RRGGBB" loop colour (default: arrowColor)
 
   // Blur: apply blur to one or more regions
   blurRects?: [number, number, number, number][]; // array of [x, y, w, h] in video coords
