@@ -68,6 +68,7 @@ export interface TimelineAction {
   spotlightRects?: [number, number, number, number][]; // array of [x, y, w, h] for multi-spotlight
   dimOpacity?: number; // 0.0-1.0, default 0.7
   spotlightDuration?: number; // how long to show (seconds)
+  spotlightFeather?: number; // soft edge width in px (default 0 = hard edge)
 
   // Speed Ramp: change playback speed for a range
   speedFactor?: number; // 0.5x, 2x, 3x, etc.
@@ -86,7 +87,7 @@ export interface TimelineAction {
   calloutPanels?: CalloutPanel[];
   /** calloutStyle "arrow": points at calloutPanels[0].rect (its text = optional label at the tail) */
   arrowFrom?: "left" | "right" | "above" | "below" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
-  arrowColor?: string; // "#RRGGBB" (default amber #FBBF24)
+  arrowColor?: string; // "#RRGGBB" (default orange #F97316)
 
   // Blur: apply blur to one or more regions
   blurRects?: [number, number, number, number][]; // array of [x, y, w, h] in video coords

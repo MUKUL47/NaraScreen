@@ -42,6 +42,8 @@ export interface Action {
   /** calloutStyle "arrow": direction the arrow comes from (default: first that fits) and its colour */
   arrowFrom?: string;
   arrowColor?: string;
+  /** spotlight: soft edge width in px (default 0 = hard edge) */
+  spotlightFeather?: number;
   /** Arrow size multiplier (default: from the video size). */
   arrowScale?: number;
   musicPath?: string;

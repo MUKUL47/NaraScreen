@@ -195,6 +195,8 @@ export interface FxEntry {
   dimOpacity?: number;
   /** spotlight: extra room (px) around each lit element (default 0 = its exact box). */
   padding?: number;
+  /** spotlight: soft edge width in px (default 0 = hard edge). */
+  feather?: number;
   radius?: number;
   /** pause: seconds to freeze. speed/skip/mute: length of the range. */
   seconds?: number;
@@ -504,16 +506,17 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
     duration: DurationSchema.optional(),
     dimOpacity: z.number().min(0).max(1).optional().describe("How dark the rest of the screen gets (default 0.7)."),
     padding: z.number().int().min(0).max(200).optional().describe("Extra room in px around each lit element (default 0 = its exact box). E.g. 12 so a button's edges and shadow stay bright. Clamped to the frame."),
+    feather: z.number().int().min(0).max(100).optional().describe("Soft edge: the lit area fades into the dim over this many px (default 0 = hard-edged box). The element itself stays fully lit. E.g. 24."),
   }, "Dim everything except one or more elements."),
   fx("arrow", {
     anchor: SelectorSchema.optional(),
     rect: RectSchema.optional(),
     text: z.union([str(), z.record(z.string(), str())]).optional().describe("Optional label at the arrow's tail, or one per language like {\"en\": \"Click here\", \"hi\": \"यहाँ क्लिक करें\"} (falls back to en)."),
     from: z.enum(ARROW_FROM).optional().describe("Side the arrow comes from (default: the first that fits on screen — bottom-left, bottom-right, top-left, top-right, left, right, below, above)."),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("Arrow colour as #RRGGBB (default #FBBF24, amber — visible on light and dark pages)."),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("Arrow colour as #RRGGBB (default #F97316, orange — with a white halo and soft shadow it reads on light and dark pages)."),
     fontSize: z.number().int().min(12).max(96).optional().describe("Label text size in px (default 24)."),
     duration: DurationSchema.optional(),
-  }, "Point at an element with an animated arrow: a dashed line drawn in dash by dash, then the head. Like spotlight, but the rest of the screen stays bright."),
+  }, "Point at an element with an animated arrow: one smooth, gently curved line that draws itself to the element, a chevron head riding its tip; optional label in a rounded pill at its tail. White halo + soft shadow keep it readable on any page. Like spotlight, but the rest of the screen stays bright."),
   fx("blur", {
     anchor: SelectorSchema.optional(),
     anchors: z.array(SelectorSchema).min(1).max(10).optional().describe("Several elements blurred at once. Use instead of anchor."),

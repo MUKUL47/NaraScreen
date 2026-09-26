@@ -209,6 +209,29 @@ function applySpotlightBatch(
 
     emit(`    Spotlight at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
 
+    // Soft edge (spotlightFeather px): the lit area is blended in through a blurred
+    // mask instead of hard-cut rectangles. The mask box is grown by the feather so
+    // the element itself stays fully lit and the falloff happens outside it.
+    const feather = Math.max(0, Math.round(action.spotlightFeather ?? 0));
+    if (feather > 0) {
+      const sep0 = filterChain ? ";" : "";
+      filterChain += `${sep0}[${lastLabel}]split=4[pass${ai}][dark${ai}][lit${ai}][mk${ai}]`;
+      filterChain += `;[dark${ai}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill[dimmed${ai}]`;
+      const boxes = rects
+        .map(([x, y, w, h]) => `drawbox=x=${x - feather}:y=${y - feather}:w=${w + 2 * feather}:h=${h + 2 * feather}:color=white:t=fill`)
+        .join(",");
+      // drawbox writes limited-range levels (black 16, white 235): snap to exact 0/255
+      // first, or the "dark" part of the mask would let the bright video bleed through.
+      filterChain += `;[mk${ai}]format=gray,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,${boxes},lut=y='if(gt(val,128),255,0)',gblur=sigma=${(feather / 2).toFixed(1)}[mask${ai}]`;
+      filterChain += `;[lit${ai}]format=yuva420p[lita${ai}];[lita${ai}][mask${ai}]alphamerge[soft${ai}]`;
+      filterChain += `;[dimmed${ai}][soft${ai}]overlay=0:0[spotlight${ai}]`;
+      const outSoft = `out${ai}`;
+      filterChain += `;[pass${ai}][spotlight${ai}]overlay=0:0:enable='${enableExpr}'[${outSoft}]`;
+      lastLabel = outSoft;
+      ai++;
+      continue;
+    }
+
     const splitCount = 2 + rects.length;
     const splitLabels = [`pass${ai}`, `dark${ai}`, ...rects.map((_, ri) => `crop${ai}_${ri}`)];
     const sep = filterChain ? ";" : "";
@@ -283,8 +306,8 @@ const CALLOUT_STYLES = [
     `Style: ${s.name},Noto Sans,${Math.round(s.size * ASS_FONT_SCALE)},&H00FFFFFF,&H00FFFFFF,&HFF000000,${s.box},` +
     `0,0,0,0,100,100,0,0,4,${s.pad},0,${s.align},0,0,0,1`,
 ).concat(
-  // Arrow shapes (vector drawings): fill set per event, dark outline for contrast on any background.
-  `Style: CArrow,Noto Sans,20,&H0024BFFB,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,2,1,7,0,0,0,1`,
+  // Arrow shapes (vector drawings): fill set per event; white halo + soft shadow for contrast on any background.
+  `Style: CArrow,Noto Sans,20,&H001673F9,&H00FFFFFF,&H00FFFFFF,&H80000000,0,0,0,0,100,100,0,0,1,2,0,7,0,0,0,1`,
 );
 
 // ─── arrow callouts ──────────────────────────────────────────────────
@@ -300,8 +323,7 @@ const ARROW_DIRS: Record<ArrowFrom, [number, number]> = {
 };
 /** Tried in order when `arrowFrom` is not set: the first whose tail fits in the frame wins. */
 const ARROW_AUTO: ArrowFrom[] = ["bottom-left", "bottom-right", "top-left", "top-right", "left", "right", "below", "above"];
-export const ARROW_DEFAULT_COLOR = "#FBBF24";
-const ARROW_DASHES = 5;
+export const ARROW_DEFAULT_COLOR = "#F97316";
 
 /** Where the arrow's tail and tip go for a target box (video pixels). */
 export function arrowGeometry(
@@ -367,70 +389,205 @@ function assBgr(hex: string): string {
   return `&H${v.slice(4, 6)}${v.slice(2, 4)}${v.slice(0, 2)}&`;
 }
 
+type Pt = [number, number];
+
+/** The arrow as shapes (video px): the curve it follows and, for any drawn length
+ *  along it, the stroke so far and the chevron at its end. Exported for tests. */
+export function arrowShape(g: { tail: Pt; tip: Pt; scale: number }): {
+  point(t: number): Pt;
+  length: number;
+  at(s: number): Pt;
+  stroke(s: number): Pt[];
+  head(s: number): { arms: [Pt, Pt]; tip: Pt };
+  thickness: number;
+} {
+  const [tx, ty] = g.tail;
+  const [px, py] = g.tip;
+  const len = Math.hypot(px - tx, py - ty);
+  const ux = (px - tx) / len;
+  const uy = (py - ty) / len;
+  // A gentle bow: the control point sits off the straight line by 16% of the length.
+  const bow = 0.16 * len;
+  const c: Pt = [(tx + px) / 2 + uy * bow, (ty + py) / 2 - ux * bow];
+  const point = (t: number): Pt => {
+    const a = (1 - t) * (1 - t);
+    const b = 2 * (1 - t) * t;
+    const d = t * t;
+    return [a * tx + b * c[0] + d * px, a * ty + b * c[1] + d * py];
+  };
+  // Arc length → t (the bow makes t uneven along the curve).
+  const N = 96;
+  const cum = [0];
+  let prev = point(0);
+  for (let i = 1; i <= N; i++) {
+    const p = point(i / N);
+    cum.push(cum[i - 1] + Math.hypot(p[0] - prev[0], p[1] - prev[1]));
+    prev = p;
+  }
+  const total = cum[N];
+  const tAt = (s: number) => {
+    const target = Math.max(0, Math.min(total, s));
+    let i = 1;
+    while (i < N && cum[i] < target) i++;
+    const f = (target - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]);
+    return (i - 1 + f) / N;
+  };
+  const at = (s: number) => point(tAt(s));
+  const thickness = 6 * g.scale;
+  const fullHead = Math.min(24 * g.scale, total * 0.35);
+  const stroke = (s: number): Pt[] => Array.from({ length: 25 }, (_, i) => at((Math.max(1, s) * i) / 24));
+  // Open chevron at the stroke's end, along the curve's direction there; it grows in with the line.
+  const head = (s: number) => {
+    const end = at(s);
+    const back = at(s - 2);
+    const dx = end[0] - back[0];
+    const dy = end[1] - back[1];
+    const dl = Math.hypot(dx, dy) || 1;
+    const hx = dx / dl;
+    const hy = dy / dl;
+    const hl = fullHead * Math.min(1, s / (total * 0.35));
+    const arm = (sign: number): Pt => {
+      const a = (sign * 34 * Math.PI) / 180;
+      const rx = hx * Math.cos(a) - hy * Math.sin(a);
+      const ry = hx * Math.sin(a) + hy * Math.cos(a);
+      return [end[0] - rx * hl, end[1] - ry * hl];
+    };
+    return { arms: [arm(1), arm(-1)] as [Pt, Pt], tip: end };
+  };
+  return { point, length: total, at, stroke, head, thickness };
+}
+
+/** A thick stroke along `pts` with round caps, as one polygon. */
+function capsule(pts: Pt[], th: number): Pt[] {
+  const r = th / 2;
+  const n = pts.length;
+  // left normal at each point (the stroke's direction turned 90°)
+  const norm = (i: number): Pt => {
+    const a = pts[Math.max(0, i - 1)];
+    const b = pts[Math.min(n - 1, i + 1)];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    return [-(b[1] - a[1]) / l, (b[0] - a[0]) / l];
+  };
+  const left: Pt[] = pts.map((p, i) => [p[0] + norm(i)[0] * r, p[1] + norm(i)[1] * r]);
+  const right: Pt[] = pts.map((p, i): Pt => [p[0] - norm(i)[0] * r, p[1] - norm(i)[1] * r]).reverse();
+  // Half circle from `fromAngle`, sweeping 180° through the stroke's outward end.
+  const cap = (c: Pt, fromAngle: number): Pt[] =>
+    Array.from({ length: 7 }, (_, k) => {
+      const a = fromAngle - (Math.PI * (k + 1)) / 8;
+      return [c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r] as Pt;
+    });
+  const nEnd = norm(n - 1);
+  const nStart = norm(0);
+  return [...left, ...cap(pts[n - 1], Math.atan2(nEnd[1], nEnd[0])), ...right, ...cap(pts[0], Math.atan2(-nStart[1], -nStart[0]))];
+}
+
+/** Where the label pill goes: just beyond the tail, on the side away from the arrow, inside the frame. Exported for tests. */
+export function arrowLabelBox(
+  g: { tail: Pt; scale: number },
+  shape: { point(t: number): Pt },
+  text: string,
+  fontSize: number,
+  res: { width: number; height: number },
+): { cx: number; cy: number; pw: number; ph: number; fs: number } {
+  const [tx, ty] = g.tail;
+  const vx = tx - shape.point(0.08)[0];
+  const vy = ty - shape.point(0.08)[1];
+  const vl = Math.hypot(vx, vy) || 1;
+  const dx = vx / vl;
+  const dy = vy / vl;
+  const fs = fontSize * ASS_FONT_SCALE;
+  const graphemes = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].length;
+  const ph = fs * 1.25;
+  const pw = graphemes * fs * 0.55 + ph * 0.9;
+  const gap = 14 * g.scale;
+  let cx = tx + dx * gap + (dx < -0.3 ? -pw / 2 : dx > 0.3 ? pw / 2 : 0);
+  let cy = ty + dy * gap + (dy < -0.3 ? -ph / 2 : dy > 0.3 ? ph / 2 : 0);
+  const edge = 10;
+  cx = Math.max(edge + pw / 2, Math.min(res.width - edge - pw / 2, cx));
+  cy = Math.max(edge + ph / 2, Math.min(res.height - edge - ph / 2, cy));
+  return { cx, cy, pw, ph, fs };
+}
+
+/** A rounded rectangle as one polygon. */
+function roundedRect(x: number, y: number, w: number, h: number, r: number): Pt[] {
+  const out: Pt[] = [];
+  const corner = (cx: number, cy: number, a0: number) => {
+    for (let k = 0; k <= 6; k++) {
+      const a = a0 + (Math.PI / 2) * (k / 6);
+      out.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+    }
+  };
+  corner(x + w - r, y + r, -Math.PI / 2);
+  corner(x + w - r, y + h - r, 0);
+  corner(x + r, y + h - r, Math.PI / 2);
+  corner(x + r, y + r, Math.PI);
+  return out;
+}
+
 /** One ASS drawing event for a polygon (absolute video coords). */
-function assPolygon(layer: number, start: number, end: number, pts: [number, number][], color: string, bord: number): string {
+function assPolygon(layer: number, start: number, end: number, pts: Pt[], tags: string, dx = 0, dy = 0, fade = "\\fad(90,200)"): string {
   const minX = Math.min(...pts.map((p) => p[0]));
   const minY = Math.min(...pts.map((p) => p[1]));
   const rel = pts.map(([px, py]) => `${Math.round(px - minX)} ${Math.round(py - minY)}`);
   // \an7 + \pos at the bounding box's corner: libass aligns a drawing by its bbox.
   return (
     `Dialogue: ${layer},${secToAssTs(start)},${secToAssTs(end)},CArrow,,0,0,0,,` +
-    `{\\an7\\pos(${Math.round(minX)},${Math.round(minY)})\\1c${color}\\bord${bord.toFixed(1)}\\shad0\\fad(70,180)\\p1}m ${rel[0]} l ${rel.slice(1).join(" ")}{\\p0}`
+    `{\\an7\\pos(${Math.round(minX + dx)},${Math.round(minY + dy)})${tags}${fade}\\p1}m ${rel[0]} l ${rel.slice(1).join(" ")}{\\p0}`
   );
 }
 
-/** ASS events for one arrow callout: dashes drawn in one by one, then the head and the label. */
+/** Frames per second of the arrow's draw-in (one ASS event per frame). */
+const ARROW_DRAW_FPS = 30;
+
+/**
+ * ASS events for one arrow callout: one smooth curved line that draws itself
+ * from the tail to the target (easing out), the chevron head riding its tip,
+ * then the label in a rounded pill. White halo + soft shadow keep it readable
+ * on light and dark pages.
+ */
 function arrowEvents(action: Action, res: { width: number; height: number }, start: number, end: number): string[] {
   const panel = action.calloutPanels?.[0];
   if (!panel) return [];
   const g = arrowGeometry(panel.rect, res, action.arrowFrom as ArrowFrom | undefined, action.arrowScale);
-  const color = assBgr(action.arrowColor ?? ARROW_DEFAULT_COLOR);
-  const [tx, ty] = g.tail;
-  const [px, py] = g.tip;
-  const total = Math.hypot(px - tx, py - ty);
-  if (total < 4) return [];
-  const ux = (px - tx) / total;
-  const uy = (py - ty) / total;
-  const nx = -uy;
-  const ny = ux;
-  const th = 6 * g.scale;
-  const headLen = Math.min(28 * g.scale, total * 0.4);
-  const headW = 24 * g.scale;
-  const bord = 1.5 * g.scale;
-  const shaft = total - headLen;
-  const seg = shaft / ARROW_DASHES;
-  const dash = seg * 0.62;
-  // The draw-in takes ≤ 0.6 s, and never more than a third of the arrow's time on screen.
-  const stepSec = Math.min(0.1, (end - start) / 3 / (ARROW_DASHES + 1));
-  const at = (d: number, off: number): [number, number] => [tx + ux * d + nx * off, ty + uy * d + ny * off];
+  if (Math.hypot(g.tip[0] - g.tail[0], g.tip[1] - g.tail[1]) < 4) return [];
+  const hex = action.arrowColor ?? ARROW_DEFAULT_COLOR;
+  const color = assBgr(hex);
+  const shape = arrowShape(g);
+  const th = shape.thickness;
+  const fill = `\\1c${color}\\bord0\\shad0`;
+  const halo = `\\1c&HFFFFFF&\\3c&HFFFFFF&\\bord${(2.2 * g.scale).toFixed(1)}\\shad0`;
+  const shadow = `\\1c&H000000&\\1a&HB0&\\3a&HFF&\\bord0\\shad0\\blur${(4 * g.scale).toFixed(1)}`;
+  const sdy = 3 * g.scale;
   const out: string[] = [];
-  for (let k = 0; k < ARROW_DASHES; k++) {
-    const a = k * seg;
-    const b = a + dash;
-    out.push(assPolygon(2, start + k * stepSec, end, [at(a, -th / 2), at(b, -th / 2), at(b, th / 2), at(a, th / 2)], color, bord));
-  }
-  const headAt = start + ARROW_DASHES * stepSec;
-  out.push(assPolygon(2, headAt, end, [at(shaft, -headW / 2), g.tip, at(shaft, headW / 2)], color, bord));
+  // One frame of the arrow: every piece's shadow, then every halo, then every fill,
+  // so the halo never cuts across the line where the head joins it.
+  const frame = (from: number, to: number, s: number, fade: string) => {
+    const h = shape.head(s);
+    const pieces = [capsule(shape.stroke(s), th), capsule([h.arms[0], h.tip], th), capsule([h.arms[1], h.tip], th)];
+    for (const poly of pieces) out.push(assPolygon(1, from, to, poly, shadow, 0, sdy, fade));
+    for (const poly of pieces) out.push(assPolygon(2, from, to, poly, halo, 0, 0, fade));
+    for (const poly of pieces) out.push(assPolygon(3, from, to, poly, fill, 0, 0, fade));
+  };
+  // The draw-in takes ≤ 0.5 s, and never more than a third of the arrow's time on screen.
+  const drawSec = Math.min(0.5, (end - start) / 3);
+  const steps = Math.max(1, Math.round(drawSec * ARROW_DRAW_FPS));
+  const easeOut = (u: number) => 1 - Math.pow(1 - u, 3);
+  const at = (k: number) => start + (drawSec * k) / steps;
+  for (let k = 0; k < steps - 1; k++) frame(at(k), at(k + 1), shape.length * easeOut((k + 1) / steps), "");
+  const drawnAt = at(steps - 1);
+  frame(drawnAt, end, shape.length, "\\fad(0,200)");
+
   if (panel.text) {
-    // Label just beyond the tail, aligned away from the arrow.
-    const dx = -ux;
-    const dy = -uy;
-    const h = dx < -0.3 ? 3 : dx > 0.3 ? 1 : 2; // right / left / centre
-    const an = dy < -0.3 ? h : dy > 0.3 ? h + 6 : h + 3; // bottom / top / middle row
-    // Keep the label (width estimated at 0.62·size per character, plus its box padding) inside the frame.
-    const fs = (panel.fontSize || 24) * ASS_FONT_SCALE;
-    const lw = panel.text.length * fs * 0.62 + 20;
-    const lh = fs + 20;
-    const edge = 8;
-    let lx = tx + dx * 16 * g.scale;
-    let ly = ty + dy * 16 * g.scale;
-    const left = h === 3 ? lx - lw : h === 2 ? lx - lw / 2 : lx;
-    lx += Math.max(0, edge - left) - Math.max(0, left + lw - (res.width - edge));
-    const top = an >= 7 ? ly : an >= 4 ? ly - lh / 2 : ly - lh;
-    ly += Math.max(0, edge - top) - Math.max(0, top + lh - (res.height - edge));
+    const { cx, cy, pw, ph, fs } = arrowLabelBox(g, shape, panel.text, panel.fontSize || 24, res);
+    const pill = roundedRect(cx - pw / 2, cy - ph / 2, pw, ph, ph / 2);
+    const rise = Math.round(8 * g.scale);
+    const fade = "\\fad(140,200)";
+    out.push(assPolygon(4, drawnAt, end, pill, shadow, 0, sdy, fade));
+    out.push(assPolygon(5, drawnAt, end, pill, `\\1c${color}\\3c&HFFFFFF&\\bord${(1.6 * g.scale).toFixed(1)}\\shad0`, 0, 0, fade));
     out.push(
-      `Dialogue: 2,${secToAssTs(headAt)},${secToAssTs(end)},CLabel,,0,0,0,,` +
-        `{\\an${an}\\q2\\pos(${Math.round(lx)},${Math.round(ly)})\\fs${Math.round((panel.fontSize || 24) * ASS_FONT_SCALE)}\\fad(120,180)}${assEscape(panel.text)}`,
+      `Dialogue: 6,${secToAssTs(drawnAt)},${secToAssTs(end)},CLabel,,0,0,0,,` +
+        `{\\an5\\move(${Math.round(cx)},${Math.round(cy + rise)},${Math.round(cx)},${Math.round(cy)},0,180)\\bord0\\shad0\\3a&HFF&\\4a&HFF&\\b1\\1c&HFFFFFF&` +
+        `\\fs${Math.round(fs)}${fade}}${assEscape(panel.text)}`,
     );
   }
   return out;

@@ -256,6 +256,7 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
       if (!rects.length) throw fail("spotlight needs a rect (anchor an element)");
       base.spotlightRects = fx.padding ? rects.map((r) => padRect(r, fx.padding!, c.viewport)) : rects;
       base.dimOpacity = fx.dimOpacity ?? 0.7;
+      if (fx.feather) base.spotlightFeather = fx.feather;
       base.spotlightDuration = overlayDuration(fx).value;
       return done();
     }

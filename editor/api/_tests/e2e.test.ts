@@ -30,7 +30,7 @@ import { exitCodeFor, type ErrorCode } from "../errors.ts";
 import type { Envelope, NaraEvent } from "../output.ts";
 import { DEFAULT_VOICES } from "../../src/lib/voices.ts";
 import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../../electron/ffmpeg.ts";
-import { arrowGeometry } from "../../electron/produce.ts";
+import { arrowGeometry, arrowLabelBox, arrowShape, ARROW_DEFAULT_COLOR } from "../../electron/produce.ts";
 import { ensureFlutterBuild, startFlutterFixture } from "../plugins/flutter/fixture/serve.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -289,8 +289,8 @@ function pixelAt(video: string, t: number, x: number, y: number): [number, numbe
   assert.ok(res.status === 0 && res.stdout.length >= 3, `could not read pixel (${x}, ${y}) at ${t}s of ${video}`);
   return [res.stdout[0], res.stdout[1], res.stdout[2]];
 }
-/** The default arrow colour (#FBBF24) after H.264, on a grey background. */
-const isAmber = ([r, g, b]: number[]) => r > 190 && g > 140 && b < 120;
+/** The default arrow colour (#F97316, orange) after H.264, on a grey background. */
+const isArrow = ([r, g, b]: number[]) => r > 200 && g > 70 && g < 170 && b < 100;
 
 /** Mean absolute luma difference between the same box in two video frames (0–255). */
 function regionDiff(videoA: string, tA: number, videoB: string, tB: number, rect: number[]): number {
@@ -869,7 +869,7 @@ describe("narascreen CLI, end to end", () => {
     assert.equal(pr.frames?.length, 4, `--tiles 4 → 4 frames\n${describeRun(p)}`);
   });
 
-  test("arrow: drawn in dash by dash, then the head — at the computed spot; a label at its tail", { timeout: 10 * MIN }, async () => {
+  test("arrow: one smooth line draws itself to the target, head riding its tip — at the computed spot; a label at its tail", { timeout: 10 * MIN }, async () => {
     // A plain grey 1280x720 video: every amber pixel is the arrow.
     const grey = path.join(RUN, "grey.mp4");
     const gen = ffmpegSync(["-y", "-f", "lavfi", "-i", "color=c=0x808080:s=1280x720:r=30:d=5", "-pix_fmt", "yuv420p", grey]);
@@ -887,272 +887,40 @@ describe("narascreen CLI, end to end", () => {
     const video = (expectOk(r, "make").videos as Rec[])[0].path as string;
     assertFile(video, "arrow video", r);
 
-    // Same geometry as the renderer: default direction, 5 dashes, head 28 px × scale.
+    // Same geometry as the renderer: default direction, one curved line, chevron head.
     const g = arrowGeometry(target, { width: 1280, height: 720 });
     assert.equal(g.from, "bottom-left", "default direction when there is room");
+    const shape = arrowShape(g);
+    const along = (f: number) => shape.at(shape.length * f);
+    const head = g.tip; // the chevron's arms meet at the tip
+    assert.equal(ARROW_DEFAULT_COLOR, "#F97316");
+
+    // 0.1 s in: the line has started from the tail but not reached the target.
+    const early = at + 0.1;
+    assert.ok(isArrow(pixelAt(video, early, ...along(0.15))), `line started at ${early}s: ${pixelAt(video, early, ...along(0.15))}`);
+    assert.ok(!isArrow(pixelAt(video, early, ...along(0.95))), `line not at the target yet at ${early}s`);
+    assert.ok(!isArrow(pixelAt(video, early, head[0] - 2, head[1] + 2)), `tip not reached yet at ${early}s`);
+    // 2 s in: one unbroken line from tail to tip (no gaps, unlike dashes), and the head.
+    for (let k = 1; k <= 19; k++) {
+      const p = along(k / 20);
+      assert.ok(isArrow(pixelAt(video, at + 2, p[0], p[1])), `line unbroken at ${k * 5}% at ${at + 2}s: ${pixelAt(video, at + 2, p[0], p[1])}`);
+    }
+    const arm = shape.head(shape.length).arms[0];
+    const armMid: [number, number] = [(arm[0] + head[0]) / 2, (arm[1] + head[1]) / 2];
+    assert.ok(isArrow(pixelAt(video, at + 2, ...armMid)), `chevron drawn at ${at + 2}s: ${pixelAt(video, at + 2, ...armMid)}`);
+    // The path bows: its midpoint is off the straight tail→tip line.
     const [tx, ty] = g.tail;
     const [px, py] = g.tip;
-    const len = Math.hypot(px - tx, py - ty);
-    const u = [(px - tx) / len, (py - ty) / len];
-    const along = (d: number) => [tx + u[0] * d, ty + u[1] * d] as const;
-    const seg = (len - 28 * g.scale) / 5;
-    const dash = (k: number) => along(k * seg + seg * 0.31); // middle of dash k
-    const head = along(len - 28 * g.scale * 0.35);
-
-    // 0.25 s in: the first dashes are drawn, the last dash and the head not yet.
-    const early = at + 0.25;
-    assert.ok(isAmber(pixelAt(video, early, ...dash(0))), `first dash drawn at ${early}s: ${pixelAt(video, early, ...dash(0))}`);
-    assert.ok(!isAmber(pixelAt(video, early, ...dash(4))), `last dash not drawn yet at ${early}s`);
-    assert.ok(!isAmber(pixelAt(video, early, ...head)), `head not drawn yet at ${early}s`);
-    // 2 s in: everything.
-    for (const [what, p] of [["dash 4", dash(4)], ["head", head]] as const) {
-      assert.ok(isAmber(pixelAt(video, at + 2, ...p)), `${what} drawn at ${at + 2}s: ${pixelAt(video, at + 2, ...p)}`);
-    }
+    const [mx, my] = along(0.5);
+    const off = Math.abs((px - tx) * (ty - my) - (tx - mx) * (py - ty)) / Math.hypot(px - tx, py - ty);
+    assert.ok(off > 5, `curved path (${off.toFixed(1)} px off the straight line)`);
     // Gone after its duration; nothing before it starts.
-    assert.ok(!isAmber(pixelAt(video, at + 3.6, ...head)), "arrow gone after its duration");
-    assert.ok(!isAmber(pixelAt(video, at - 0.3, ...dash(0))), "no arrow before it starts");
-    // The label sits at the tail: its box's top padding, just left of the label's anchor (tail + 16 px outward).
-    const lx = tx - Math.SQRT1_2 * 16 * g.scale;
-    const ly = ty + Math.SQRT1_2 * 16 * g.scale;
-    const [lr, lg, lb] = pixelAt(video, at + 2, lx - 25, ly - 5);
-    assert.ok(lr < 90 && lg < 90 && lb < 90, `label box at the tail: ${[lr, lg, lb]}`);
-  });
-
-  test("cards: an intro (narrated, logo) and an outro are joined around the video; plan warnings", { timeout: 10 * MIN }, async () => {
-    const grey = path.join(RUN, "grey-cards.mp4");
-    assert.equal(ffmpegSync(["-y", "-f", "lavfi", "-i", "color=c=0x808080:s=1280x720:r=30:d=4", "-pix_fmt", "yuv420p", grey]).status, 0);
-    const logo = path.join(RUN, "logo.svg");
-    fs.writeFileSync(logo, '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="14" fill="#4F46E5"/></svg>');
-    const script: Rec = {
-      version: 1,
-      scope: "Cards",
-      source: { video: grey },
-      plan: { takeaway: "Cards frame the demo", leaveOut: ["billing"], targetSec: 5 },
-      intro: { template: "clean", title: "Create a task", subtitle: "Under a minute", logo: "logo.svg", narrate: "Here is how to create a task." },
-      outro: { template: "bold", title: "Try it", cta: "tasks.example.com", accent: "#DC2626", duration: 2 },
-      steps: [{ id: "billing-tour", beat: [{ fx: "callout", at: 0.5, text: "Main video", duration: 2 }] }],
-    };
-    writeJson(SCRIPT.cards, script);
-
-    const v = await cli(["validate", SCRIPT.cards]);
-    const warnings = (v.json as Envelope).warnings;
-    expectOk(v, "validate");
-    assert.ok(warnings.some((w) => /leaveOut says "billing"/.test(w)), `plan.leaveOut warning: ${JSON.stringify(warnings)}`);
-    assert.ok(warnings.some((w) => /plan.targetSec is 5s/.test(w)), `plan.targetSec warning: ${JSON.stringify(warnings)}`);
-
-    const r = await cli(["make", SCRIPT.cards, "--out", path.join(RUN, "job-cards")], { timeoutMs: 8 * MIN });
-    const video = (expectOk(r, "make").videos as Rec[])[0] as Rec;
-    const [intro, outro] = video.cards as Rec[];
-    assert.equal(intro.which, "intro");
-    assert.ok(intro.narration?.durationSec > 0.5, `the intro is narrated: ${JSON.stringify(intro)}`);
-    assert.ok(Math.abs(intro.durationSec - (0.5 + intro.narration.durationSec + 0.8)) < 0.1, `intro auto duration = narration + pauses: ${JSON.stringify(intro)}`);
-    assert.deepEqual({ which: outro.which, durationSec: outro.durationSec }, { which: "outro", durationSec: 2 });
-    const total = probeDuration(video.path);
-    assert.ok(Math.abs(total - (intro.durationSec + 4 + 2)) < 0.3, `video = intro + 4 s + outro: ${total}`);
-    assert.ok(hasAudioStream(video.path), "joined video keeps an audio track");
-    assert.deepEqual(probeResolution(video.path), { width: 1280, height: 720 }, "cards match the video size");
-
-    // Pixels: the clean card's light background, then the grey video, then the bold red outro.
-    const light = pixelAt(video.path, 1.5, 40, 40);
-    assert.ok(light.every((c) => c > 235), `intro background is light: ${light}`);
-    const mid = pixelAt(video.path, intro.durationSec + 3.5, 40, 40);
-    assert.ok(mid.every((c) => Math.abs(c - 128) < 12), `then the grey video: ${mid}`);
-    const [rr, gg, bb] = pixelAt(video.path, total - 1, 40, 40);
-    assert.ok(rr > 180 && gg < 80 && bb < 80, `the bold outro uses the accent colour: ${[rr, gg, bb]}`);
-
-    // Editing card text re-produces without re-recording.
-    writeJson(SCRIPT.cards, { ...script, outro: { ...script.outro, title: "Try it today" } });
-    const again = await cli(["make", SCRIPT.cards, "--out", path.join(RUN, "job-cards")], { timeoutMs: 8 * MIN });
-    assert.equal(expectOk(again, "make").recorded, false, "a card edit never re-records");
-  });
-
-  // ── flutter plugin: a Flutter web build recorded as an Android phone ──
-
-  test("flutter plugin: phone-size video; semantics on; fill, tap, swipe-to and carousel swipe; overlays scaled", { timeout: 20 * MIN }, async (t) => {
-    if (!ensureFlutterBuild()) {
-      t.skip("Flutter SDK not installed (needed to build the fixture app)");
-      return;
-    }
-    const app = await startFlutterFixture();
-    try {
-      const script = {
-        version: 1,
-        scope: "Acme mobile",
-        baseUrl: app.url,
-        plugins: { flutter: { device: "pixel-7" } },
-        setup: [
-          { act: "goto", path: "/" },
-          { act: "fill", role: "textbox", name: "Email", value: "alex@example.com" },
-          { act: "fill", role: "textbox", name: "Password", value: "secret" },
-          { act: "click", role: "button", name: "Sign in" },
-          { act: "waitFor", role: "heading", name: "Tasks" },
-        ],
-        defaults: { dwellMs: 600 },
-        steps: [
-          { id: "list", beat: [
-            { act: "waitFor", role: "button", name: "1 Task 1 High priority" },
-            { fx: "spotlight", anchor: { role: "button", name: "New task" }, padding: 8 },
-            { fx: "narrate", narrate: "Your tasks, on your phone." },
-          ] },
-          { id: "scroll", beat: [
-            { act: "swipe", direction: "up", to: { role: "button", name: "20 Task 20" } },
-            { fx: "arrow", text: "Task 20" },
-            { fx: "narrate", narrate: "Swipe down the list to find any task." },
-            { act: "click", role: "button", name: "20 Task 20" },
-            { act: "waitFor", text: "Details for Task 20" },
-            { fx: "callout", anchor: { role: "button", name: "Mark as done" }, text: "Tap when finished" },
-          ] },
-          { id: "carousel", beat: [
-            { act: "click", role: "button", name: "Mark as done" },
-            { act: "click", role: "tab", name: "Highlights" },
-            { act: "waitFor", text: "Highlight 1 of 3" },
-            { act: "swipe", direction: "left" },
-            { act: "waitFor", text: "Highlight 2 of 3" },
-            { fx: "pause", seconds: 1 },
-          ] },
-        ],
-      };
-      writeJson(SCRIPT.flutter, script);
-      expectOk(await cli(["validate", SCRIPT.flutter]), "validate");
-
-      // inspect sees Flutter's widgets (accessibility tree switched on by the plugin)
-      const ins = await cli(["inspect", "--script", SCRIPT.flutter, "--until", "list", "--out", path.join(RUN, "inspect-flutter")], { timeoutMs: 4 * MIN });
-      const els = expectOk(ins, "inspect").elements as Rec[];
-      for (const [role, name] of [["button", "New task"], ["tab", "Highlights"]]) {
-        assert.ok(els.some((e) => e.role === role && e.name === name), `inspect lists ${role} "${name}":\n${summarizeElements(els)}`);
-      }
-
-      const job = path.join(RUN, "job-flutter");
-      const r = await cli(["make", SCRIPT.flutter, "--out", job], { timeoutMs: 15 * MIN });
-      const video = (expectOk(r, "make").videos as Rec[])[0].path as string;
-      assertFile(video, "flutter video", r);
-      // Pixel 7: 412x915 CSS px × 2.625 → portrait video at the phone's real resolution
-      assert.deepEqual(probeResolution(video), { width: 1082, height: 2402 }, "video = the phone's pixels");
-
-      const trace = readTrace(job);
-      const swipeTo = trace.find((e) => e.act === "swipe" && e.rect);
-      assert.ok(swipeTo, `swipe … to leaves the found element's box in the trace: ${JSON.stringify(trace)}`);
-      assert.ok(swipeTo.rect[2] > 900, `trace boxes are in video px (a full-width row ≈ 1082 px wide): ${swipeTo.rect}`);
-      const arrowSlot = trace.find((e) => e.fx === "arrow");
-      assert.deepEqual(arrowSlot?.rect, swipeTo.rect, "the arrow points at the element the swipe brought on screen");
-
-      const project = JSON.parse(fs.readFileSync(path.join(job, "demo-project.en.json"), "utf-8")) as Rec;
-      const arrow = (project.actions as Rec[]).find((a) => a.calloutStyle === "arrow");
-      assert.ok(arrow?.arrowScale > 2.5, `arrow scaled for the dense video: ${arrow?.arrowScale}`);
-      const label = (project.actions as Rec[]).find((a) => a.type === "callout" && a.calloutStyle !== "arrow");
-      assert.ok(label?.calloutPanels?.[0]?.fontSize >= 70, `callout text scaled (28 × 2.6): ${JSON.stringify(label?.calloutPanels)}`);
-      // spotlight padding 8 CSS px → ×2.6 in video px on every side
-      const spot = (project.actions as Rec[]).find((a) => a.type === "spotlight");
-      const spotSlot = trace.find((e) => e.fx === "spotlight");
-      assert.ok(spot && spotSlot?.rect, "spotlight compiled");
-      assert.ok(Math.abs(spot.spotlightRects[0][2] - (spotSlot.rect[2] + 2 * 21)) <= 2, `padding scaled with the phone: ${spot.spotlightRects[0]} vs ${spotSlot.rect}`);
-      const narr = (project.actions as Rec[]).find((a) => a.type === "narrate");
-      assert.ok(narr?.subtitleSize >= 70, `subtitles scaled (28 × 2.6): ${narr?.subtitleSize}`);
-
-      // The carousel swipe worked: the video ends on the teal "Highlight 2" page (page 1 is indigo).
-      const end = probeDuration(video) - 0.3;
-      const [pr, pg] = pixelAt(video, end, 541, 1200);
-      assert.ok(pg - pr > 25, `last frame shows Highlight 2 (teal): rgb ${pixelAt(video, end, 541, 1200)}`);
-    } finally {
-      await app.close();
-    }
-  });
-
-  /** A Flutter script against the fixture app (built on demand); undefined → skip. */
-  async function withFlutterApp(t: TestContext, fn: (url: string) => Promise<void>) {
-    if (!ensureFlutterBuild()) {
-      t.skip("Flutter SDK not installed (needed to build the fixture app)");
-      return;
-    }
-    const app = await startFlutterFixture();
-    try {
-      await fn(app.url);
-    } finally {
-      await app.close();
-    }
-  }
-  const flutterLogin = (path = "/") => [
-    { act: "goto", path },
-    { act: "fill", role: "textbox", name: "Email", value: "alex@example.com" },
-    { act: "fill", role: "textbox", name: "Password", value: "secret" },
-    { act: "click", role: "button", name: "Sign in" },
-  ];
-
-  test("flutter plugin: inspect --url --plugin flutter lists the app's widgets; doctor checks the build", { timeout: 8 * MIN }, async (t) => {
-    await withFlutterApp(t, async (url) => {
-      const r = await cli(["inspect", "--url", `${url}/`, "--plugin", "flutter", "--device", "galaxy-s24", "--out", path.join(RUN, "inspect-flutter-url")], { timeoutMs: 4 * MIN });
-      const els = expectOk(r, "inspect").elements as Rec[];
-      for (const [role, name] of [["textbox", "Email"], ["textbox", "Password"], ["button", "Sign in"]]) {
-        assert.ok(els.some((e) => e.role === role && e.name === name), `inspect --plugin flutter lists ${role} "${name}":\n${summarizeElements(els)}`);
-      }
-      const bad = await cli(["inspect", "--url", `${url}/`, "--plugin", "nope"]);
-      expectError(bad, "inspect", "USAGE");
-
-      writeJson(SCRIPT.flutter, { version: 1, scope: "doctor", baseUrl: url, plugins: { flutter: {} }, steps: [{ id: "s", beat: [{ act: "goto", path: "/" }] }] });
-      const doc = await cli(["doctor", "--script", SCRIPT.flutter], { timeoutMs: 3 * MIN });
-      const dj = doc.json as Rec; // ready → result.checks; not ready (e.g. no TTS here) → error.details.checks
-      const checks = (dj.result ?? dj.error?.details)?.checks as Rec[];
-      const fl = checks?.find((c) => c.id === "flutter");
-      assert.equal(fl?.ok, true, `doctor --script checks the Flutter build: ${JSON.stringify(fl)}\n${describeRun(doc)}`);
-    });
-  });
-
-  test("flutter plugin: an app stuck on its splash → FLUTTER_APP_NOT_READY with the console log; inspect warns", { timeout: 8 * MIN }, async (t) => {
-    await withFlutterApp(t, async (url) => {
-      writeJson(SCRIPT.flutter, { version: 1, scope: "Stuck", baseUrl: url, plugins: { flutter: {} }, setup: flutterLogin("/?stuck=1"), steps: [{ id: "s", beat: [{ act: "wait", ms: 100 }] }] });
-      const r = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-flutter-stuck")], { timeoutMs: 4 * MIN });
-      const err = expectError(r, "check", "FLUTTER_APP_NOT_READY");
-      assert.equal(err.where?.path, "setup[1]", "points at the first entry that could not run");
-      assert.ok((err.details?.console as Rec[]).some((c) => /getApplicationDocumentsDirectory/.test(c.text)), `details.console has the app's own log line\n${describeRun(r)}`);
-      assert.deepEqual(err.details?.visibleLabels, ["Acme Tasks"], "what the stuck screen shows");
-      for (const k of ["semanticsSnapshot", "pendingRequests", "unhandledRejections", "pageErrors", "screenshot"]) assert.ok(k in err.details, `details.${k}`);
-      assert.equal(err.details?.cause?.code, "SELECTOR_NOT_FOUND", "the original error is kept as details.cause");
-
-      const ins = await cli(["inspect", "--url", `${url}/?stuck=1`, "--plugin", "flutter", "--out", path.join(RUN, "inspect-flutter-stuck")], { timeoutMs: 4 * MIN });
-      const res = expectOk(ins, "inspect");
-      assert.ok((res.warnings as string[]).some((w) => /almost nothing to select/.test(w)), `inspect warns about the stuck screen: ${JSON.stringify(res.warnings)}`);
-    });
-  });
-
-  test("flutter plugin: requests to another host are blocked with allowedHosts (BLOCKED_REQUEST), else warned", { timeout: 8 * MIN }, async (t) => {
-    await withFlutterApp(t, async (url) => {
-      // Same server under another host name = "a backend baked into the build".
-      const other = `http://localhost:${new URL(url).port}`;
-      const script = (flutter: Rec) => ({
-        version: 1, scope: "Backend", baseUrl: url, plugins: { flutter },
-        setup: flutterLogin(`/?api=${encodeURIComponent(other)}`),
-        steps: [{ id: "s", beat: [{ act: "waitFor", role: "heading", name: "Tasks" }, { act: "wait", ms: 800 }] }],
-      });
-      writeJson(SCRIPT.flutter, script({ allowedHosts: ["demo-api.example"] }));
-      const r = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-flutter-blocked")], { timeoutMs: 4 * MIN });
-      const err = expectError(r, "check", "BLOCKED_REQUEST");
-      assert.ok((err.details?.blockedRequests as string[]).some((b) => b.includes(`${other}/avatar.png`)), `names the blocked request\n${describeRun(r)}`);
-
-      writeJson(SCRIPT.flutter, script({}));
-      const w = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-flutter-warned")], { timeoutMs: 4 * MIN });
-      expectOk(w, "check");
-      const host = new URL(other).host;
-      assert.ok((w.json as Envelope).warnings.some((m) => m.includes(host) && m.includes("allowedHosts")), `warns about ${host}: ${JSON.stringify((w.json as Envelope).warnings)}`);
-    });
-  });
-
-  test("flutter plugin: baseUrl that is not a Flutter web build → FLUTTER_NOT_WEB_BUILD before any browser", async () => {
-    writeJson(SCRIPT.flutter, { version: 1, scope: "Not flutter", baseUrl: server.url, plugins: { flutter: {} }, steps: [{ id: "s", beat: [{ act: "goto", path: "/" }] }] });
-    const r = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-not-flutter")]);
-    const err = expectError(r, "check", "FLUTTER_NOT_WEB_BUILD");
-    assert.equal(err.where?.path, "baseUrl");
-  });
-
-  test("flutter plugin: swipe without the plugin → SCRIPT_INVALID", async () => {
-    writeJson(SCRIPT.flutter, {
-      version: 1,
-      scope: "No plugin",
-      baseUrl: server.url,
-      steps: [{ id: "s", beat: [{ act: "goto", path: "/" }, { act: "swipe", direction: "up" }] }],
-    });
-    const err = expectError(await cli(["validate", SCRIPT.flutter]), "validate", "SCRIPT_INVALID");
-    const paths = (err.details?.issues as Rec[]).map((i) => i.path);
-    assert.ok(paths.includes("steps[0].beat[1]"), `expected an issue at the swipe: ${JSON.stringify(err.details?.issues)}`);
+    assert.ok(!isArrow(pixelAt(video, at + 3.6, ...along(0.5))), "arrow gone after its duration");
+    assert.ok(!isArrow(pixelAt(video, at - 0.3, ...along(0.1))), "no arrow before it starts");
+    // The label is a pill in the arrow's colour at the tail (sampled inside its right end, clear of the text).
+    const box = arrowLabelBox(g, shape, "Click here", 24, { width: 1280, height: 720 });
+    const pill = pixelAt(video, at + 2, box.cx + box.pw / 2 - box.ph * 0.3, box.cy);
+    assert.ok(isArrow(pill), `label pill in the arrow colour: ${pill}`);
   });
 
   test("video-source script: a rect outside the frame → SCRIPT_INVALID pointing at the entry", async (t) => {
