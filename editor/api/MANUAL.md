@@ -123,6 +123,31 @@ Before touching the site, turn the request into a storyboard:
 - **Length:** narration drives length — about 15 characters per second of speech. `validate` estimates it.
 - **Languages:** one video per language (`languages: ["en", "hi"]`).
 
+Write the answers down as the script's optional `plan` — it is kept with the job, so whoever edits the
+video later sees why it is the way it is, and `validate` warns when the script drifts from it:
+
+```json
+"plan": {
+  "audience": "Team leads trying Acme Tasks for the first time",
+  "takeaway": "Creating a task takes under a minute",
+  "hook": "Open on the dashboard with overdue work highlighted",
+  "leaveOut": ["billing", "integrations"],
+  "tone": "calm, practical",
+  "targetSec": 60
+}
+```
+
+Checklist while planning:
+
+- **The first seconds decide** whether someone keeps watching: open on the most telling screen (`hook`),
+  not on a login form (log in inside `setup`).
+- **One takeaway.** Every step should serve it; anything else goes in `leaveOut`
+  (`validate` warns when a step's id, label, narration or target mentions a `leaveOut` topic).
+- **Don't read the screen aloud.** Narration says what the viewer can't see: why, what happens next.
+- **Be specific to this product** — its names, its numbers. No generic "streamline your workflow".
+- **Text must stay up long enough to read** (callouts: the `auto` duration does this).
+- **Length:** `targetSec` makes `validate` warn when the estimate is more than 25 % over it.
+
 ### 2. Check the machine
 
 `doctor` must say `ready: true`. If not, run each failing check's `fix` command (or ask the human to), then re-run doctor.
@@ -321,6 +346,46 @@ never opens, so nothing of your desktop is on camera.
 - Replacing the file's content (same name) makes `make` re-record: the page would show different data.
 - Not supported: drag-and-drop-only dropzones that never open a file picker; capturing downloads
   (clicking a download link works, the file is just not kept).
+
+---
+
+## Title and end cards
+
+`intro` is a title card before the video, `outro` an end card after it. NaraScreen draws them from a
+built-in template, animates them (the parts slide and fade in; the card fades out) and joins them to every
+language's video. Same script, same card. Editing a card never re-records — only `produce` runs again.
+
+```json
+"intro": {
+  "template": "clean",
+  "title": { "en": "Create a task in Acme", "hi": "Acme में टास्क बनाएं" },
+  "subtitle": { "en": "Under a minute, start to finish", "hi": "एक मिनट से भी कम में" },
+  "logo": "acme-logo.svg",
+  "accent": "#4F46E5",
+  "narrate": { "en": "Here's how to create a task in Acme.", "hi": "देखिए Acme में टास्क कैसे बनाते हैं।" }
+},
+"outro": {
+  "template": "bold",
+  "title": { "en": "Try it on your team's work", "hi": "अपनी टीम के काम पर आज़माएं" },
+  "cta": "tasks.example.com",
+  "duration": 3
+}
+```
+
+| Field | |
+|---|---|
+| `template` | `clean` (default: light, calm) · `bold` (accent-coloured background, big type; the logo sits on a white badge) · `minimal` (dark, left-aligned) |
+| `title` | required. Text, or per language (falls back to `en`) |
+| `subtitle`, `cta` | optional second line; `cta` is a pill (a URL, "Start free trial") — mostly for the outro |
+| `logo` | png / jpg / svg / webp, relative to the script (over HTTP: upload it with `PUT /v1/files`, then `uploads/…`) |
+| `accent` | `#RRGGBB` (default `#4F46E5`) |
+| `narrate`, `voice` | optional voiceover, same voices and caching as step narration |
+| `duration` | seconds, or `auto` (default): the narration + ~1.3 s, or 3 s without narration |
+
+- The card matches the video's size (a phone-shaped video gets a phone-shaped card) and resolution preset.
+- Background music plays under the video but not under the cards.
+- The result lists them: `videos[].cards: [{ which, durationSec, narration? }]`.
+- Cards live only in the rendered video: the desktop editor opens the job without them.
 
 ---
 

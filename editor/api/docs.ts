@@ -96,6 +96,7 @@ export function buildLlmsTxt(baseUrl: string): string {
     "",
     "Effects you can put in a script: narrate (voiceover), zoom, spotlight (optional padding around the element), arrow (animated pointer, page stays bright), callout (text label),",
     "blur (hide secrets), pause, speed, skip, mute. Field-by-field reference: /docs.md (generated from the schema).",
+    "Title / end cards: \"intro\" and \"outro\" (template clean|bold|minimal, title, subtitle, cta, logo, narrate) are drawn and joined around the video. Plan first: an optional \"plan\" (audience, takeaway, hook, leaveOut, targetSec) makes validate warn when the script drifts.",
     "Flutter apps: add \"plugins\": {\"flutter\": {}} to record the app's web build as an Android phone (portrait video, taps, `swipe` act) — see \"Flutter apps\" in /docs.md.",
     "",
     "Every /v1 response is a JSON envelope { ok, command, result | error: { code, message, hint }, warnings, next }.",

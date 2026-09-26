@@ -57,6 +57,7 @@ const SCRIPT = {
   upload: path.join(RUN, "upload.demo-script.json"),
   arrow: path.join(RUN, "arrow.demo-script.json"),
   flutter: path.join(RUN, "flutter.demo-script.json"),
+  cards: path.join(RUN, "cards.demo-script.json"),
 };
 const JOB = path.join(RUN, "job");
 const VIDEO_JOB = path.join(RUN, "job-video");
@@ -915,6 +916,54 @@ describe("narascreen CLI, end to end", () => {
     const ly = ty + Math.SQRT1_2 * 16 * g.scale;
     const [lr, lg, lb] = pixelAt(video, at + 2, lx - 25, ly - 5);
     assert.ok(lr < 90 && lg < 90 && lb < 90, `label box at the tail: ${[lr, lg, lb]}`);
+  });
+
+  test("cards: an intro (narrated, logo) and an outro are joined around the video; plan warnings", { timeout: 10 * MIN }, async () => {
+    const grey = path.join(RUN, "grey-cards.mp4");
+    assert.equal(ffmpegSync(["-y", "-f", "lavfi", "-i", "color=c=0x808080:s=1280x720:r=30:d=4", "-pix_fmt", "yuv420p", grey]).status, 0);
+    const logo = path.join(RUN, "logo.svg");
+    fs.writeFileSync(logo, '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="14" fill="#4F46E5"/></svg>');
+    const script: Rec = {
+      version: 1,
+      scope: "Cards",
+      source: { video: grey },
+      plan: { takeaway: "Cards frame the demo", leaveOut: ["billing"], targetSec: 5 },
+      intro: { template: "clean", title: "Create a task", subtitle: "Under a minute", logo: "logo.svg", narrate: "Here is how to create a task." },
+      outro: { template: "bold", title: "Try it", cta: "tasks.example.com", accent: "#DC2626", duration: 2 },
+      steps: [{ id: "billing-tour", beat: [{ fx: "callout", at: 0.5, text: "Main video", duration: 2 }] }],
+    };
+    writeJson(SCRIPT.cards, script);
+
+    const v = await cli(["validate", SCRIPT.cards]);
+    const warnings = (v.json as Envelope).warnings;
+    expectOk(v, "validate");
+    assert.ok(warnings.some((w) => /leaveOut says "billing"/.test(w)), `plan.leaveOut warning: ${JSON.stringify(warnings)}`);
+    assert.ok(warnings.some((w) => /plan.targetSec is 5s/.test(w)), `plan.targetSec warning: ${JSON.stringify(warnings)}`);
+
+    const r = await cli(["make", SCRIPT.cards, "--out", path.join(RUN, "job-cards")], { timeoutMs: 8 * MIN });
+    const video = (expectOk(r, "make").videos as Rec[])[0] as Rec;
+    const [intro, outro] = video.cards as Rec[];
+    assert.equal(intro.which, "intro");
+    assert.ok(intro.narration?.durationSec > 0.5, `the intro is narrated: ${JSON.stringify(intro)}`);
+    assert.ok(Math.abs(intro.durationSec - (0.5 + intro.narration.durationSec + 0.8)) < 0.1, `intro auto duration = narration + pauses: ${JSON.stringify(intro)}`);
+    assert.deepEqual({ which: outro.which, durationSec: outro.durationSec }, { which: "outro", durationSec: 2 });
+    const total = probeDuration(video.path);
+    assert.ok(Math.abs(total - (intro.durationSec + 4 + 2)) < 0.3, `video = intro + 4 s + outro: ${total}`);
+    assert.ok(hasAudioStream(video.path), "joined video keeps an audio track");
+    assert.deepEqual(probeResolution(video.path), { width: 1280, height: 720 }, "cards match the video size");
+
+    // Pixels: the clean card's light background, then the grey video, then the bold red outro.
+    const light = pixelAt(video.path, 1.5, 40, 40);
+    assert.ok(light.every((c) => c > 235), `intro background is light: ${light}`);
+    const mid = pixelAt(video.path, intro.durationSec + 3.5, 40, 40);
+    assert.ok(mid.every((c) => Math.abs(c - 128) < 12), `then the grey video: ${mid}`);
+    const [rr, gg, bb] = pixelAt(video.path, total - 1, 40, 40);
+    assert.ok(rr > 180 && gg < 80 && bb < 80, `the bold outro uses the accent colour: ${[rr, gg, bb]}`);
+
+    // Editing card text re-produces without re-recording.
+    writeJson(SCRIPT.cards, { ...script, outro: { ...script.outro, title: "Try it today" } });
+    const again = await cli(["make", SCRIPT.cards, "--out", path.join(RUN, "job-cards")], { timeoutMs: 8 * MIN });
+    assert.equal(expectOk(again, "make").recorded, false, "a card edit never re-records");
   });
 
   // ── flutter plugin: a Flutter web build recorded as an Android phone ──

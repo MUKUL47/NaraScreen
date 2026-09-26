@@ -768,6 +768,7 @@ interface VideoOutcome {
   width?: number;
   height?: number;
   narrations: ProduceResult["narrations"];
+  cards?: ProduceResult["cards"];
   preview: Pick<PreviewResult, "contactSheet" | "frames"> | null;
 }
 
@@ -798,7 +799,7 @@ async function produceJob(ctx: Ctx, dir: string, script: DemoScript, langs: stri
       writeJob(dir, state);
       // Final size (after any --resolution scaling), when the producer reports it.
       const { width, height } = r as Partial<{ width: number; height: number }>;
-      videos.push({ lang, path: r.videoPath, durationSec: r.durationSec, ...(width && height ? { width, height } : {}), narrations: r.narrations, preview });
+      videos.push({ lang, path: r.videoPath, durationSec: r.durationSec, ...(width && height ? { width, height } : {}), narrations: r.narrations, ...(r.cards ? { cards: r.cards } : {}), preview });
     } catch (e) {
       const err = toAgentError(e);
       try {

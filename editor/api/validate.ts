@@ -102,6 +102,8 @@ export function validateScript(
   const warnings: string[] = [];
   const semantic = checkSemantics(script, ctx.dir, warnings);
   semantic.push(...checkPlugins(script, resolved, warnings));
+  semantic.push(...checkCards(script, ctx.dir, warnings));
+  checkPlan(script, warnings);
   if (semantic.length) throw invalid(semantic);
   return { script, warnings };
 }
@@ -715,6 +717,55 @@ function levenshtein(a: string, b: string): number {
 // ─── summary (for `narascreen validate`) ─────────────────────────────
 
 /** Rough size of the demo so an agent can sanity-check length before recording. */
+// ─── cards & plan ────────────────────────────────────────────────────
+
+function checkCards(script: DemoScript, dir: string, warnings: string[]): ScriptIssue[] {
+  const issues: ScriptIssue[] = [];
+  const langs = script.languages ?? ["en"];
+  for (const which of ["intro", "outro"] as const) {
+    const card = script[which];
+    if (!card) continue;
+    if (card.logo) {
+      card.logo = resolveExisting(card.logo, dir, `${which}.logo`, issues);
+      if (!/\.(png|jpe?g|svg|webp)$/i.test(card.logo)) issues.push({ path: `${which}.logo`, message: "logo must be a png, jpg, svg or webp image" });
+    }
+    for (const k of ["title", "subtitle", "cta", "narrate"] as const) {
+      const v = card[k];
+      if (v && typeof v === "object") checkLangMap(v, `${which}.${k}`, langs, true, issues);
+      else if (k === "narrate" && typeof v === "string" && langs.some((l) => l !== "en")) {
+        warnings.push(`${which}.narrate is the same text in every language (${langs.join(", ")}). Use a map like {"en": "…", "hi": "…"}.`);
+      }
+    }
+  }
+  return issues;
+}
+
+/** The plan never blocks a video: it only produces warnings. */
+function checkPlan(script: DemoScript, warnings: string[]) {
+  const plan = script.plan;
+  if (!plan) return;
+  const said = (v: unknown) => (typeof v === "string" ? v : v && typeof v === "object" ? Object.values(v as Record<string, string>).join(" ") : "");
+  for (const term of plan.leaveOut ?? []) {
+    const t = term.toLowerCase();
+    script.steps.forEach((st, si) => {
+      const texts = [st.id, st.label ?? ""];
+      for (const e of st.beat) {
+        const x = e as FxEntry & ActEntry;
+        texts.push(said(x.narrate), said(x.text), x.name ?? "", x.label ?? "", x.path ?? "");
+      }
+      if (texts.some((s) => s.toLowerCase().includes(t))) {
+        warnings.push(`plan.leaveOut says "${term}", but step "${st.id}" (steps[${si}]) mentions it. Drop that part, or update the plan.`);
+      }
+    });
+  }
+  if (plan.targetSec) {
+    const est = scriptSummary(script).estimatedVideoSec;
+    if (est > plan.targetSec * 1.25) {
+      warnings.push(`The video is estimated at ~${est}s but plan.targetSec is ${plan.targetSec}s. Cut steps or shorten narration (or raise the target).`);
+    }
+  }
+}
+
 export function scriptSummary(script: DemoScript) {
   const d = { ...BUILTIN_DEFAULTS, ...script.defaults };
   const fxCounts: Record<string, number> = {};
@@ -752,7 +803,13 @@ export function scriptSummary(script: DemoScript) {
   // ~15 characters/second for Kokoro at speed 1, plus 0.5s padding per clip.
   // Recorded audio files are unknown until produce; count them as 4s each.
   const speed = script.tts?.speed ?? 1;
-  const narrationSec = narrationChars / 15 / speed + narrations * 0.5 + recordedAudio * 4;
+  let narrationSec = narrationChars / 15 / speed + narrations * 0.5 + recordedAudio * 4;
+  // Title/end cards: their duration, or narration + a pause, or 3 s.
+  for (const card of [script.intro, script.outro]) {
+    if (!card) continue;
+    const text = typeof card.narrate === "string" ? card.narrate : card.narrate ? (card.narrate.en ?? Object.values(card.narrate)[0] ?? "") : "";
+    narrationSec += typeof card.duration === "number" ? card.duration : text ? text.length / 15 / speed + 1.2 : 3;
+  }
   return {
     mode: script.source ? "video" : "browser",
     steps: script.steps.length,

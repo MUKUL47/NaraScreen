@@ -968,6 +968,16 @@ describe("uploads (PUT /v1/files)", () => {
     }
   });
 
+  it("an inline script's card logo resolves against the workspace; outside → rejected", async () => {
+    await put("uploads/logo.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>');
+    const withLogo = (logo: string) => ({ ...VALID, scope: "cards", intro: { title: "Hello", logo } });
+    const ok = await request(`${base}/v1/validate`, { body: { script: withLogo("uploads/logo.svg") } });
+    assert.equal(ok.status, 200, ok.text);
+    const bad = await request(`${base}/v1/validate`, { body: { script: withLogo("../logo.svg") } });
+    assert.equal(bad.status, 400);
+    assert.ok(JSON.stringify(bad.json.error).includes("intro.logo"), bad.text);
+  });
+
   it("rejects absolute paths, traversal, dotfiles, symlink escapes and oversize bodies", async () => {
     fs.symlinkSync(OUTSIDE, path.join(WS, "uploads", "evil"));
     const bad = ["/tmp/x.mp3", "../x.mp3", "uploads/../../x.mp3", "a/../../x.mp3", ".hidden.mp3", "evil/x.mp3", "C:/x.mp3", ""];

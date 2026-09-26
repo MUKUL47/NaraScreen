@@ -19,6 +19,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { produceTimelineVideo } from "../electron/produce";
+import { addCards, type CardResult } from "./cards";
 import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../electron/ffmpeg";
 import { DEFAULT_VOICES } from "../src/lib/voices";
 import { compile, modelTimeline, spotlightOverlaps } from "./compiler";
@@ -41,6 +42,8 @@ export interface ProduceResult {
   actions: number;
   narrations: { step: string; entry: number; text: string; voice: string; durationSec: number; cached: boolean }[];
   warnings: string[];
+  /** Title/end cards joined around the video (only when the script has them). */
+  cards?: CardResult[];
 }
 
 export interface ProduceOptions {
@@ -212,6 +215,9 @@ export async function produceLanguage(
     resizeTo(videoPath, RESOLUTIONS[resolution], crf, emit, logPath);
     durationSec = probeDuration(videoPath);
   }
+  // Title/end cards (only scripts that have them): joined around the finished video.
+  const cards = script.intro || script.outro ? await addCards(script, lang, videoPath, { audioDir: p.audioDir, tmpDir: path.join(p.root, "cards") }, crf, log) : [];
+  if (cards.length) durationSec = probeDuration(videoPath);
   const { width, height } = probeResolution(videoPath);
   for (const w of rendererWarnings) warn(w);
 
@@ -233,6 +239,7 @@ export async function produceLanguage(
       cached: c.cached,
     })),
     warnings: [...warnings, ...rendererWarnings],
+    ...(cards.length ? { cards } : {}),
   };
 }
 

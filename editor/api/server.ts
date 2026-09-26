@@ -1890,6 +1890,8 @@ function mapScriptFiles(script: Record<string, unknown>, fn: (p: string, at: str
   if (script.storageState !== "__NONE__") one(script, "storageState", "storageState");
   if (isObject(script.source)) one(script.source, "video", "source.video");
   if (isObject(script.music)) one(script.music, "path", "music.path");
+  if (isObject(script.intro)) one(script.intro, "logo", "intro.logo");
+  if (isObject(script.outro)) one(script.outro, "logo", "outro.logo");
   const entries: [Record<string, unknown>, string][] = [];
   if (Array.isArray(script.setup)) script.setup.forEach((e, i) => isObject(e) && entries.push([e, `setup[${i}]`]));
   if (Array.isArray(script.steps)) {

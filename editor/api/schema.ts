@@ -280,7 +280,38 @@ export interface DemoScript {
   languages?: string[];
   /** Optional recording plugins (e.g. flutter: record a Flutter web build as a phone). */
   plugins?: { flutter?: FlutterPluginOptions };
+  /** The agent's plan (kept with the job; validate warns when the script drifts from it). */
+  plan?: DemoPlan;
+  /** Title card before the video / end card after it. */
+  intro?: Card;
+  outro?: Card;
   steps: Beat[];
+}
+
+export const CARD_TEMPLATES = ["clean", "bold", "minimal"] as const;
+export type CardTemplate = (typeof CARD_TEMPLATES)[number];
+
+/** A title/end card: rendered from a built-in template, joined before/after the video. */
+export interface Card {
+  template?: CardTemplate;
+  title: string | Record<string, string>;
+  subtitle?: string | Record<string, string>;
+  cta?: string | Record<string, string>;
+  /** Image file (absolute after validation). */
+  logo?: string;
+  accent?: string;
+  narrate?: NarrationText;
+  voice?: string;
+  duration?: number | "auto";
+}
+
+export interface DemoPlan {
+  audience?: string;
+  takeaway?: string;
+  hook?: string;
+  tone?: string;
+  leaveOut?: string[];
+  targetSec?: number;
 }
 
 export function isFx(e: BeatEntry): e is FxEntry {
@@ -390,6 +421,36 @@ const NarrationSchema = z
 const AudioSchema = z
   .union([str(), z.record(z.string(), str())])
   .describe("Pre-recorded audio file (wav/mp3/m4a/ogg/webm) used instead of generated speech, or one per language. Paths are relative to the script. Add `narrate` text too if you want subtitles.");
+const CardTextSchema = z.union([str(), z.record(z.string(), str())]);
+export const CardSchema = z
+  .object({
+    template: z.enum(CARD_TEMPLATES).optional().describe("clean (default: light, calm) | bold (accent-coloured, big type) | minimal (dark, understated)."),
+    title: CardTextSchema.describe("Main line, or one per language like {\"en\": \"…\", \"hi\": \"…\"} (falls back to en)."),
+    subtitle: CardTextSchema.optional().describe("Second line (optional), or one per language."),
+    cta: CardTextSchema.optional().describe("Call to action shown as a pill, e.g. a URL (optional; mostly for the outro)."),
+    logo: str().optional().describe("Logo image (png/jpg/svg/webp), relative to the script (inline HTTP scripts: to the workspace)."),
+    accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("Accent colour #RRGGBB (default #4F46E5)."),
+    narrate: z.union([str(), z.record(z.string(), str())]).optional().describe("Voiceover while the card shows (optional), or one per language."),
+    voice: str().optional().describe("Voice for the card's narration (default: the script's voice for the language)."),
+    duration: z
+      .union([z.number().min(1).max(30), z.literal("auto")])
+      .optional()
+      .describe("Seconds on screen, or \"auto\" (default): the narration plus a short pause, or 3 s without narration."),
+  })
+  .strict();
+
+export const PlanSchema = z
+  .object({
+    audience: str().optional().describe("Who the video is for."),
+    takeaway: str().optional().describe("The one thing viewers should remember."),
+    hook: str().optional().describe("What the first seconds show."),
+    tone: str().optional().describe("e.g. calm, practical, upbeat."),
+    leaveOut: z.array(str()).optional().describe("Topics to keep out (validate warns when a step mentions one)."),
+    targetSec: z.number().min(5).max(1800).optional().describe("Target length in seconds (validate warns when the estimate is well over it)."),
+  })
+  .strict()
+  .describe("Your plan for the video (optional). Kept with the job; validate warns when the script drifts from it.");
+
 const DurationSchema = z
   .union([z.number().positive().max(120), z.enum(["auto", "step-end", "end"])])
   .describe("Seconds on screen, or \"auto\" (default: until the next narration in this step ends, else 3s), \"step-end\" (until this step ends), or \"end\" (until the end of the video — e.g. to keep a secret blurred).");
@@ -546,6 +607,9 @@ export const DemoScriptSchema = z
     defaults: DefaultsSchema.optional(),
     tts: TtsSchema.optional(),
     languages: z.array(z.enum(TTS_LANGUAGES)).min(1).optional().describe("Languages to produce (one video each). Default [\"en\"]."),
+    plan: PlanSchema.optional(),
+    intro: CardSchema.optional().describe("Title card joined BEFORE the video (template, title, subtitle, logo, narration)."),
+    outro: CardSchema.optional().describe("End card joined AFTER the video (e.g. title + cta)."),
     plugins: z
       .object({ flutter: FlutterPluginSchema.optional() })
       .strict()
