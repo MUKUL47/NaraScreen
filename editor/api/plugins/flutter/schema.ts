@@ -25,6 +25,8 @@ export interface FlutterPluginOptions {
   device?: FlutterDeviceName | FlutterDevice;
   /** Turn on Flutter's accessibility tree automatically (default true). */
   semantics?: boolean;
+  /** Only these hosts (besides baseUrl's) may be called; anything else is blocked and fails the run. */
+  allowedHosts?: string[];
 }
 
 export const FlutterPluginSchema = z
@@ -46,6 +48,10 @@ export const FlutterPluginSchema = z
       .boolean()
       .optional()
       .describe("Turn on Flutter's accessibility tree automatically so role/label/text selectors work (default true). Set false only if the app already enables it itself."),
+    allowedHosts: z
+      .array(z.string().regex(/^[A-Za-z0-9.-]+(:\d+)?$/, "a host or host:port, e.g. localhost:8090"))
+      .optional()
+      .describe("Guard against recording the wrong backend: requests to any other host (besides baseUrl's and Flutter's font/engine CDNs) are blocked and fail the run with BLOCKED_REQUEST. Without it, calls to other hosts only produce a warning."),
   })
   .strict()
   .describe("Record a Flutter web build as an Android phone: touch input, mobile user agent, phone-sized screen, portrait video.");

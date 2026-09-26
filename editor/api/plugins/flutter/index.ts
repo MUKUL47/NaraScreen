@@ -15,7 +15,9 @@
 
 import type { Locator, Page } from "playwright";
 import type { ActEntry, DemoScript, FxEntry, Rect } from "../../schema";
-import type { NaraPlugin, PluginActApi } from "../index";
+import { AgentError } from "../../errors";
+import type { NaraPlugin, PluginActApi, PluginPageApi } from "../index";
+import { FlutterHealth, looksStuck, treeSummary } from "./health";
 import { DEFAULT_FLUTTER_DEVICE, FLUTTER_DEVICES, type FlutterDevice, type FlutterPluginOptions } from "./schema";
 
 const CHROME_VERSION = "140.0.0.0";
@@ -31,7 +33,7 @@ export function videoSizeOf(d: FlutterDevice): { width: number; height: number }
   return { width: even(d.width * d.pixelRatio), height: even(d.height * d.pixelRatio) };
 }
 
-export function flutterPlugin(opts: FlutterPluginOptions): NaraPlugin {
+export function flutterPlugin(opts: FlutterPluginOptions, baseUrl?: string): NaraPlugin {
   const device = resolveDevice(opts.device);
   const css = { width: device.width, height: device.height };
   const video = videoSizeOf(device);
@@ -41,6 +43,7 @@ export function flutterPlugin(opts: FlutterPluginOptions): NaraPlugin {
   // Overlays are sized in video px; a phone video has pixelRatio× more px per
   // UI point, so text, arrows and blur grow by the same factor.
   const k = sx;
+  const health = new FlutterHealth(hostOf(baseUrl), opts.allowedHosts);
 
   return {
     name: "flutter",
@@ -59,10 +62,88 @@ export function flutterPlugin(opts: FlutterPluginOptions): NaraPlugin {
     adjustActions: (actions) => {
       for (const a of actions) if (a.type === "callout" && a.calloutStyle === "arrow") a.arrowScale = k;
     },
-    ready: semantics ? (page, timeoutMs) => enableSemantics(page, timeoutMs) : undefined,
+    preflight: (script) => checkFlutterBuild(script.baseUrl),
+    attach: (context, page, warn) => health.attach(context, page, warn),
+    ready: async (api) => {
+      if (health.blocked.length) throw await health.blockedError(api);
+      if (semantics) await enableSemantics(api, health);
+    },
+    finish: async (api) => {
+      if (health.blocked.length) throw await health.blockedError(api);
+    },
+    explainFailure: (err, api) => explainFailure(err, api, health),
+    inspectNotes: async (page) => {
+      const t = await treeSummary(page);
+      if (!looksStuck(t)) return [];
+      return [
+        `The Flutter app shows almost nothing to select (${t.labels.length ? `only ${t.labels.map((l) => `"${l}"`).join(", ")}` : "no labelled widgets"}, nothing interactive). ` +
+          `If this is a splash/loading screen that never goes away, the app is probably awaiting a native-only plugin on web (path_provider, file cookie jars, secure storage, camera, GPS).`,
+      ];
+    },
     afterFocus: settleTextField,
     runAct: (e, api) => (e.act === "swipe" ? swipe(e, api, css) : Promise.resolve(undefined)),
   };
+}
+
+function hostOf(url: string | undefined): string {
+  try {
+    return url ? new URL(url).host : "";
+  } catch {
+    return "";
+  }
+}
+
+// ─── preflight ───────────────────────────────────────────────────────
+
+/** baseUrl must serve a Flutter web build — fail before starting a browser if it plainly doesn't. */
+export async function checkFlutterBuild(baseUrl: string | undefined): Promise<void> {
+  if (!baseUrl) return;
+  let res: Response;
+  try {
+    res = await fetch(baseUrl, { redirect: "follow", signal: AbortSignal.timeout(10_000) });
+  } catch {
+    return; // unreachable: the first goto reports it with the usual NAVIGATION_FAILED
+  }
+  const type = res.headers.get("content-type") ?? "";
+  const body = await res.text().catch(() => "");
+  if (res.ok && /html/i.test(type) && !/flutter_bootstrap\.js|main\.dart\.js|flutter\.js|_flutter\b/.test(body)) {
+    throw new AgentError("FLUTTER_NOT_WEB_BUILD", `baseUrl is not a Flutter web build: ${baseUrl} returned a page without flutter_bootstrap.js / main.dart.js`, {
+      hint: "Serve the output of `flutter build web` (e.g. `cd build/web && python3 -m http.server 8080`) and set baseUrl to it — or remove plugins.flutter for a normal website.",
+      where: { path: "baseUrl" },
+      details: { baseUrl, status: res.status, contentType: type, start: body.slice(0, 300) },
+    });
+  }
+}
+
+// ─── when a step fails ───────────────────────────────────────────────
+
+const EXPLAINABLE = ["SELECTOR_NOT_FOUND", "WAIT_TIMEOUT", "TARGET_NOT_VISIBLE", "ACTION_FAILED"];
+
+/** A selector timed out: was it really the selector, or is the app stuck / semantics off / a host blocked? */
+async function explainFailure(err: AgentError, api: PluginPageApi, health: FlutterHealth): Promise<AgentError | undefined> {
+  if (!EXPLAINABLE.includes(err.code)) return undefined;
+  if (health.blocked.length) return health.blockedError(api);
+  const first = await treeSummary(api.page);
+  if (!first.flutter) return undefined;
+  const cause = { code: err.code, message: err.message, ...(err.details?.screenshot ? { screenshot: err.details.screenshot } : {}) };
+  if (first.placeholder) {
+    return api.fail("FLUTTER_SEMANTICS_UNAVAILABLE", "Flutter's accessibility tree is off, so no selector can match anything", {
+      hint: "The plugin could not switch it on (see details). If the app disables semantics itself, remove that for the web build; otherwise report this with details.",
+      details: { cause, tree: first, ...(await health.diagnostics(api.page)) },
+    });
+  }
+  if (!looksStuck(first)) return undefined;
+  // Stuck = still the same near-empty screen a moment later.
+  await api.page.waitForTimeout(1500);
+  const second = await treeSummary(api.page);
+  if (!looksStuck(second) || second.labels.join("|") !== first.labels.join("|")) return undefined;
+  const snapshot = await api.page.ariaSnapshot({ timeout: 5000 }).catch(() => "");
+  return api.fail("FLUTTER_APP_NOT_READY", "the Flutter web build never left its first screen", {
+    hint:
+      "The app is stuck (usually awaiting a native-only plugin at startup). Native-only plugins (path_provider, file cookie jars, camera, GPS, secure storage) don't work on web — " +
+      "add web fallbacks in the app (kIsWeb). details.console / details.pendingRequests / details.unhandledRejections show what it was waiting for.",
+    details: { cause, visibleLabels: second.labels, semanticsSnapshot: snapshot.slice(0, 4000), ...(await health.diagnostics(api.page)) },
+  });
 }
 
 // ─── overlay sizes ───────────────────────────────────────────────────
@@ -107,26 +188,48 @@ async function semState(page: Page): Promise<SemState> {
     .catch(() => ({ flutter: false, enabled: false, placeholder: null }));
 }
 
-/** Make sure Flutter's accessibility tree is on (no-op on non-Flutter pages and once it is on). */
-async function enableSemantics(page: Page, timeoutMs: number): Promise<void> {
+/**
+ * Make sure Flutter's accessibility tree is on (no-op on non-Flutter pages and
+ * once it is on). Flutter resets it on every page load, so this runs before each
+ * entry. A synthetic el.click() is ignored: it takes a real pointer event in the
+ * placeholder's exact centre. Tried as a touch tap, a mouse click, then a forced
+ * click; each is verified (placeholder gone, tree present).
+ */
+async function enableSemantics(api: PluginPageApi, health: FlutterHealth): Promise<void> {
+  const { page } = api;
   let st = await semState(page);
   if (!st.flutter || (st.enabled && !st.placeholder)) return;
   // The engine creates the placeholder once it has started; wait for it (or for an
   // app that turned semantics on itself).
-  const deadline = Date.now() + Math.max(timeoutMs, 15_000);
+  const deadline = Date.now() + Math.max(api.timeoutMs, 15_000);
   while (!st.placeholder && !st.enabled && Date.now() < deadline) {
     await page.waitForTimeout(150);
     st = await semState(page);
   }
-  if (!st.placeholder) return;
-  await page.touchscreen.tap(st.placeholder.x, st.placeholder.y);
-  // Flutter enables it 300 ms after the tap, then removes the placeholder.
-  const until = Date.now() + 4000;
-  while (Date.now() < until) {
-    await page.waitForTimeout(100);
+  if (!st.placeholder) return; // on by itself, or the engine never started (explainFailure reports it)
+  const attempts: ((p: { x: number; y: number }) => Promise<void>)[] = [
+    (p) => page.touchscreen.tap(p.x, p.y),
+    (p) => page.mouse.click(p.x, p.y),
+    (p) => page.locator("flt-semantics-placeholder").click({ force: true, position: { x: p.x, y: p.y }, timeout: 2000 }),
+  ];
+  for (const attempt of attempts) {
     st = await semState(page);
-    if (st.enabled && !st.placeholder) return;
+    if (!st.placeholder) break;
+    await attempt(st.placeholder).catch(() => {});
+    // Flutter enables it 300 ms after the tap, then removes the placeholder.
+    const until = Date.now() + 2500;
+    while (Date.now() < until) {
+      await page.waitForTimeout(100);
+      st = await semState(page);
+      if (st.enabled && !st.placeholder) return;
+    }
   }
+  st = await semState(page);
+  if (st.enabled && !st.placeholder) return;
+  throw await api.fail("FLUTTER_SEMANTICS_UNAVAILABLE", "could not switch on Flutter's accessibility tree (tried a tap, a click and a forced click in the placeholder's centre)", {
+    hint: "Without it selectors can't see Flutter widgets. If the app turns semantics off itself, remove that for the web build; otherwise report this with details.",
+    details: { placeholder: st.placeholder, semanticsNodes: st.enabled, ...(await health.diagnostics(page)) },
+  });
 }
 
 async function settleTextField(loc: Locator): Promise<void> {

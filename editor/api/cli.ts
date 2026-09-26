@@ -15,6 +15,7 @@
 // startup stays fast for validate/help, and anything they print while loading is
 // caught by the stdout guard below instead of corrupting the envelope.
 
+import { FLUTTER_DEVICES } from "./plugins/flutter/schema";
 import * as fs from "fs";
 import * as path from "path";
 import { parseArgs } from "util";
@@ -1045,6 +1046,15 @@ const HANDLERS: Record<string, Handler> = {
       }
     }
 
+    const plugin = str(ctx, "plugin");
+    const device = str(ctx, "device");
+    if (plugin && plugin !== "flutter") throw usage(ctx, `Unknown --plugin "${plugin}"`, "Available: flutter.");
+    if (device && plugin !== "flutter") throw usage(ctx, "--device needs --plugin flutter");
+    if (device && !(device in FLUTTER_DEVICES)) {
+      throw usage(ctx, `Unknown --device "${device}"`, `One of: ${Object.keys(FLUTTER_DEVICES).join(", ")} (a custom size goes in the script: plugins.flutter.device).`);
+    }
+    const plugins = plugin === "flutter" ? { flutter: { ...loaded?.script.plugins?.flutter, ...(device ? { device: device as keyof typeof FLUTTER_DEVICES } : {}) } } : undefined;
+
     const o = str(ctx, "out");
     const out = o ? abs(ctx, o) : path.resolve(ctx.cwd, OUT_ROOT, "inspect", stamp());
     const { inspect } = await import("./inspect");
@@ -1055,6 +1065,7 @@ const HANDLERS: Record<string, Handler> = {
       outDir: out,
       viewport,
       storageState,
+      plugins,
       headed: bool(ctx, "headed"),
       fullPage: bool(ctx, "full-page"),
       log,

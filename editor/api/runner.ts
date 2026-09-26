@@ -36,7 +36,7 @@ import {
   suggestRole,
   ARIA_ROLES,
 } from "./page-elements";
-import { pluginsFor, type NaraPlugin, type PluginActApi } from "./plugins";
+import { pluginsFor, type NaraPlugin, type PluginActApi, type PluginPageApi } from "./plugins";
 import { startScreencast, type Screencast } from "./screencast";
 import { RANGE_FX } from "./schema";
 import {
@@ -64,7 +64,8 @@ export interface RunOptions {
   failuresDir: string;
   log?: Log;
   /** Called after the last executed step, before the browser closes (inspect uses it). */
-  onPage?: (page: Page) => Promise<void>;
+  /** `prepare` readies the page for plugins (after the caller's own navigation). */
+  onPage?: (page: Page, prepare: () => Promise<void>) => Promise<void>;
 }
 
 export interface RunResult {
@@ -150,6 +151,7 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
   const browserViewport = plugins.find((p) => p.browserViewport)?.browserViewport;
   const browserScript: DemoScript = browserViewport ? { ...script, viewport: browserViewport } : script;
 
+  for (const p of plugins) await p.preflight?.(script);
   const browser = await launchBrowser(!!opts.headed);
   const framesDir = path.join(recordingsDir, "frames");
   let screencast: Screencast | null = null;
@@ -169,6 +171,7 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
       fast: fastCheck,
     };
     watchPageEvents(env, context);
+    for (const p of plugins) await p.attach?.(context, page, (m) => addWarning(env!, m));
 
     // ── setup: before the recording, fast, no trace
     if (script.setup?.length) {
@@ -223,6 +226,7 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
       await runStep(env, beat, si, steps.length, d, fastCheck, now, trace);
       env.prevStep = beat.id;
     }
+    for (const p of plugins) await p.finish?.(pageApi(env, d.timeoutMs));
 
     let durationSec = round3(now());
     let recordingPath: string | undefined;
@@ -249,10 +253,29 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
       for (const e of trace) e.t = round3(Math.max(0, Math.min(e.t, durationSec - 0.05)));
     }
 
-    if (opts.onPage) await opts.onPage(page);
+    if (opts.onPage) {
+      // inspect: the page must be ready for plugins too, and their notes are warnings.
+      const e = env;
+      await opts.onPage(page, async () => {
+        for (const p of plugins) {
+          await p.ready?.(pageApi(e, d.timeoutMs));
+          for (const n of (await p.inspectNotes?.(page)) ?? []) addWarning(e, n);
+        }
+      });
+    }
     if (opts.holdOpen && opts.headed) await holdOpen(log, "Run finished");
     return { recordingPath, trace, durationSec, warnings: env.warnings };
-  } catch (err) {
+  } catch (caught) {
+    let err = caught;
+    if (env?.plugins.length && err instanceof AgentError) {
+      for (const p of env.plugins) {
+        const better = await p.explainFailure?.(err, pageApi(env, d.timeoutMs, err.where)).catch(() => undefined);
+        if (better) {
+          err = better;
+          break;
+        }
+      }
+    }
     if (opts.holdOpen && opts.headed && env) {
       await holdOpen(log, `Run failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -306,6 +329,8 @@ async function runStep(
     const entry = beat.beat[i];
     const where: ErrorWhere = { step: beat.id, entry: i, path: `steps[${si}].beat[${i}]` };
     env.currentPath = where.path!;
+    // (acts get this in runAct; an fx may be the first entry after a reload)
+    if (env.plugins.length && !isAct(entry)) for (const p of env.plugins) await p.ready?.(pageApi(env, d.timeoutMs, where));
     let rect: Rect | undefined;
     let rects: Rect[] | undefined;
     let blurStart: number | undefined;
@@ -503,7 +528,7 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   const { page } = env;
   const timeout = e.timeoutMs ?? d.timeoutMs;
   const sel = pickSelector(e);
-  for (const p of env.plugins) await p.ready?.(page, timeout);
+  for (const p of env.plugins) await p.ready?.(pageApi(env, timeout, where));
   if (env.plugins.length) {
     const res = await pluginAct(env, e, where, timeout);
     if (res) return res;
@@ -586,6 +611,15 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   // The act may have moved the element (layout change, textarea growing, an
   // auto-scroll): fx that inherit it use where it is NOW; if it is gone, where it was.
   return { rect, focus: (await currentRect(loc)) ?? rect };
+}
+
+function pageApi(env: Env, timeoutMs: number, where?: ErrorWhere): PluginPageApi {
+  return {
+    page: env.page,
+    timeoutMs,
+    fail: (code, message, init) => failure(env, code, where ? `${label(where)}: ${message}` : message, { where, ...init }),
+    warn: (m) => addWarning(env, m),
+  };
 }
 
 /** Browser px → video px (only differs when a plugin records at another size). */

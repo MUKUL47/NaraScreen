@@ -80,12 +80,28 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
   add(tts);
 
   add(checkOutputDir(opts.outDir ?? path.resolve("narascreen-out")));
+  if (opts.script?.plugins?.flutter) add(await checkFlutterSite(opts.script.baseUrl));
 
   const ready = checks.every((c) => c.ok || !c.required);
   return { ready, checks };
 }
 
 // ─── individual checks ───────────────────────────────────────────────
+
+/** plugins.flutter: baseUrl must be up and serve a Flutter web build. */
+async function checkFlutterSite(baseUrl: string | undefined): Promise<DoctorCheck> {
+  const { checkFlutterBuild } = await import("./plugins/flutter");
+  const fix = "Serve the output of `flutter build web` (e.g. `cd build/web && python3 -m http.server 8080`) and set baseUrl to it.";
+  if (!baseUrl) return { id: "flutter", ok: false, required: true, detail: "plugins.flutter is set but the script has no baseUrl", fix };
+  try {
+    const res = await fetch(baseUrl, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return { id: "flutter", ok: false, required: true, detail: `${baseUrl} answered HTTP ${res.status}`, fix };
+    await checkFlutterBuild(baseUrl);
+    return { id: "flutter", ok: true, required: true, detail: `${baseUrl} serves a Flutter web build` };
+  } catch (e) {
+    return { id: "flutter", ok: false, required: true, detail: `${baseUrl}: ${firstLine(e)}`, fix };
+  }
+}
 
 function checkNode(): DoctorCheck {
   const major = Number(process.versions.node.split(".")[0]);

@@ -27,6 +27,10 @@ export type ErrorCode =
   | "SPOTLIGHT_OVERLAP"
   | "VIDEO_NOT_FOUND"
   | "CANCELLED"
+  | "FLUTTER_NOT_WEB_BUILD"
+  | "FLUTTER_SEMANTICS_UNAVAILABLE"
+  | "FLUTTER_APP_NOT_READY"
+  | "BLOCKED_REQUEST"
   // 2 — the machine is missing something (run `narascreen doctor`)
   | "TTS_UNAVAILABLE"
   | "FFMPEG_MISSING"
@@ -61,6 +65,10 @@ const EXIT_BY_CODE: Record<ErrorCode, number> = {
   SPOTLIGHT_OVERLAP: 1,
   VIDEO_NOT_FOUND: 1,
   CANCELLED: 1,
+  FLUTTER_NOT_WEB_BUILD: 1,
+  FLUTTER_SEMANTICS_UNAVAILABLE: 1,
+  FLUTTER_APP_NOT_READY: 1,
+  BLOCKED_REQUEST: 1,
   TTS_UNAVAILABLE: 2,
   FFMPEG_MISSING: 2,
   BROWSER_MISSING: 2,
@@ -148,6 +156,10 @@ export const ERROR_HELP: Record<ErrorCode, string> = {
   SPOTLIGHT_OVERLAP: "Two spotlights overlap in time. Give the first a shorter duration, or use one spotlight.",
   VIDEO_NOT_FOUND: "There is no produced video for that language yet. Run `produce` first.",
   CANCELLED: "The run was cancelled (POST /v1/runs/:id/cancel). Start it again if you still need it.",
+  FLUTTER_NOT_WEB_BUILD: "plugins.flutter is set but baseUrl does not serve a Flutter web build (no flutter_bootstrap.js / main.dart.js). Serve the output of `flutter build web` and point baseUrl at it.",
+  FLUTTER_SEMANTICS_UNAVAILABLE: "Flutter's accessibility tree could not be switched on, so selectors have nothing to find. Check details.screenshot; if the app turns semantics off itself, remove that for the web build.",
+  FLUTTER_APP_NOT_READY: "The Flutter app never got past its first screen (usually a native-only plugin awaited at startup: path_provider, file cookie jars, secure storage, camera, GPS). Read details.console / details.pendingRequests and add web fallbacks in the app.",
+  BLOCKED_REQUEST: "The app called a host outside plugins.flutter.allowedHosts (e.g. a production API baked into the build). Point the build at the demo backend, or add the host to allowedHosts if it is safe.",
   TTS_UNAVAILABLE: "The speech engine (Kokoro) is not reachable. Start it (see `doctor`), then retry.",
   FFMPEG_MISSING: "ffmpeg/ffprobe not found or missing required filters. Install ffmpeg (see `doctor`).",
   BROWSER_MISSING: "Playwright's Chromium is not installed. Run the fix command from `doctor`.",

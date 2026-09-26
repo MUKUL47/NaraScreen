@@ -3,21 +3,46 @@
 // would for any real app.
 import 'package:flutter/material.dart';
 
-void main() => runApp(const AcmeApp());
+// Test switches (query string):
+//   ?stuck=1   — never leaves the splash screen, like an app awaiting a
+//                native-only plugin (path_provider…) on web.
+//   ?api=<url> — the home screen loads an avatar from that server, like an app
+//                calling a backend baked into its build.
+void main() {
+  final q = Uri.base.queryParameters;
+  if (q['stuck'] == '1') {
+    // ignore: avoid_print
+    print('ApiClient.init: waiting for getApplicationDocumentsDirectory() (never completes on web)');
+    runApp(const StuckApp());
+    return;
+  }
+  runApp(AcmeApp(api: q['api']));
+}
+
+class StuckApp extends StatelessWidget {
+  const StuckApp({super.key});
+  @override
+  Widget build(BuildContext context) => const MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(body: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.task_alt, size: 64), Text('Acme Tasks')]))),
+      );
+}
 
 class AcmeApp extends StatelessWidget {
-  const AcmeApp({super.key});
+  const AcmeApp({super.key, this.api});
+  final String? api;
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Acme Tasks',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-        home: const LoginPage(),
+        home: LoginPage(api: api),
       );
 }
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+  const LoginPage({super.key, this.api});
+  final String? api;
   @override
   State<LoginPage> createState() => _LoginPageState();
 }
@@ -29,7 +54,7 @@ class _LoginPageState extends State<LoginPage> {
 
   void signIn() {
     if (email.text.contains('@') && password.text.isNotEmpty) {
-      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => HomePage(user: email.text)));
+      Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => HomePage(user: email.text, api: widget.api)));
     } else {
       setState(() => error = 'Enter your email and password');
     }
@@ -56,8 +81,9 @@ class _LoginPageState extends State<LoginPage> {
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.user});
+  const HomePage({super.key, required this.user, this.api});
   final String user;
+  final String? api;
   @override
   State<HomePage> createState() => _HomePageState();
 }
@@ -68,7 +94,9 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(tab == 0 ? 'Tasks' : 'Highlights')),
+        appBar: AppBar(title: Text(tab == 0 ? 'Tasks' : 'Highlights'), actions: [
+          if (widget.api != null) Padding(padding: const EdgeInsets.all(8), child: CircleAvatar(backgroundImage: NetworkImage('${widget.api}/avatar.png'))),
+        ]),
         body: tab == 0 ? taskList() : highlights(),
         floatingActionButton: tab == 0
             ? FloatingActionButton(

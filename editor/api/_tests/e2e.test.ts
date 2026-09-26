@@ -1004,6 +1004,91 @@ describe("narascreen CLI, end to end", () => {
     }
   });
 
+  /** A Flutter script against the fixture app (built on demand); undefined → skip. */
+  async function withFlutterApp(t: TestContext, fn: (url: string) => Promise<void>) {
+    if (!ensureFlutterBuild()) {
+      t.skip("Flutter SDK not installed (needed to build the fixture app)");
+      return;
+    }
+    const app = await startFlutterFixture();
+    try {
+      await fn(app.url);
+    } finally {
+      await app.close();
+    }
+  }
+  const flutterLogin = (path = "/") => [
+    { act: "goto", path },
+    { act: "fill", role: "textbox", name: "Email", value: "alex@example.com" },
+    { act: "fill", role: "textbox", name: "Password", value: "secret" },
+    { act: "click", role: "button", name: "Sign in" },
+  ];
+
+  test("flutter plugin: inspect --url --plugin flutter lists the app's widgets; doctor checks the build", { timeout: 8 * MIN }, async (t) => {
+    await withFlutterApp(t, async (url) => {
+      const r = await cli(["inspect", "--url", `${url}/`, "--plugin", "flutter", "--device", "galaxy-s24", "--out", path.join(RUN, "inspect-flutter-url")], { timeoutMs: 4 * MIN });
+      const els = expectOk(r, "inspect").elements as Rec[];
+      for (const [role, name] of [["textbox", "Email"], ["textbox", "Password"], ["button", "Sign in"]]) {
+        assert.ok(els.some((e) => e.role === role && e.name === name), `inspect --plugin flutter lists ${role} "${name}":\n${summarizeElements(els)}`);
+      }
+      const bad = await cli(["inspect", "--url", `${url}/`, "--plugin", "nope"]);
+      expectError(bad, "inspect", "USAGE");
+
+      writeJson(SCRIPT.flutter, { version: 1, scope: "doctor", baseUrl: url, plugins: { flutter: {} }, steps: [{ id: "s", beat: [{ act: "goto", path: "/" }] }] });
+      const doc = await cli(["doctor", "--script", SCRIPT.flutter], { timeoutMs: 3 * MIN });
+      const dj = doc.json as Rec; // ready → result.checks; not ready (e.g. no TTS here) → error.details.checks
+      const checks = (dj.result ?? dj.error?.details)?.checks as Rec[];
+      const fl = checks?.find((c) => c.id === "flutter");
+      assert.equal(fl?.ok, true, `doctor --script checks the Flutter build: ${JSON.stringify(fl)}\n${describeRun(doc)}`);
+    });
+  });
+
+  test("flutter plugin: an app stuck on its splash → FLUTTER_APP_NOT_READY with the console log; inspect warns", { timeout: 8 * MIN }, async (t) => {
+    await withFlutterApp(t, async (url) => {
+      writeJson(SCRIPT.flutter, { version: 1, scope: "Stuck", baseUrl: url, plugins: { flutter: {} }, setup: flutterLogin("/?stuck=1"), steps: [{ id: "s", beat: [{ act: "wait", ms: 100 }] }] });
+      const r = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-flutter-stuck")], { timeoutMs: 4 * MIN });
+      const err = expectError(r, "check", "FLUTTER_APP_NOT_READY");
+      assert.equal(err.where?.path, "setup[1]", "points at the first entry that could not run");
+      assert.ok((err.details?.console as Rec[]).some((c) => /getApplicationDocumentsDirectory/.test(c.text)), `details.console has the app's own log line\n${describeRun(r)}`);
+      assert.deepEqual(err.details?.visibleLabels, ["Acme Tasks"], "what the stuck screen shows");
+      for (const k of ["semanticsSnapshot", "pendingRequests", "unhandledRejections", "pageErrors", "screenshot"]) assert.ok(k in err.details, `details.${k}`);
+      assert.equal(err.details?.cause?.code, "SELECTOR_NOT_FOUND", "the original error is kept as details.cause");
+
+      const ins = await cli(["inspect", "--url", `${url}/?stuck=1`, "--plugin", "flutter", "--out", path.join(RUN, "inspect-flutter-stuck")], { timeoutMs: 4 * MIN });
+      const res = expectOk(ins, "inspect");
+      assert.ok((res.warnings as string[]).some((w) => /almost nothing to select/.test(w)), `inspect warns about the stuck screen: ${JSON.stringify(res.warnings)}`);
+    });
+  });
+
+  test("flutter plugin: requests to another host are blocked with allowedHosts (BLOCKED_REQUEST), else warned", { timeout: 8 * MIN }, async (t) => {
+    await withFlutterApp(t, async (url) => {
+      // Same server under another host name = "a backend baked into the build".
+      const other = `http://localhost:${new URL(url).port}`;
+      const script = (flutter: Rec) => ({
+        version: 1, scope: "Backend", baseUrl: url, plugins: { flutter },
+        setup: flutterLogin(`/?api=${encodeURIComponent(other)}`),
+        steps: [{ id: "s", beat: [{ act: "waitFor", role: "heading", name: "Tasks" }, { act: "wait", ms: 800 }] }],
+      });
+      writeJson(SCRIPT.flutter, script({ allowedHosts: ["demo-api.example"] }));
+      const r = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-flutter-blocked")], { timeoutMs: 4 * MIN });
+      const err = expectError(r, "check", "BLOCKED_REQUEST");
+      assert.ok((err.details?.blockedRequests as string[]).some((b) => b.includes(`${other}/avatar.png`)), `names the blocked request\n${describeRun(r)}`);
+
+      writeJson(SCRIPT.flutter, script({}));
+      const w = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-flutter-warned")], { timeoutMs: 4 * MIN });
+      expectOk(w, "check");
+      const host = new URL(other).host;
+      assert.ok((w.json as Envelope).warnings.some((m) => m.includes(host) && m.includes("allowedHosts")), `warns about ${host}: ${JSON.stringify((w.json as Envelope).warnings)}`);
+    });
+  });
+
+  test("flutter plugin: baseUrl that is not a Flutter web build → FLUTTER_NOT_WEB_BUILD before any browser", async () => {
+    writeJson(SCRIPT.flutter, { version: 1, scope: "Not flutter", baseUrl: server.url, plugins: { flutter: {} }, steps: [{ id: "s", beat: [{ act: "goto", path: "/" }] }] });
+    const r = await cli(["check", SCRIPT.flutter, "--out", path.join(RUN, "check-not-flutter")]);
+    const err = expectError(r, "check", "FLUTTER_NOT_WEB_BUILD");
+    assert.equal(err.where?.path, "baseUrl");
+  });
+
   test("flutter plugin: swipe without the plugin → SCRIPT_INVALID", async () => {
     writeJson(SCRIPT.flutter, {
       version: 1,

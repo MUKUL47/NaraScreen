@@ -35,6 +35,8 @@ export interface InspectOptions {
   outDir: string;
   viewport?: { width: number; height: number };
   storageState?: string;
+  /** Recording plugins (e.g. from --plugin flutter); override the script's. */
+  plugins?: DemoScript["plugins"];
   headed?: boolean;
   fullPage?: boolean;
   log?: Log;
@@ -88,7 +90,7 @@ export async function inspect(opts: InspectOptions): Promise<InspectResult> {
     untilStep: opts.untilStep,
     failuresDir,
     log,
-    onPage: async (page) => {
+    onPage: async (page, prepare) => {
       if (target) {
         stage("inspect", `Inspecting ${target}`);
         await gotoPage(page, target, { baseUrl, failuresDir });
@@ -97,7 +99,7 @@ export async function inspect(opts: InspectOptions): Promise<InspectResult> {
         stage("inspect", `Inspecting ${page.url()}`);
       }
       await settle(page);
-      for (const p of pluginsFor(script)) await p.ready?.(page, 15_000);
+      await prepare();
       result = await capture(page, outDir, !!opts.fullPage, pluginsFor(script).find((p) => p.browserViewport)?.browserViewport ?? script.viewport, log);
     },
   });
@@ -113,6 +115,7 @@ function scriptFor(opts: InspectOptions): DemoScript {
       ...opts.script,
       viewport: opts.viewport ?? opts.script.viewport ?? DEFAULT_VIEWPORT,
       storageState: storageState ?? opts.script.storageState,
+      ...(opts.plugins ? { plugins: opts.plugins } : {}),
     };
   }
   const url = resolveUrl(opts.url!, undefined);
@@ -122,6 +125,7 @@ function scriptFor(opts: InspectOptions): DemoScript {
     baseUrl: new URL(url).origin,
     viewport: opts.viewport ?? DEFAULT_VIEWPORT,
     ...(storageState ? { storageState } : {}),
+    ...(opts.plugins ? { plugins: opts.plugins } : {}),
     steps: [],
   };
 }

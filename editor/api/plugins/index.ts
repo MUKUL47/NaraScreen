@@ -5,11 +5,21 @@
 // scripts that turn a plugin on under `plugins` — every other script runs
 // exactly as before.
 
-import type { BrowserContextOptions, Locator, Page } from "playwright";
+import type { BrowserContext, BrowserContextOptions, Locator, Page } from "playwright";
 import type { AgentError, ErrorCode } from "../errors";
 import type { ActEntry, DemoScript, Rect, Selector } from "../schema";
 import type { NaraAction } from "../types";
 import { flutterPlugin } from "./flutter";
+
+/** What the runner lends a plugin for page-level work (readiness, checks). */
+export interface PluginPageApi {
+  page: Page;
+  timeoutMs: number;
+  /** Build an error with a failure screenshot, like the runner's own. */
+  fail(code: ErrorCode, message: string, init: { hint: string; details?: Record<string, unknown> }): Promise<AgentError>;
+  /** Add a warning to the run's envelope. */
+  warn(message: string): void;
+}
 
 /** What the runner lends a plugin to carry out an act. */
 export interface PluginActApi {
@@ -31,8 +41,18 @@ export interface NaraPlugin {
   contextOptions?: Partial<BrowserContextOptions>;
   /** Taps instead of mouse clicks (a mouse click on a phone UI triggers hover tooltips). */
   touch?: boolean;
-  /** Before every act: get the page ready (e.g. switch on Flutter's accessibility tree). */
-  ready?(page: Page, timeoutMs: number): Promise<void>;
+  /** Before the browser starts (e.g. check that baseUrl serves the right kind of app). */
+  preflight?(script: DemoScript): Promise<void>;
+  /** Once the page exists: start collecting diagnostics, install request guards. */
+  attach?(context: BrowserContext, page: Page, warn: (message: string) => void): Promise<void>;
+  /** Before every entry: get the page ready (e.g. switch on Flutter's accessibility tree). */
+  ready?(api: PluginPageApi): Promise<void>;
+  /** A step failed: return a clearer error when the plugin knows the real cause. */
+  explainFailure?(err: AgentError, api: PluginPageApi): Promise<AgentError | undefined>;
+  /** inspect: warnings about the page (e.g. "the app never left its splash screen"). */
+  inspectNotes?(page: Page): Promise<string[]>;
+  /** After the last step (e.g. report blocked requests). */
+  finish?(api: PluginPageApi): Promise<void>;
   /** A text field was just focused/cleared, before typing. */
   afterFocus?(loc: Locator): Promise<void>;
   /** Acts the core doesn't know. Return undefined if not handled. */
@@ -46,9 +66,9 @@ export interface NaraPlugin {
 }
 
 /** Plugins a script turned on (empty for almost every script). */
-export function pluginsFor(script: Pick<DemoScript, "plugins">): NaraPlugin[] {
+export function pluginsFor(script: Pick<DemoScript, "plugins" | "baseUrl">): NaraPlugin[] {
   const out: NaraPlugin[] = [];
-  if (script.plugins?.flutter) out.push(flutterPlugin(script.plugins.flutter));
+  if (script.plugins?.flutter) out.push(flutterPlugin(script.plugins.flutter, script.baseUrl));
   return out;
 }
 

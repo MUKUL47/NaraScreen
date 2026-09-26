@@ -120,6 +120,8 @@ export const COMMANDS: CommandDoc[] = [
       { flag: "--viewport <WxH>", name: "viewport", type: "string", desc: "Browser size, e.g. 1440x900." },
       { flag: "--storage-state <file>", name: "storage-state", type: "string", desc: "Start logged in with this Playwright storageState." },
       { flag: "--full-page", name: "full-page", type: "boolean", desc: "Also save a full-page screenshot." },
+      { flag: "--plugin <name>", name: "plugin", type: "string", desc: "Recording plugin to inspect with, e.g. flutter (a Flutter web build as a phone, with its accessibility tree switched on). A --script's own plugins are used otherwise." },
+      { flag: "--device <name>", name: "device", type: "string", desc: "With --plugin flutter: the phone to emulate (pixel-7 | pixel-9-pro | galaxy-s24 | small-phone; default pixel-7)." },
       out("Folder for screenshots and the accessibility tree (default ./narascreen-out/inspect/<time>)."),
       headed,
     ],

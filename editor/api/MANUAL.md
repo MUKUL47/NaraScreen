@@ -534,7 +534,9 @@ at the phone's real resolution, touch taps and swipes, Flutter's Android look. T
 - **Selectors work like on a website.** Flutter draws on a canvas, but the plugin switches on Flutter's
   accessibility tree (invisible elements with roles and names laid over the widgets), so `inspect` lists
   buttons, textboxes, tabs, headings and list items with ready-to-paste selectors. Use
-  `inspect --script <script> --until <step>` (the plugin is set in the script; plain `inspect --url` is a desktop browser).
+  `inspect --url <page> --plugin flutter [--device pixel-7]` (HTTP: `"options": {"url": …, "plugin": "flutter"}`),
+  or `inspect --script <script> --until <step>` (the plugin comes from the script). Without the plugin,
+  `inspect` sees only an "Enable accessibility" button.
   Names come from the widgets' text / `Semantics` labels / tooltips — a list tile is named by all its
   texts, e.g. `"20 Task 20 Normal"` (names match by substring, so `"Task 20"` finds it — watch out for
   `"Task 2"` also matching `"Task 20"`: use more of the name or `"exact": true`).
@@ -549,6 +551,22 @@ at the phone's real resolution, touch taps and swipes, Flutter's Android look. T
   - `distance` (0.1–1, default 0.6 of the area) and `durationMs` (default 400; faster = longer fling).
 - **Overlays are scaled to the phone**: callout/arrow text, subtitles, arrow size and blur strength grow
   with the pixel ratio, so they look the same as on a desktop video.
+- **Check the build first:** `doctor --script <script>` includes a `flutter` check (baseUrl is up and
+  serves a Flutter web build); `check`/`make` refuse a non-Flutter baseUrl with `FLUTTER_NOT_WEB_BUILD`.
+- **When the app never becomes usable** — e.g. the splash screen waits for a native-only plugin
+  (path_provider, file cookie jars, secure storage, camera, GPS) that never answers on web — the first
+  step that can't find its element fails with **`FLUTTER_APP_NOT_READY`** instead of a plain timeout.
+  A canvas app has no DOM to debug, so `error.details` carries what there is: `visibleLabels`,
+  `semanticsSnapshot`, `console` (every level), `pageErrors`, `unhandledRejections`, `pendingRequests`,
+  a `screenshot`, and the original error as `cause`. The fix is in the app: a web branch (`kIsWeb`)
+  for whatever it awaits at startup. `inspect` warns about such a screen too.
+  If Flutter's accessibility tree can't be switched on at all: `FLUTTER_SEMANTICS_UNAVAILABLE`.
+- **Don't record against production.** A release web build has its API address baked in (dotenv,
+  `--dart-define`), so a demo can log in to — and change — real data. NaraScreen warns when the app
+  calls a host other than baseUrl's. To enforce it, list the hosts the demo may use:
+  `"plugins": {"flutter": {"allowedHosts": ["localhost:8090"]}}` — every other host is blocked and the
+  run fails with `BLOCKED_REQUEST` (details list the blocked requests). baseUrl's own host and Flutter's
+  font/engine CDNs (fonts.gstatic.com, fonts.googleapis.com, www.gstatic.com) are always allowed.
 - **Keep effects on their screen:** an effect without narration after it stays 3 s (`auto`) — if the next
   tap opens another screen sooner, it would linger. Narrate right after it (the frame freezes while
   speaking), or give it a `duration`.
@@ -640,7 +658,9 @@ From the CLI, `--events json` prints the same events as JSON lines on stderr.
 | `WAIT_TIMEOUT` | The step before didn't lead where you expected. Look at `error.details.screenshot`. |
 | `TARGET_NOT_VISIBLE` | Open the menu/tab/dialog that contains it first, or it's covered by something (close the popup). |
 | `swipe … to` → `SELECTOR_NOT_FOUND` "never came on screen" | Wrong direction (`up` = towards later items), wrong name (look at `inspect` after swiping there), or raise `maxSwipes`. |
-| Flutter app: `inspect` shows only "Enable accessibility" / nothing | Use `inspect --script` with `plugins.flutter` in the script, and check the page really is the Flutter web build. |
+| Flutter app: `inspect` shows only "Enable accessibility" / nothing | Add `--plugin flutter` (or use `inspect --script` with `plugins.flutter`), and check the page really is the Flutter web build. |
+| `FLUTTER_APP_NOT_READY` | The app is stuck on its first screen. Read `details.console` / `pendingRequests` / `unhandledRejections`; give the startup code a web fallback. |
+| `BLOCKED_REQUEST` | The build calls a backend outside `allowedHosts` — rebuild it against the demo backend, or allow the host if it is safe. |
 | `ACTION_FAILED` on an `upload`: "neither a file input nor something that opens a file picker" | Point at the `<input type=file>` (listed by `inspect` with `"inputType": "file"`, even when hidden), or at the button that opens the picker. Drag-and-drop-only zones are not supported. |
 | `ACTION_FAILED` on an `upload`: "accepts only one" | The input has no `multiple`: pass one file, or use the site's multi-file input. |
 | Duplicates / "already exists" in the video | `check` and `inspect --until` really performed the steps. Reset the site's data before `make`. |
