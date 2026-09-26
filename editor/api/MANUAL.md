@@ -365,7 +365,7 @@ disappeared before you reached it (act on it sooner or don't target it).
 |---|---|---|---|
 | `narrate` | Voiceover; the frame freezes while it plays (`freeze: false` = video keeps moving) | no | length of the speech + 0.5 s |
 | `zoom` | Smooth zoom into the element on a frozen frame, hold, zoom out. Add `narrate` to talk while zoomed in | yes | `zoomDuration` in + hold + out; hold = speech length when narrated, else `zoomHold` |
-| `spotlight` | Everything except the element is dimmed | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
+| `spotlight` | Everything except the element is dimmed; `padding` (px) leaves extra room around it | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
 | `arrow` | An animated arrow points at the element: a dashed line drawn in dash by dash, then the head; optional `text` label at its tail. The page stays bright (a lighter touch than spotlight) | yes | `auto` (default), `step-end`, `end`, or seconds |
 | `callout` | Text label: `label` (at the element), `lower-third` (bottom banner), `step-counter` ("Step N: …") | `label`/`step-counter`: yes | `auto` or seconds |
 | `blur` | The element is blurred (hide secrets) | yes | `step-end` (default), `end` (rest of the video), `auto`, or seconds |
@@ -373,6 +373,14 @@ disappeared before you reached it (act on it sooner or don't target it).
 | `speed` | A stretch plays faster (`factor: 3`) or in slow motion (`factor: 0.5`) | no | a range (below) |
 | `skip` | A stretch is cut out — e.g. waiting for a slow page | no | a range (below) |
 | `mute` | The source video's own sound is silenced (only for edited videos — browser recordings are silent anyway) | no | a range (below) |
+
+**Spotlight padding:** by default the bright area is the element's exact box. `"padding": 12` adds 12 px on
+every side (clamped to the frame) — use it when the box is tight, e.g. a button whose border or shadow
+would otherwise be dimmed, or a text field with its label just outside. With `anchors`, every box gets it.
+
+```json
+{ "fx": "spotlight", "anchor": { "role": "button", "name": "Save" }, "padding": 12 }
+```
 
 **Several at once:** `spotlight` and `blur` take `anchors: [ … ]` to light or blur several elements
 together (they must all be on screen at the same moment). `zoom` takes `targets: [{ "anchor": …, "narrate": "…" }, …]`
@@ -549,7 +557,7 @@ at the phone's real resolution, touch taps and swipes, Flutter's Android look. T
     to, so this is how you reach them. `maxSwipes` (default 10).
   - An optional selector (e.g. a carousel) makes the finger start inside that element.
   - `distance` (0.1–1, default 0.6 of the area) and `durationMs` (default 400; faster = longer fling).
-- **Overlays are scaled to the phone**: callout/arrow text, subtitles, arrow size and blur strength grow
+- **Overlays are scaled to the phone**: callout/arrow text, subtitles, arrow size, spotlight `padding` and blur strength grow
   with the pixel ratio, so they look the same as on a desktop video.
 - **Check the build first:** `doctor --script <script>` includes a `flutter` check (baseUrl is up and
   serves a Flutter web build); `check`/`make` refuse a non-Flutter baseUrl with `FLUTTER_NOT_WEB_BUILD`.

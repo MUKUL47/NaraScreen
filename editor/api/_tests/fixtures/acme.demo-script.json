@@ -33,7 +33,8 @@
             { "role": "article", "name": "Open tasks" },
             { "role": "article", "name": "Overdue" }
           ],
-          "note": "Two cards lit at once: they are on screen together."
+          "padding": 10,
+          "note": "Two cards lit at once: they are on screen together. padding: a little room around each."
         },
         { "fx": "narrate", "narrate": "Open work and anything overdue sit side by side, so nothing slips through." },
         {

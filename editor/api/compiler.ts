@@ -169,6 +169,15 @@ function narrationFields(
   return { narrations: { [narr.lang]: narr.text }, ...(clip ? { audioPath: { [narr.lang]: clip.audioPath } } : {}) };
 }
 
+/** Grow a box by `p` px on every side, kept inside the frame. */
+function padRect([x, y, w, h]: Rect, p: number, vp: { width: number; height: number }): Rect {
+  const x0 = Math.max(0, x - p);
+  const y0 = Math.max(0, y - p);
+  const x1 = Math.min(vp.width, x + w + p);
+  const y1 = Math.min(vp.height, y + h + p);
+  return [Math.round(x0), Math.round(y0), Math.round(x1 - x0), Math.round(y1 - y0)];
+}
+
 /** A label callout as one positioned panel: above its element by default,
  *  below when there is no room, or over it; kept inside the frame (text width
  *  estimated at 0.6·fontSize per character). Lower-thirds only get a panel
@@ -245,7 +254,7 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
     }
     case "spotlight": {
       if (!rects.length) throw fail("spotlight needs a rect (anchor an element)");
-      base.spotlightRects = rects;
+      base.spotlightRects = fx.padding ? rects.map((r) => padRect(r, fx.padding!, c.viewport)) : rects;
       base.dimOpacity = fx.dimOpacity ?? 0.7;
       base.spotlightDuration = overlayDuration(fx).value;
       return done();

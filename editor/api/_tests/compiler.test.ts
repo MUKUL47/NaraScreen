@@ -100,6 +100,18 @@ test("script.defaults override builtins", () => {
   assert.equal(a.zoomHold, 3.3);
 });
 
+test("spotlight padding: grows every lit box, kept inside the frame; no padding = exact box", () => {
+  const script = baseScript([
+    { id: "b1", beat: [{ fx: "spotlight", anchors: [{ text: "A" }, { text: "B" }], padding: 12, duration: 3 }] },
+  ]);
+  const trace: TraceEntry[] = [
+    { beat: "b1", i: 0, kind: "fx", fx: "spotlight", t: 1, rect: [180, 260, 640, 44], rects: [[180, 260, 640, 44], [1400, 5, 30, 20]] },
+  ];
+  const [a] = compile(script, trace);
+  // second box: 12 px would cross the right (1440) and top (0) edges → clamped
+  assert.deepEqual(a.spotlightRects, [[168, 248, 664, 68], [1388, 0, 52, 37]]);
+});
+
 test("spotlight: wraps rect in an array, defaults dim, explicit duration as-is", () => {
   const script = baseScript([
     { id: "b1", beat: [{ fx: "spotlight", anchor: { text: "Acme HQ" }, duration: 4 }] },

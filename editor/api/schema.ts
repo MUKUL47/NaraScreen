@@ -193,6 +193,8 @@ export interface FxEntry {
   zoomDuration?: number;
   zoomHold?: number;
   dimOpacity?: number;
+  /** spotlight: extra room (px) around each lit element (default 0 = its exact box). */
+  padding?: number;
   radius?: number;
   /** pause: seconds to freeze. speed/skip/mute: length of the range. */
   seconds?: number;
@@ -440,6 +442,7 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
     rects: z.array(RectSchema).min(1).max(10).optional(),
     duration: DurationSchema.optional(),
     dimOpacity: z.number().min(0).max(1).optional().describe("How dark the rest of the screen gets (default 0.7)."),
+    padding: z.number().int().min(0).max(200).optional().describe("Extra room in px around each lit element (default 0 = its exact box). E.g. 12 so a button's edges and shadow stay bright. Clamped to the frame."),
   }, "Dim everything except one or more elements."),
   fx("arrow", {
     anchor: SelectorSchema.optional(),

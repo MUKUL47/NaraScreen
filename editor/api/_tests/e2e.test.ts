@@ -942,7 +942,7 @@ describe("narascreen CLI, end to end", () => {
         steps: [
           { id: "list", beat: [
             { act: "waitFor", role: "button", name: "1 Task 1 High priority" },
-            { fx: "spotlight", anchor: { role: "button", name: "New task" } },
+            { fx: "spotlight", anchor: { role: "button", name: "New task" }, padding: 8 },
             { fx: "narrate", narrate: "Your tasks, on your phone." },
           ] },
           { id: "scroll", beat: [
@@ -992,6 +992,11 @@ describe("narascreen CLI, end to end", () => {
       assert.ok(arrow?.arrowScale > 2.5, `arrow scaled for the dense video: ${arrow?.arrowScale}`);
       const label = (project.actions as Rec[]).find((a) => a.type === "callout" && a.calloutStyle !== "arrow");
       assert.ok(label?.calloutPanels?.[0]?.fontSize >= 70, `callout text scaled (28 × 2.6): ${JSON.stringify(label?.calloutPanels)}`);
+      // spotlight padding 8 CSS px → ×2.6 in video px on every side
+      const spot = (project.actions as Rec[]).find((a) => a.type === "spotlight");
+      const spotSlot = trace.find((e) => e.fx === "spotlight");
+      assert.ok(spot && spotSlot?.rect, "spotlight compiled");
+      assert.ok(Math.abs(spot.spotlightRects[0][2] - (spotSlot.rect[2] + 2 * 21)) <= 2, `padding scaled with the phone: ${spot.spotlightRects[0]} vs ${spotSlot.rect}`);
       const narr = (project.actions as Rec[]).find((a) => a.type === "narrate");
       assert.ok(narr?.subtitleSize >= 70, `subtitles scaled (28 × 2.6): ${narr?.subtitleSize}`);
 

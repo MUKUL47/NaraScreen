@@ -159,6 +159,7 @@ function scaleOverlays(script: DemoScript, k: number): DemoScript {
       else if (e.fx === "arrow") e.fontSize = up(e.fontSize ?? 24);
       else if (e.fx === "narrate") e.subtitleSize = up(e.subtitleSize ?? 28);
       else if (e.fx === "blur") e.radius = up(e.radius ?? 20);
+      else if (e.fx === "spotlight" && e.padding) e.padding = up(e.padding);
     }
   }
   return copy;

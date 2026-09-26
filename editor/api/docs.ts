@@ -94,7 +94,7 @@ export function buildLlmsTxt(baseUrl: string): string {
     `with the raw bytes, then use result.relativePath in the script, e.g. {"act":"upload","role":"button","name":"Choose file","files":"uploads/<name>"}.`,
     "Note: check and inspect --until perform the script's actions for real (saves, uploads persist) — reset the site's data before make.",
     "",
-    "Effects you can put in a script: narrate (voiceover), zoom, spotlight, arrow (animated pointer, page stays bright), callout (text label),",
+    "Effects you can put in a script: narrate (voiceover), zoom, spotlight (optional padding around the element), arrow (animated pointer, page stays bright), callout (text label),",
     "blur (hide secrets), pause, speed, skip, mute. Field-by-field reference: /docs.md (generated from the schema).",
     "Flutter apps: add \"plugins\": {\"flutter\": {}} to record the app's web build as an Android phone (portrait video, taps, `swipe` act) — see \"Flutter apps\" in /docs.md.",
     "",
