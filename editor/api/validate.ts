@@ -6,6 +6,7 @@
 //   3. semantics — selector rules, element inheritance, languages, voices, files
 // Throws AgentError (SCRIPT_* / ENV_VAR_MISSING). Returns warnings otherwise.
 
+import { checkPlugins } from "./plugins";
 import * as fs from "fs";
 import * as path from "path";
 import { z } from "zod";
@@ -100,6 +101,7 @@ export function validateScript(
   const script = DemoScriptSchema.parse(resolved) as unknown as DemoScript;
   const warnings: string[] = [];
   const semantic = checkSemantics(script, ctx.dir, warnings);
+  semantic.push(...checkPlugins(script, resolved, warnings));
   if (semantic.length) throw invalid(semantic);
   return { script, warnings };
 }
@@ -335,7 +337,7 @@ function checkSemantics(script: DemoScript, dir: string, warnings: string[]): Sc
           return;
         }
         checkAct(entry, ep, dir, issues, warnings);
-        if (RECT_ACTS.includes(entry.act) && countSelectorKeys(entry) > 0) hasRect = true;
+        if (RECT_ACTS.includes(entry.act) && (countSelectorKeys(entry) > 0 || (entry.act === "swipe" && entry.to))) hasRect = true;
         return;
       }
       if (!isFx(entry)) return;
@@ -525,7 +527,7 @@ function checkAct(e: ActEntry, ep: string, dir: string, issues: ScriptIssue[], w
 
   if (TARGETED_ACTS.includes(e.act)) {
     checkSelector(e, ep, issues, true);
-  } else if (e.act === "press" || e.act === "scroll") {
+  } else if (e.act === "press" || e.act === "scroll" || e.act === "swipe") {
     if (countSelectorKeys(e) > 0) checkSelector(e, ep, issues, true);
     else checkSelector(e, ep, issues, false);
     if (e.act === "scroll" && countSelectorKeys(e) === 0 && e.y == null) {
@@ -538,6 +540,8 @@ function checkAct(e: ActEntry, ep: string, dir: string, issues: ScriptIssue[], w
     if (!fs.existsSync(p)) issues.push({ path: `${ep}.storageState`, message: `file not found: ${p}` });
     e.storageState = p;
   }
+
+  if (e.act === "swipe" && e.to) checkSelector(e.to, `${ep}.to`, issues, true);
 
   if (e.act === "upload" && e.files != null) {
     const list = Array.isArray(e.files) ? e.files : [e.files];

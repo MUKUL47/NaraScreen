@@ -42,6 +42,8 @@ export interface Action {
   /** calloutStyle "arrow": direction the arrow comes from (default: first that fits) and its colour */
   arrowFrom?: string;
   arrowColor?: string;
+  /** Arrow size multiplier (default: from the video size). */
+  arrowScale?: number;
   musicPath?: string;
   musicVolume?: number;
   musicDuckTo?: number;

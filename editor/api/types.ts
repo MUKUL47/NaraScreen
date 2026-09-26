@@ -74,6 +74,8 @@ export interface NaraAction {
   /** calloutStyle "arrow": direction the arrow comes from (default: first that fits) and its colour */
   arrowFrom?: string;
   arrowColor?: string;
+  /** Arrow size multiplier (default: from the video size). */
+  arrowScale?: number;
   // blur
   blurRects?: Rect[];
   blurRadius?: number;

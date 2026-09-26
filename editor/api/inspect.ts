@@ -15,6 +15,7 @@
 // Output folder: screenshot.png, fullpage.png (--full-page), aria.txt (the full
 // accessibility tree), elements.json (the same list as the result).
 
+import { pluginsFor } from "./plugins";
 import * as fs from "fs";
 import * as path from "path";
 import type { Page } from "@playwright/test";
@@ -96,7 +97,8 @@ export async function inspect(opts: InspectOptions): Promise<InspectResult> {
         stage("inspect", `Inspecting ${page.url()}`);
       }
       await settle(page);
-      result = await capture(page, outDir, !!opts.fullPage, script.viewport, log);
+      for (const p of pluginsFor(script)) await p.ready?.(page, 15_000);
+      result = await capture(page, outDir, !!opts.fullPage, pluginsFor(script).find((p) => p.browserViewport)?.browserViewport ?? script.viewport, log);
     },
   });
   if (!result) throw new AgentError("INTERNAL", "inspect finished without capturing the page");

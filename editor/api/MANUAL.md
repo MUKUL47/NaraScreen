@@ -492,6 +492,69 @@ Never put real passwords directly in a script.
 
 ---
 
+## Flutter apps (recorded as an Android phone)
+
+A Flutter app that builds for the web (`flutter build web`) can be recorded as a phone: portrait video
+at the phone's real resolution, touch taps and swipes, Flutter's Android look. Turn on the plugin:
+
+```json
+{
+  "version": 1,
+  "scope": "Acme mobile",
+  "baseUrl": "http://localhost:8080",
+  "plugins": { "flutter": { "device": "pixel-7" } },
+  "setup": [
+    { "act": "goto", "path": "/" },
+    { "act": "fill", "role": "textbox", "name": "Email", "value": "demo@example.com" },
+    { "act": "fill", "role": "textbox", "name": "Password", "value": "${env:DEMO_PASSWORD}" },
+    { "act": "click", "role": "button", "name": "Sign in" },
+    { "act": "waitFor", "role": "heading", "name": "Tasks" }
+  ],
+  "steps": [
+    { "id": "find", "beat": [
+      { "act": "swipe", "direction": "up", "to": { "role": "button", "name": "Task 20" } },
+      { "fx": "arrow", "text": "Your task" },
+      { "fx": "narrate", "narrate": "Swipe down the list to find any task." }
+    ] },
+    { "id": "cards", "beat": [
+      { "act": "click", "role": "tab", "name": "Highlights" },
+      { "act": "swipe", "direction": "left" },
+      { "fx": "narrate", "narrate": "Swipe sideways through your highlights." }
+    ] }
+  ]
+}
+```
+
+- **Serve the web build** somewhere the recorder can open (e.g. `cd build/web && python3 -m http.server 8080`)
+  and use that address as `baseUrl`. Only the screen is recorded — no camera, GPS, push notifications or
+  native plugins; screens that need them won't work in the web build.
+- **`device`**: `pixel-7` (default, 412×915 → video 1082×2402), `pixel-9-pro`, `galaxy-s24`, `small-phone`,
+  or `{"width": 412, "height": 915, "pixelRatio": 2.625}`. The video is the phone's pixel size; don't set
+  `viewport` (it is ignored). Use `output.resolution` only if you want a landscape frame (it letterboxes).
+- **Selectors work like on a website.** Flutter draws on a canvas, but the plugin switches on Flutter's
+  accessibility tree (invisible elements with roles and names laid over the widgets), so `inspect` lists
+  buttons, textboxes, tabs, headings and list items with ready-to-paste selectors. Use
+  `inspect --script <script> --until <step>` (the plugin is set in the script; plain `inspect --url` is a desktop browser).
+  Names come from the widgets' text / `Semantics` labels / tooltips — a list tile is named by all its
+  texts, e.g. `"20 Task 20 Normal"` (names match by substring, so `"Task 20"` finds it — watch out for
+  `"Task 2"` also matching `"Task 20"`: use more of the name or `"exact": true`).
+- **Taps**: `click` taps with a finger (no mouse hover, so no tooltips). `fill` types into Flutter text fields.
+- **`swipe`** (this plugin only):
+  - `{"act": "swipe", "direction": "up"}` — finger moves up = scroll to later content; `down` = back;
+    `left` = next page/card; `right` = previous.
+  - `"to": {selector}` — keep swiping until that element is on screen, then centre it. Its box becomes the
+    target of the following fx (arrow, spotlight, zoom…). Items far down a list don't exist until scrolled
+    to, so this is how you reach them. `maxSwipes` (default 10).
+  - An optional selector (e.g. a carousel) makes the finger start inside that element.
+  - `distance` (0.1–1, default 0.6 of the area) and `durationMs` (default 400; faster = longer fling).
+- **Overlays are scaled to the phone**: callout/arrow text, subtitles, arrow size and blur strength grow
+  with the pixel ratio, so they look the same as on a desktop video.
+- **Keep effects on their screen:** an effect without narration after it stays 3 s (`auto`) — if the next
+  tap opens another screen sooner, it would linger. Narrate right after it (the frame freezes while
+  speaking), or give it a `duration`.
+
+---
+
 ## Editing an existing video
 
 NaraScreen can also narrate and edit a video that already exists (a screen recording someone made,
@@ -576,6 +639,8 @@ From the CLI, `--events json` prints the same events as JSON lines on stderr.
 | `SELECTOR_NOT_FOUND` | Use a selector from `error.details.candidates`, or `inspect --script … --until <previous step>` to see the page at that point. |
 | `WAIT_TIMEOUT` | The step before didn't lead where you expected. Look at `error.details.screenshot`. |
 | `TARGET_NOT_VISIBLE` | Open the menu/tab/dialog that contains it first, or it's covered by something (close the popup). |
+| `swipe … to` → `SELECTOR_NOT_FOUND` "never came on screen" | Wrong direction (`up` = towards later items), wrong name (look at `inspect` after swiping there), or raise `maxSwipes`. |
+| Flutter app: `inspect` shows only "Enable accessibility" / nothing | Use `inspect --script` with `plugins.flutter` in the script, and check the page really is the Flutter web build. |
 | `ACTION_FAILED` on an `upload`: "neither a file input nor something that opens a file picker" | Point at the `<input type=file>` (listed by `inspect` with `"inputType": "file"`, even when hidden), or at the button that opens the picker. Drag-and-drop-only zones are not supported. |
 | `ACTION_FAILED` on an `upload`: "accepts only one" | The input has no `multiple`: pass one file, or use the site's multi-file input. |
 | Duplicates / "already exists" in the video | `check` and `inspect --until` really performed the steps. Reset the site's data before `make`. |

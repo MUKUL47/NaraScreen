@@ -36,6 +36,7 @@ import {
   suggestRole,
   ARIA_ROLES,
 } from "./page-elements";
+import { pluginsFor, type NaraPlugin, type PluginActApi } from "./plugins";
 import { startScreencast, type Screencast } from "./screencast";
 import { RANGE_FX } from "./schema";
 import {
@@ -91,7 +92,10 @@ const round3 = (n: number) => Math.round(n * 1000) / 1000;
 /** Everything the step executors need. */
 interface Env {
   page: Page;
+  /** The script as the browser sees it (a plugin may record at another size: see run()). */
   script: DemoScript;
+  /** Recording plugins the script turned on (usually none). */
+  plugins: NaraPlugin[];
   failuresDir: string;
   warnings: string[];
   log: Log;
@@ -140,16 +144,23 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
     });
   }
 
+  // A plugin (e.g. flutter) may run the browser at a phone's CSS size while
+  // script.viewport is the video size; the runner measures in browser px.
+  const plugins = pluginsFor(script);
+  const browserViewport = plugins.find((p) => p.browserViewport)?.browserViewport;
+  const browserScript: DemoScript = browserViewport ? { ...script, viewport: browserViewport } : script;
+
   const browser = await launchBrowser(!!opts.headed);
   const framesDir = path.join(recordingsDir, "frames");
   let screencast: Screencast | null = null;
   let env: Env | undefined;
   try {
-    const context = await newContext(browser, script);
+    const context = await newContext(browser, browserScript, plugins);
     const page = await context.newPage();
     env = {
       page,
-      script,
+      script: browserScript,
+      plugins,
       failuresDir: path.resolve(opts.failuresDir),
       warnings: [],
       log,
@@ -355,8 +366,8 @@ async function runStep(
       kind: isAct(entry) ? "act" : "fx",
       ...(isAct(entry) ? { act: entry.act } : { fx: entry.fx }),
       t,
-      ...(rect ? { rect } : {}),
-      ...(rects ? { rects } : {}),
+      ...(rect ? { rect: env.plugins.length ? videoRect(env, rect) : rect } : {}),
+      ...(rects ? { rects: env.plugins.length ? rects.map((x) => videoRect(env, x)) : rects } : {}),
     });
     env.log(`${where.path} ${describeEntry(entry)} · t=${t.toFixed(2)}s`);
     await sleep(dwell);
@@ -373,6 +384,7 @@ function describeEntry(e: Beat["beat"][number]): string {
       e.act === "select" ? ` "${e.option}"` :
       e.act === "useSession" ? ` ${e.storageState}` :
       e.act === "upload" ? ` ${uploadList(e).map((f) => path.basename(f)).join(", ")}` :
+      e.act === "swipe" ? ` ${e.direction}${e.to ? ` to ${describeSelector(e.to)}` : ""}` :
       e.act === "scroll" && !sel ? ` y=${e.y}` : "";
     return `${e.act}${sel ? ` ${describeSelector(sel)}` : ""}${extra}`;
   }
@@ -418,7 +430,7 @@ async function launchBrowser(headed: boolean): Promise<Browser> {
   }
 }
 
-async function newContext(browser: Browser, script: DemoScript): Promise<BrowserContext> {
+async function newContext(browser: Browser, script: DemoScript, plugins: NaraPlugin[] = []): Promise<BrowserContext> {
   try {
     return await browser.newContext({
       // baseURL makes goto("/settings") resolve against the site.
@@ -428,6 +440,7 @@ async function newContext(browser: Browser, script: DemoScript): Promise<Browser
       // pixels == CSS pixels == trace rects, with crisper text.
       deviceScaleFactor: 2,
       ...(script.storageState ? { storageState: script.storageState } : {}),
+      ...Object.assign({}, ...plugins.map((p) => p.contextOptions ?? {})),
     });
   } catch (err) {
     if (script.storageState) {
@@ -490,6 +503,11 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   const { page } = env;
   const timeout = e.timeoutMs ?? d.timeoutMs;
   const sel = pickSelector(e);
+  for (const p of env.plugins) await p.ready?.(page, timeout);
+  if (env.plugins.length) {
+    const res = await pluginAct(env, e, where, timeout);
+    if (res) return res;
+  }
 
   switch (e.act) {
     case "goto":
@@ -543,7 +561,7 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
 
   switch (e.act) {
     case "click":
-      await attempt(env, where, sel, "click", () => loc.click({ timeout }));
+      await attempt(env, where, sel, "click", () => (env.plugins.some((p) => p.touch) ? loc.tap({ timeout }) : loc.click({ timeout })));
       break;
     case "hover":
       await attempt(env, where, sel, "hover", () => loc.hover({ timeout }));
@@ -554,6 +572,7 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       const typing = timeout + value.length * (d.typeDelayMs + 30);
       await attempt(env, where, sel, "type into", async () => {
         await loc.fill("", { timeout });
+        for (const p of env.plugins) await p.afterFocus?.(loc);
         if (value) await loc.pressSequentially(value, { delay: d.typeDelayMs, timeout: typing });
       });
       break;
@@ -567,6 +586,27 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   // The act may have moved the element (layout change, textarea growing, an
   // auto-scroll): fx that inherit it use where it is NOW; if it is gone, where it was.
   return { rect, focus: (await currentRect(loc)) ?? rect };
+}
+
+/** Browser px → video px (only differs when a plugin records at another size). */
+function videoRect(env: Env, r: Rect): Rect {
+  return env.plugins.reduce((acc, p) => (p.toVideo ? p.toVideo(acc) : acc), r);
+}
+
+/** Let a plugin carry out an act it owns (e.g. flutter's swipe). */
+async function pluginAct(env: Env, e: ActEntry, where: ErrorWhere, timeout: number): Promise<ActResult | undefined> {
+  const api: PluginActApi = {
+    page: env.page,
+    timeoutMs: timeout,
+    resolve: (sel, t) => resolveTarget(env, sel, where, t),
+    locate: (sel) => locate(env.page, sel),
+    fail: (code, message, init) => failure(env, code, `${label(where)}: ${message}`, { where, ...init }),
+  };
+  for (const p of env.plugins) {
+    const res = await p.runAct?.(e, api);
+    if (res) return res;
+  }
+  return undefined;
 }
 
 function uploadList(e: ActEntry): string[] {
@@ -1325,6 +1365,7 @@ export async function gotoPage(
   const env: Env = {
     page,
     script: { baseUrl: opts.baseUrl } as DemoScript,
+    plugins: [],
     failuresDir: path.resolve(opts.failuresDir),
     warnings: [],
     log: () => {},

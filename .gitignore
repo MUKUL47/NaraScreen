@@ -6,6 +6,7 @@ dist-electron/
 dist-web/
 out/
 build/
+.dart_tool/
 release/
 *.local
 

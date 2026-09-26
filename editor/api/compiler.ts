@@ -18,6 +18,7 @@
 // reproduces the producer's skip/speed remap and insert pass (order, lengths,
 // bookkeeping) so these numbers match what produce.ts really renders.
 
+import { pluginsFor } from "./plugins";
 import { AgentError, type AgentErrorInit } from "./errors";
 import {
   narrationLanguageNote,
@@ -317,13 +318,16 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
  * unjoinable entry.
  */
 export function compile(
-  script: DemoScript,
+  scriptIn: DemoScript,
   trace: TraceEntry[],
   lang = "en",
   clips?: Map<string, NarrationClip>,
   warnings: string[] = [],
   opts: CompileOptions = {},
 ): NaraAction[] {
+  // Recording plugins may restyle overlays for their video (e.g. flutter: phone pixel density).
+  const plugins = pluginsFor(scriptIn);
+  const script = plugins.reduce((acc, p) => p.compileScript?.(acc) ?? acc, scriptIn);
   const d: DemoDefaults = { ...BUILTIN_DEFAULTS, ...script.defaults };
   const byKey = indexTrace(trace);
   const speakers = new Map(narrationSlots(script).map((sp) => [sp.key, sp]));
@@ -395,6 +399,7 @@ export function compile(
   const tl = modelTimeline(actions, (p) => clipSec.get(p));
 
   resolveOverlays(kept, actions, tl, warnings);
+  for (const p of plugins) p.adjustActions?.(actions);
   return actions;
 }
 

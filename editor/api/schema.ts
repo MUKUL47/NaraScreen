@@ -13,6 +13,7 @@
 //
 // Nothing here may mention a specific target app: the engine is app-agnostic.
 
+import { FlutterPluginSchema, SWIPE_DIRECTIONS, swipeFields, type FlutterPluginOptions } from "./plugins/flutter/schema";
 import { z } from "zod";
 import { LANG_CODES } from "../src/lib/voices";
 
@@ -58,7 +59,8 @@ export type ActVerb =
   | "press"
   | "scroll"
   | "useSession"
-  | "upload";
+  | "upload"
+  | "swipe";
 
 export type FxVerb =
   | "zoom"
@@ -85,7 +87,7 @@ export const SELECTOR_KEYS = ["role", "label", "text", "placeholder", "testId", 
 export const TARGETED_ACTS: ActVerb[] = ["waitFor", "click", "fill", "select", "hover", "upload"];
 /** Verbs whose element's box becomes the default target of following fx
  *  (when they have a selector; the box is measured after the act). */
-export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll", "waitFor", "press", "upload"];
+export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll", "waitFor", "press", "upload", "swipe"];
 /** fx that need an element box (anchor or inherited from the previous act). */
 export const RECT_FX: FxVerb[] = ["zoom", "spotlight", "blur", "arrow"];
 /** fx that draw over the video for a time window (duration may be "auto"). */
@@ -135,6 +137,12 @@ export interface ActEntry extends Selector {
   storageState?: string;
   /** upload: file(s) to choose. Relative to the script; absolute after validation. */
   files?: string | string[];
+  /** swipe (flutter plugin): finger direction, travel (fraction), speed, and "until this is on screen". */
+  direction?: (typeof SWIPE_DIRECTIONS)[number];
+  distance?: number;
+  durationMs?: number;
+  to?: Selector;
+  maxSwipes?: number;
   /** waitFor: override defaults.timeoutMs. */
   timeoutMs?: number;
   note?: string;
@@ -268,6 +276,8 @@ export interface DemoScript {
   defaults?: Partial<DemoDefaults>;
   tts?: TtsConfig;
   languages?: string[];
+  /** Optional recording plugins (e.g. flutter: record a Flutter web build as a phone). */
+  plugins?: { flutter?: FlutterPluginOptions };
   steps: Beat[];
 }
 
@@ -360,6 +370,10 @@ export const ActEntrySchema = z.discriminatedUnion("act", [
     storageState: str().describe("Path to a Playwright storageState JSON (cookies + localStorage)."),
     path: str().optional().describe("Where to navigate after switching (default: reload current page)."),
   }, "Switch to another logged-in session mid-demo (e.g. a second user)."),
+  act("swipe", {
+    ...selectorShape,
+    ...swipeFields(SelectorSchema),
+  }, "Swipe with one finger (flutter plugin). Optional selector = where the finger starts (e.g. a carousel); default the middle of the screen."),
   act("upload", {
     ...selectorShape,
     files: z
@@ -529,6 +543,11 @@ export const DemoScriptSchema = z
     defaults: DefaultsSchema.optional(),
     tts: TtsSchema.optional(),
     languages: z.array(z.enum(TTS_LANGUAGES)).min(1).optional().describe("Languages to produce (one video each). Default [\"en\"]."),
+    plugins: z
+      .object({ flutter: FlutterPluginSchema.optional() })
+      .strict()
+      .optional()
+      .describe("Optional recording plugins. flutter: record a Flutter web build as an Android phone (see the manual)."),
     music: z
       .object({
         path: str().describe("Audio file (mp3/wav/m4a/ogg), relative to this script. Loops to fill the video."),

@@ -31,6 +31,7 @@ import type { Envelope, NaraEvent } from "../output.ts";
 import { DEFAULT_VOICES } from "../../src/lib/voices.ts";
 import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../../electron/ffmpeg.ts";
 import { arrowGeometry } from "../../electron/produce.ts";
+import { ensureFlutterBuild, startFlutterFixture } from "../plugins/flutter/fixture/serve.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Rec = Record<string, any>;
@@ -55,6 +56,7 @@ const SCRIPT = {
   badRect: path.join(RUN, "bad-rect.demo-script.json"),
   upload: path.join(RUN, "upload.demo-script.json"),
   arrow: path.join(RUN, "arrow.demo-script.json"),
+  flutter: path.join(RUN, "flutter.demo-script.json"),
 };
 const JOB = path.join(RUN, "job");
 const VIDEO_JOB = path.join(RUN, "job-video");
@@ -740,9 +742,9 @@ describe("narascreen CLI, end to end", () => {
   test("produce after toggling `disabled` on an effect: no re-record, the narration is left out", { timeout: 20 * MIN }, async (t) => {
     if (!needsMake(t)) return;
     const toggled = clone(acmeRaw);
-    const narr = stepOf(toggled, "open-and-overdue").beat.find((e: Rec) => e.fx === "narrate");
-    assert.ok(narr, "fixture changed: open-and-overdue should contain a narrate entry");
-    narr.disabled = true;
+    const narrs = stepOf(toggled, "open-and-overdue").beat.filter((e: Rec) => e.fx === "narrate");
+    assert.ok(narrs.length, "fixture changed: open-and-overdue should contain a narrate entry");
+    for (const n of narrs) n.disabled = true;
     writeJson(SCRIPT.acme, toggled);
     try {
       const r = await cli(["produce", JOB], { timeoutMs: 15 * MIN });
@@ -913,6 +915,105 @@ describe("narascreen CLI, end to end", () => {
     const ly = ty + Math.SQRT1_2 * 16 * g.scale;
     const [lr, lg, lb] = pixelAt(video, at + 2, lx - 25, ly - 5);
     assert.ok(lr < 90 && lg < 90 && lb < 90, `label box at the tail: ${[lr, lg, lb]}`);
+  });
+
+  // ── flutter plugin: a Flutter web build recorded as an Android phone ──
+
+  test("flutter plugin: phone-size video; semantics on; fill, tap, swipe-to and carousel swipe; overlays scaled", { timeout: 20 * MIN }, async (t) => {
+    if (!ensureFlutterBuild()) {
+      t.skip("Flutter SDK not installed (needed to build the fixture app)");
+      return;
+    }
+    const app = await startFlutterFixture();
+    try {
+      const script = {
+        version: 1,
+        scope: "Acme mobile",
+        baseUrl: app.url,
+        plugins: { flutter: { device: "pixel-7" } },
+        setup: [
+          { act: "goto", path: "/" },
+          { act: "fill", role: "textbox", name: "Email", value: "alex@example.com" },
+          { act: "fill", role: "textbox", name: "Password", value: "secret" },
+          { act: "click", role: "button", name: "Sign in" },
+          { act: "waitFor", role: "heading", name: "Tasks" },
+        ],
+        defaults: { dwellMs: 600 },
+        steps: [
+          { id: "list", beat: [
+            { act: "waitFor", role: "button", name: "1 Task 1 High priority" },
+            { fx: "spotlight", anchor: { role: "button", name: "New task" } },
+            { fx: "narrate", narrate: "Your tasks, on your phone." },
+          ] },
+          { id: "scroll", beat: [
+            { act: "swipe", direction: "up", to: { role: "button", name: "20 Task 20" } },
+            { fx: "arrow", text: "Task 20" },
+            { fx: "narrate", narrate: "Swipe down the list to find any task." },
+            { act: "click", role: "button", name: "20 Task 20" },
+            { act: "waitFor", text: "Details for Task 20" },
+            { fx: "callout", anchor: { role: "button", name: "Mark as done" }, text: "Tap when finished" },
+          ] },
+          { id: "carousel", beat: [
+            { act: "click", role: "button", name: "Mark as done" },
+            { act: "click", role: "tab", name: "Highlights" },
+            { act: "waitFor", text: "Highlight 1 of 3" },
+            { act: "swipe", direction: "left" },
+            { act: "waitFor", text: "Highlight 2 of 3" },
+            { fx: "pause", seconds: 1 },
+          ] },
+        ],
+      };
+      writeJson(SCRIPT.flutter, script);
+      expectOk(await cli(["validate", SCRIPT.flutter]), "validate");
+
+      // inspect sees Flutter's widgets (accessibility tree switched on by the plugin)
+      const ins = await cli(["inspect", "--script", SCRIPT.flutter, "--until", "list", "--out", path.join(RUN, "inspect-flutter")], { timeoutMs: 4 * MIN });
+      const els = expectOk(ins, "inspect").elements as Rec[];
+      for (const [role, name] of [["button", "New task"], ["tab", "Highlights"]]) {
+        assert.ok(els.some((e) => e.role === role && e.name === name), `inspect lists ${role} "${name}":\n${summarizeElements(els)}`);
+      }
+
+      const job = path.join(RUN, "job-flutter");
+      const r = await cli(["make", SCRIPT.flutter, "--out", job], { timeoutMs: 15 * MIN });
+      const video = (expectOk(r, "make").videos as Rec[])[0].path as string;
+      assertFile(video, "flutter video", r);
+      // Pixel 7: 412x915 CSS px × 2.625 → portrait video at the phone's real resolution
+      assert.deepEqual(probeResolution(video), { width: 1082, height: 2402 }, "video = the phone's pixels");
+
+      const trace = readTrace(job);
+      const swipeTo = trace.find((e) => e.act === "swipe" && e.rect);
+      assert.ok(swipeTo, `swipe … to leaves the found element's box in the trace: ${JSON.stringify(trace)}`);
+      assert.ok(swipeTo.rect[2] > 900, `trace boxes are in video px (a full-width row ≈ 1082 px wide): ${swipeTo.rect}`);
+      const arrowSlot = trace.find((e) => e.fx === "arrow");
+      assert.deepEqual(arrowSlot?.rect, swipeTo.rect, "the arrow points at the element the swipe brought on screen");
+
+      const project = JSON.parse(fs.readFileSync(path.join(job, "demo-project.en.json"), "utf-8")) as Rec;
+      const arrow = (project.actions as Rec[]).find((a) => a.calloutStyle === "arrow");
+      assert.ok(arrow?.arrowScale > 2.5, `arrow scaled for the dense video: ${arrow?.arrowScale}`);
+      const label = (project.actions as Rec[]).find((a) => a.type === "callout" && a.calloutStyle !== "arrow");
+      assert.ok(label?.calloutPanels?.[0]?.fontSize >= 70, `callout text scaled (28 × 2.6): ${JSON.stringify(label?.calloutPanels)}`);
+      const narr = (project.actions as Rec[]).find((a) => a.type === "narrate");
+      assert.ok(narr?.subtitleSize >= 70, `subtitles scaled (28 × 2.6): ${narr?.subtitleSize}`);
+
+      // The carousel swipe worked: the video ends on the teal "Highlight 2" page (page 1 is indigo).
+      const end = probeDuration(video) - 0.3;
+      const [pr, pg] = pixelAt(video, end, 541, 1200);
+      assert.ok(pg - pr > 25, `last frame shows Highlight 2 (teal): rgb ${pixelAt(video, end, 541, 1200)}`);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("flutter plugin: swipe without the plugin → SCRIPT_INVALID", async () => {
+    writeJson(SCRIPT.flutter, {
+      version: 1,
+      scope: "No plugin",
+      baseUrl: server.url,
+      steps: [{ id: "s", beat: [{ act: "goto", path: "/" }, { act: "swipe", direction: "up" }] }],
+    });
+    const err = expectError(await cli(["validate", SCRIPT.flutter]), "validate", "SCRIPT_INVALID");
+    const paths = (err.details?.issues as Rec[]).map((i) => i.path);
+    assert.ok(paths.includes("steps[0].beat[1]"), `expected an issue at the swipe: ${JSON.stringify(err.details?.issues)}`);
   });
 
   test("video-source script: a rect outside the frame → SCRIPT_INVALID pointing at the entry", async (t) => {

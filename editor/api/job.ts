@@ -242,6 +242,8 @@ export function structureHash(script: DemoScript): string {
       setup: (script.setup ?? []).map(entryShape),
       defaults: Object.fromEntries(RECORD_DEFAULT_KEYS.map((k) => [k, d[k]])),
       steps: script.steps.map(stepShape),
+      // Only when set, so scripts without plugins keep their existing fingerprint.
+      ...(script.plugins ? { plugins: script.plugins } : {}),
     }),
   );
 }

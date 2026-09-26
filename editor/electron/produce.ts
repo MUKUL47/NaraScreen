@@ -308,12 +308,29 @@ export function arrowGeometry(
   rect: [number, number, number, number],
   res: { width: number; height: number },
   from?: ArrowFrom,
+  scaleOverride?: number,
 ): { tail: [number, number]; tip: [number, number]; scale: number; from: ArrowFrom } {
-  const scale = Math.max(0.6, Math.min(res.height, res.width * 0.625) / 900);
+  const scale = scaleOverride ?? Math.max(0.6, Math.min(res.height, res.width * 0.625) / 900);
   const len = 150 * scale;
   const gap = 10 * scale;
   const margin = 16 * scale;
   const [x, y, w, h] = rect;
+  // Wide targets (a full-width list row, a banner): an arrow at the edge would read
+  // as pointing at the neighbour, so the tip lands INSIDE, on the right-hand part
+  // (usually empty in rows), coming from the lower right.
+  if (w > res.width * 0.6 && h < res.height * 0.6) {
+    const d = Math.SQRT1_2;
+    const tip: [number, number] = [x + w * 0.66, y + h * 0.55];
+    const pick = (f: ArrowFrom): [number, number] => {
+      const [dx, dy] = ARROW_DIRS[f];
+      return [tip[0] + dx * d * len, tip[1] + dy * d * len];
+    };
+    const inFrame = (p: [number, number]) => p[0] >= margin && p[0] <= res.width - margin && p[1] >= margin && p[1] <= res.height - margin;
+    const order: ArrowFrom[] = from ? [from] : ["bottom-right", "top-right", "bottom-left", "top-left"];
+    const f = order.find((o) => inFrame(pick(o))) ?? order[0];
+    const tail = pick(f);
+    return { tip, tail: [Math.max(margin, Math.min(res.width - margin, tail[0])), Math.max(margin, Math.min(res.height - margin, tail[1]))], scale, from: f };
+  }
   const cx = x + w / 2;
   const cy = y + h / 2;
   const place = (f: ArrowFrom) => {
@@ -366,7 +383,7 @@ function assPolygon(layer: number, start: number, end: number, pts: [number, num
 function arrowEvents(action: Action, res: { width: number; height: number }, start: number, end: number): string[] {
   const panel = action.calloutPanels?.[0];
   if (!panel) return [];
-  const g = arrowGeometry(panel.rect, res, action.arrowFrom as ArrowFrom | undefined);
+  const g = arrowGeometry(panel.rect, res, action.arrowFrom as ArrowFrom | undefined, action.arrowScale);
   const color = assBgr(action.arrowColor ?? ARROW_DEFAULT_COLOR);
   const [tx, ty] = g.tail;
   const [px, py] = g.tip;
@@ -400,8 +417,17 @@ function arrowEvents(action: Action, res: { width: number; height: number }, sta
     const dy = -uy;
     const h = dx < -0.3 ? 3 : dx > 0.3 ? 1 : 2; // right / left / centre
     const an = dy < -0.3 ? h : dy > 0.3 ? h + 6 : h + 3; // bottom / top / middle row
-    const lx = tx + dx * 16 * g.scale;
-    const ly = ty + dy * 16 * g.scale;
+    // Keep the label (width estimated at 0.62·size per character, plus its box padding) inside the frame.
+    const fs = (panel.fontSize || 24) * ASS_FONT_SCALE;
+    const lw = panel.text.length * fs * 0.62 + 20;
+    const lh = fs + 20;
+    const edge = 8;
+    let lx = tx + dx * 16 * g.scale;
+    let ly = ty + dy * 16 * g.scale;
+    const left = h === 3 ? lx - lw : h === 2 ? lx - lw / 2 : lx;
+    lx += Math.max(0, edge - left) - Math.max(0, left + lw - (res.width - edge));
+    const top = an >= 7 ? ly : an >= 4 ? ly - lh / 2 : ly - lh;
+    ly += Math.max(0, edge - top) - Math.max(0, top + lh - (res.height - edge));
     out.push(
       `Dialogue: 2,${secToAssTs(headAt)},${secToAssTs(end)},CLabel,,0,0,0,,` +
         `{\\an${an}\\q2\\pos(${Math.round(lx)},${Math.round(ly)})\\fs${Math.round((panel.fontSize || 24) * ASS_FONT_SCALE)}\\fad(120,180)}${assEscape(panel.text)}`,
