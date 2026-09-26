@@ -56,6 +56,7 @@ const SCRIPT = {
   badRect: path.join(RUN, "bad-rect.demo-script.json"),
   upload: path.join(RUN, "upload.demo-script.json"),
   arrow: path.join(RUN, "arrow.demo-script.json"),
+  converge: path.join(RUN, "converge.demo-script.json"),
   flutter: path.join(RUN, "flutter.demo-script.json"),
   cards: path.join(RUN, "cards.demo-script.json"),
 };
@@ -921,6 +922,46 @@ describe("narascreen CLI, end to end", () => {
     const box = arrowLabelBox(g, shape, "Click here", 24, { width: 1280, height: 720 });
     const pill = pixelAt(video, at + 2, box.cx + box.pw / 2 - box.ph * 0.3, box.cy);
     assert.ok(isArrow(pill), `label pill in the arrow colour: ${pill}`);
+  });
+
+  test("spotlight converge: the lit box closes in from the whole frame only when converge is set", { timeout: 10 * MIN }, async () => {
+    // A white 1280x720 video: lit pixels stay white, dimmed ones go dark.
+    const white = path.join(RUN, "white.mp4");
+    const gen = ffmpegSync(["-y", "-f", "lavfi", "-i", "color=c=white:s=1280x720:r=30:d=6", "-pix_fmt", "yuv420p", white]);
+    assert.equal(gen.status, 0, "ffmpeg could not generate the white video");
+    const target: [number, number, number, number] = [500, 250, 200, 100];
+    writeJson(SCRIPT.converge, {
+      version: 1,
+      scope: "Converge",
+      source: { video: white },
+      steps: [{
+        id: "spot",
+        beat: [
+          { fx: "spotlight", at: 1, rect: target, duration: 3, converge: 1, feather: 16 },
+          { fx: "spotlight", at: 4.5, rect: target, duration: 1 },
+        ],
+      }],
+    });
+    expectOk(await cli(["validate", SCRIPT.converge]), "validate");
+    const r = await cli(["make", SCRIPT.converge, "--out", path.join(RUN, "job-converge")], { timeoutMs: 8 * MIN });
+    const video = (expectOk(r, "make").videos as Rec[])[0].path as string;
+    assertFile(video, "converge video", r);
+    const lit = (p: number[]) => p[0] > 200;
+    const dim = (p: number[]) => p[0] < 120;
+    const far: [number, number] = [100, 100]; // well outside the target
+    const near: [number, number] = [440, 300]; // 60 px left of the target, beyond the 16 px feather
+    const inside: [number, number] = [600, 300];
+    // Start: the lit box is still the whole frame.
+    assert.ok(lit(pixelAt(video, 1.0, ...far)), `whole frame lit as it starts: ${pixelAt(video, 1.0, ...far)}`);
+    // 0.3 s in: the edges have closed in (the corner is dim) but the box is still bigger than the target.
+    assert.ok(dim(pixelAt(video, 1.3, ...far)), `closing in at 1.3s: ${pixelAt(video, 1.3, ...far)}`);
+    assert.ok(lit(pixelAt(video, 1.3, ...near)), `not yet on the target at 1.3s: ${pixelAt(video, 1.3, ...near)}`);
+    // Converged: only the target is lit.
+    assert.ok(dim(pixelAt(video, 2.5, ...near)), `converged at 2.5s: ${pixelAt(video, 2.5, ...near)}`);
+    assert.ok(lit(pixelAt(video, 2.5, ...inside)), `target lit at 2.5s: ${pixelAt(video, 2.5, ...inside)}`);
+    // No converge: the plain spotlight is on the target from its first frame.
+    assert.ok(dim(pixelAt(video, 4.54, ...near)) && dim(pixelAt(video, 4.54, ...far)), "no converge → no animation");
+    assert.ok(lit(pixelAt(video, 4.54, ...inside)), "no converge → target lit at once");
   });
 
   test("video-source script: a rect outside the frame → SCRIPT_INVALID pointing at the entry", async (t) => {

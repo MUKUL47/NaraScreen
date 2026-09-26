@@ -197,6 +197,8 @@ export interface FxEntry {
   padding?: number;
   /** spotlight: soft edge width in px (default 0 = hard edge). */
   feather?: number;
+  /** spotlight: seconds the lit area takes to close in on the element (default: no animation). */
+  converge?: number;
   radius?: number;
   /** pause: seconds to freeze. speed/skip/mute: length of the range. */
   seconds?: number;
@@ -507,6 +509,7 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
     dimOpacity: z.number().min(0).max(1).optional().describe("How dark the rest of the screen gets (default 0.7)."),
     padding: z.number().int().min(0).max(200).optional().describe("Extra room in px around each lit element (default 0 = its exact box). E.g. 12 so a button's edges and shadow stay bright. Clamped to the frame."),
     feather: z.number().int().min(0).max(100).optional().describe("Soft edge: the lit area fades into the dim over this many px (default 0 = hard-edged box). The element itself stays fully lit. E.g. 24."),
+    converge: z.number().min(0.1).max(3).optional().describe("Animate: the lit area starts as the whole screen and closes in on the element over this many seconds (easing out). Omit for no animation. At most half the spotlight's duration. E.g. 0.6."),
   }, "Dim everything except one or more elements."),
   fx("arrow", {
     anchor: SelectorSchema.optional(),

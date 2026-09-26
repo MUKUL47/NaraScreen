@@ -430,7 +430,7 @@ disappeared before you reached it (act on it sooner or don't target it).
 |---|---|---|---|
 | `narrate` | Voiceover; the frame freezes while it plays (`freeze: false` = video keeps moving) | no | length of the speech + 0.5 s |
 | `zoom` | Smooth zoom into the element on a frozen frame, hold, zoom out. Add `narrate` to talk while zoomed in | yes | `zoomDuration` in + hold + out; hold = speech length when narrated, else `zoomHold` |
-| `spotlight` | Everything except the element is dimmed; `padding` (px) leaves extra room around it, `feather` (px) gives it a soft edge | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
+| `spotlight` | Everything except the element is dimmed; `padding` (px) leaves extra room around it, `feather` (px) gives it a soft edge, `converge` (s) animates it closing in from the whole screen | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
 | `arrow` | An animated arrow points at the element: one smooth, gently curved line that draws itself to the element, a chevron head riding its tip; optional `text` label in a rounded pill at its tail. White halo + soft shadow, so it reads on light and dark pages. The page stays bright (a lighter touch than spotlight) | yes | `auto` (default), `step-end`, `end`, or seconds |
 | `callout` | Text label: `label` (at the element), `lower-third` (bottom banner), `step-counter` ("Step N: …") | `label`/`step-counter`: yes | `auto` or seconds |
 | `blur` | The element is blurred (hide secrets) | yes | `step-end` (default), `end` (rest of the video), `auto`, or seconds |
@@ -454,6 +454,15 @@ Combine freely with `padding`:
 
 ```json
 { "fx": "spotlight", "anchor": { "role": "article", "name": "Overdue" }, "padding": 12, "feather": 24 }
+```
+
+**Spotlight converge (animation):** `"converge": 0.6` animates the spotlight: the lit area starts as the
+whole screen and closes in on the element over 0.6 s, easing out, then holds. Only when you set it —
+without `converge` the spotlight appears on the element at once, as before. 0.1–3 s; capped at half the
+spotlight's duration so it always settles. Works with `padding`, `feather` and `anchors` (each box closes in on its own element):
+
+```json
+{ "fx": "spotlight", "anchor": { "role": "article", "name": "Overdue" }, "padding": 12, "feather": 24, "converge": 0.6 }
 ```
 
 **Several at once:** `spotlight` and `blur` take `anchors: [ … ]` to light or blur several elements

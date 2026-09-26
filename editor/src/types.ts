@@ -69,6 +69,7 @@ export interface TimelineAction {
   dimOpacity?: number; // 0.0-1.0, default 0.7
   spotlightDuration?: number; // how long to show (seconds)
   spotlightFeather?: number; // soft edge width in px (default 0 = hard edge)
+  spotlightConverge?: number; // seconds the lit box takes to close in from the whole frame (default 0 = none)
 
   // Speed Ramp: change playback speed for a range
   speedFactor?: number; // 0.5x, 2x, 3x, etc.

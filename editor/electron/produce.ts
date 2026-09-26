@@ -197,6 +197,7 @@ function applySpotlightBatch(
   let filterChain = "";
   let lastLabel = "0:v";
   let ai = 0;
+  const cmdFiles: string[] = [];
 
   for (const action of actions) {
     const rects = action.spotlightRects ?? (action.spotlightRect ? [action.spotlightRect] : []);
@@ -212,17 +213,43 @@ function applySpotlightBatch(
     // Soft edge (spotlightFeather px): the lit area is blended in through a blurred
     // mask instead of hard-cut rectangles. The mask box is grown by the feather so
     // the element itself stays fully lit and the falloff happens outside it.
+    // Converge (spotlightConverge s): the lit box starts as the whole frame and
+    // closes in on the element, easing out; drawbox is re-aimed every frame by sendcmd.
     const feather = Math.max(0, Math.round(action.spotlightFeather ?? 0));
-    if (feather > 0) {
+    const converge = Math.min(Math.max(0, action.spotlightConverge ?? 0), (end - start) / 2);
+    if (feather > 0 || converge > 0) {
       const sep0 = filterChain ? ";" : "";
       filterChain += `${sep0}[${lastLabel}]split=4[pass${ai}][dark${ai}][lit${ai}][mk${ai}]`;
       filterChain += `;[dark${ai}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill[dimmed${ai}]`;
+      const target = (r: number[]) => [r[0] - feather, r[1] - feather, r[2] + 2 * feather, r[3] + 2 * feather];
+      const full = [-feather, -feather, res.width + 2 * feather, res.height + 2 * feather];
+      const box = (b: number[]) => `x=${Math.round(b[0])}:y=${Math.round(b[1])}:w=${Math.round(b[2])}:h=${Math.round(b[3])}`;
       const boxes = rects
-        .map(([x, y, w, h]) => `drawbox=x=${x - feather}:y=${y - feather}:w=${w + 2 * feather}:h=${h + 2 * feather}:color=white:t=fill`)
+        .map((r, ri) => `drawbox@sp${ai}_${ri}=${box(converge > 0 ? full : target(r))}:color=white:t=fill`)
         .join(",");
+      let cmds = "";
+      if (converge > 0) {
+        const steps = Math.max(1, Math.round(converge * 60));
+        const lines: string[] = [];
+        for (let k = 1; k <= steps; k++) {
+          const e = 1 - Math.pow(1 - k / steps, 3);
+          const at = start + (converge * k) / steps;
+          const sets = rects.flatMap((r, ri) => {
+            const tg = target(r);
+            const b = full.map((f, i) => f + (tg[i] - f) * e);
+            return ["x", "y", "w", "h"].map((key, i) => `drawbox@sp${ai}_${ri} ${key} ${Math.round(b[i])}`);
+          });
+          lines.push(`${at.toFixed(3)} ${sets.join(", ")};`);
+        }
+        const file = path.join(path.dirname(outputPath), `.spotlight-${ai}-${process.pid}.cmd`);
+        fs.writeFileSync(file, lines.join("\n") + "\n");
+        cmdFiles.push(file);
+        cmds = `sendcmd=f='${file.replace(/\\/g, "/").replace(/'/g, "'\\\\''").replace(/:/g, "\\\\:")}',`;
+      }
       // drawbox writes limited-range levels (black 16, white 235): snap to exact 0/255
       // first, or the "dark" part of the mask would let the bright video bleed through.
-      filterChain += `;[mk${ai}]format=gray,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,${boxes},lut=y='if(gt(val,128),255,0)',gblur=sigma=${(feather / 2).toFixed(1)}[mask${ai}]`;
+      const blur = feather > 0 ? `,gblur=sigma=${(feather / 2).toFixed(1)}` : "";
+      filterChain += `;[mk${ai}]format=gray,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,${cmds}${boxes},lut=y='if(gt(val,128),255,0)'${blur}[mask${ai}]`;
       filterChain += `;[lit${ai}]format=yuva420p[lita${ai}];[lita${ai}][mask${ai}]alphamerge[soft${ai}]`;
       filterChain += `;[dimmed${ai}][soft${ai}]overlay=0:0[spotlight${ai}]`;
       const outSoft = `out${ai}`;
@@ -263,7 +290,11 @@ function applySpotlightBatch(
   }
   args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
   args.push(outputPath);
-  ffmpegSync(args);
+  try {
+    ffmpegSync(args);
+  } finally {
+    for (const f of cmdFiles) fs.rmSync(f, { force: true });
+  }
 }
 
 // Callouts are drawn by libass (in the final ASS pass, see calloutEvents), not

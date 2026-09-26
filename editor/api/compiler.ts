@@ -257,6 +257,7 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
       base.spotlightRects = fx.padding ? rects.map((r) => padRect(r, fx.padding!, c.viewport)) : rects;
       base.dimOpacity = fx.dimOpacity ?? 0.7;
       if (fx.feather) base.spotlightFeather = fx.feather;
+      if (fx.converge) base.spotlightConverge = fx.converge;
       base.spotlightDuration = overlayDuration(fx).value;
       return done();
     }

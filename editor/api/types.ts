@@ -76,6 +76,8 @@ export interface NaraAction {
   arrowColor?: string;
   /** spotlight: soft edge width in px (default 0 = hard edge) */
   spotlightFeather?: number;
+  /** spotlight: seconds the lit box takes to close in from the whole frame (default 0 = no animation) */
+  spotlightConverge?: number;
   /** Arrow size multiplier (default: from the video size). */
   arrowScale?: number;
   // blur

@@ -108,6 +108,14 @@ test("spotlight feather: passed to the renderer only when set", () => {
   assert.equal("spotlightFeather" in hard, false, "no field → the renderer's hard-edge path, as before");
 });
 
+test("spotlight converge: passed to the renderer only when set", () => {
+  const trace: TraceEntry[] = [{ beat: "b1", i: 0, kind: "fx", fx: "spotlight", t: 1, rect: [10, 10, 100, 40] }];
+  const anim = compile(baseScript([{ id: "b1", beat: [{ fx: "spotlight", anchor: { text: "A" }, converge: 0.6, duration: 2 }] }]), trace)[0];
+  assert.equal(anim.spotlightConverge, 0.6);
+  const still = compile(baseScript([{ id: "b1", beat: [{ fx: "spotlight", anchor: { text: "A" }, duration: 2 }] }]), trace)[0];
+  assert.equal("spotlightConverge" in still, false, "no field → no animation, as before");
+});
+
 test("spotlight padding: grows every lit box, kept inside the frame; no padding = exact box", () => {
   const script = baseScript([
     { id: "b1", beat: [{ fx: "spotlight", anchors: [{ text: "A" }, { text: "B" }], padding: 12, duration: 3 }] },
