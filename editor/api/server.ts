@@ -71,6 +71,19 @@ export interface ServerOptions {
   concurrency: number;
   /** Node script executed for each run (default: bin/narascreen). Lets tests inject a fake CLI. */
   cliPath?: string;
+  /** Skip the start-up cache cleanup (see cleanWorkspaceCache). */
+  keepCache?: boolean;
+}
+
+/** What the start-up cleanup removed. */
+export interface CacheCleanup {
+  runs: number;
+  inspect: number;
+  /** Jobs whose narration audio / preview frames were removed. */
+  jobs: number;
+  /** Jobs left alone because another NaraScreen process holds their lock. */
+  skippedLocked: string[];
+  bytes: number;
 }
 
 export interface RouteDoc {
@@ -203,10 +216,89 @@ const NOT_FOUND_CODES: ErrorCode[] = ["SCRIPT_NOT_FOUND", "JOB_NOT_FOUND", "VIDE
 
 // ─── entry point ─────────────────────────────────────────────────────
 
-export async function startServer(opts: ServerOptions): Promise<{ url: string; close(): Promise<void> }> {
+export async function startServer(opts: ServerOptions): Promise<{ url: string; cleaned?: CacheCleanup; close(): Promise<void> }> {
   const app = new NaraServer(opts);
   const url = await app.listen();
-  return { url, close: () => app.close() };
+  return { url, cleaned: app.cleaned, close: () => app.close() };
+}
+
+/**
+ * Start-up cleanup of a workspace's throwaway files: run history (runs/),
+ * inspect screenshots (inspect/), and every job's narration audio (audio/) and
+ * preview frames (preview/). Kept: scripts, uploads, and each job's recording,
+ * trace and final videos — so `produce` still works without a re-record (it
+ * re-generates the narration). Jobs locked by a live process are skipped.
+ */
+export function cleanWorkspaceCache(ws: string): CacheCleanup {
+  const out: CacheCleanup = { runs: 0, inspect: 0, jobs: 0, skippedLocked: [], bytes: 0 };
+  const emptyDir = (dir: string): number => {
+    let n = 0;
+    for (const name of safeReaddir(dir)) {
+      const full = path.join(dir, name);
+      out.bytes += duBytes(full);
+      fs.rmSync(full, { recursive: true, force: true });
+      n++;
+    }
+    return n;
+  };
+  out.runs = emptyDir(path.join(ws, "runs"));
+  out.inspect = emptyDir(path.join(ws, "inspect"));
+  const jobs = path.join(ws, "jobs");
+  for (const name of safeReaddir(jobs)) {
+    const job = path.join(jobs, name);
+    const lockPid = Number((readText(path.join(job, ".lock")) ?? "").split(":")[0]);
+    if (lockPid && pidAlive(lockPid)) {
+      out.skippedLocked.push(job);
+      continue;
+    }
+    let touched = false;
+    for (const sub of ["audio", "preview"]) {
+      const dir = path.join(job, sub);
+      if (!fs.existsSync(dir)) continue;
+      out.bytes += duBytes(dir);
+      fs.rmSync(dir, { recursive: true, force: true });
+      touched = true;
+    }
+    if (touched) out.jobs++;
+  }
+  return out;
+}
+
+function safeReaddir(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+function readText(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Disk usage of a file or folder (symlinks not followed). */
+function duBytes(p: string): number {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(p);
+  } catch {
+    return 0;
+  }
+  if (!st.isDirectory()) return st.size;
+  return safeReaddir(p).reduce((n, c) => n + duBytes(path.join(p, c)), 0);
 }
 
 // ─── internals ───────────────────────────────────────────────────────
@@ -354,6 +446,8 @@ class NaraServer {
   private stopping = false;
   private closing?: Promise<void>;
   private url = "";
+  /** Set by listen(): what the start-up cache cleanup removed (undefined with keepCache). */
+  cleaned?: CacheCleanup;
   private readonly loopback: boolean;
   private readonly onProcessExit = () => this.killAllNow();
 
@@ -382,6 +476,7 @@ class NaraServer {
         hint: "Anyone who can reach that address could run commands. Pass --token <secret> (or set NARASCREEN_TOKEN), or bind 127.0.0.1.",
       });
     }
+    if (!this.opts.keepCache) this.cleaned = cleanWorkspaceCache(this.ws);
     for (const d of Object.values(this.dirs)) fs.mkdirSync(d, { recursive: true });
     this.wsReal = fs.realpathSync(this.ws);
     this.loadRuns();

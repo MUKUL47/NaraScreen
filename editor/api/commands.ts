@@ -211,7 +211,7 @@ export const COMMANDS: CommandDoc[] = [
   },
   {
     name: "serve",
-    usage: "narascreen serve [--port 4790] [--host 127.0.0.1] [--token <secret>] [--workspace ./narascreen-out]",
+    usage: "narascreen serve [--port 4790] [--host 127.0.0.1] [--token <secret>] [--workspace ./narascreen-out] [--keep-cache]",
     summary: "Start the local HTTP server: docs at /docs, runs at /v1/runs, live events over SSE.",
     flags: [
       { flag: "--port <n>", name: "port", type: "string", desc: "Port (default 4790)." },
@@ -219,8 +219,14 @@ export const COMMANDS: CommandDoc[] = [
       { flag: "--token <secret>", name: "token", type: "string", desc: "Require `Authorization: Bearer <secret>` on /v1 (or set NARASCREEN_TOKEN)." },
       { flag: "--workspace <dir>", name: "workspace", type: "string", desc: "Where scripts and jobs submitted over HTTP are stored (default ./narascreen-out)." },
       { flag: "--concurrency <n>", name: "concurrency", type: "string", desc: "Heavy runs executed at once (default 1)." },
+      {
+        flag: "--keep-cache",
+        name: "keep-cache",
+        type: "boolean",
+        desc: "Don't clean the workspace cache on start. By default every start deletes run history (runs/), inspect screenshots (inspect/) and each job's narration audio and preview frames; scripts, uploads, recordings and final videos are kept.",
+      },
     ],
-    output: "Prints one envelope { url, docs } when listening, then keeps running.",
+    output: "Prints one envelope { url, docs, cleaned } when listening, then keeps running.",
     heavy: false,
   },
 ];

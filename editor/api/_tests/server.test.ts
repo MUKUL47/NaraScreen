@@ -1044,7 +1044,7 @@ describe("client env for ${env:NAME}", () => {
 });
 
 describe("server close + restart", () => {
-  it("close() kills running children; a new server on the workspace keeps the history", async () => {
+  it("close() kills running children; a restart with keepCache keeps the history, a default restart cleans it", async () => {
     const ws = path.join(TMP, "ws-restart");
     const s1 = await startServer({ port: 0, host: "127.0.0.1", workspace: ws, concurrency: 2, cliPath: FAKE_CLI });
     fs.rmSync(PIDS_LOG, { force: true });
@@ -1066,7 +1066,8 @@ describe("server close + restart", () => {
     const forged = { ...ghost, runId: "r_forged", status: "succeeded", job: "/", outDir: OUTSIDE };
     fs.writeFileSync(path.join(ws, "runs", "r_forged.json"), JSON.stringify(forged));
 
-    const s2 = await startServer({ port: 0, host: "127.0.0.1", workspace: ws, concurrency: 1, cliPath: FAKE_CLI });
+    const s2 = await startServer({ port: 0, host: "127.0.0.1", workspace: ws, concurrency: 1, cliPath: FAKE_CLI, keepCache: true });
+    assert.equal(s2.cleaned, undefined, "keepCache: no cleanup");
     try {
       const got = await request(`${s2.url}/v1/runs/${id}`);
       assert.equal(got.json.result.status, "cancelled");
@@ -1081,6 +1082,16 @@ describe("server close + restart", () => {
       assert.match(g.json.result.outcome.error.message, /server stopped/);
     } finally {
       await s2.close();
+    }
+
+    // Default start: the run history is cleaned.
+    const s3 = await startServer({ port: 0, host: "127.0.0.1", workspace: ws, concurrency: 1, cliPath: FAKE_CLI });
+    try {
+      assert.ok((s3.cleaned?.runs ?? 0) >= 3, JSON.stringify(s3.cleaned));
+      assert.equal((await request(`${s3.url}/v1/runs/${id}`)).status, 404);
+      assert.deepEqual(fs.readdirSync(path.join(ws, "runs")), []);
+    } finally {
+      await s3.close();
     }
   });
 });

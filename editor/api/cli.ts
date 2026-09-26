@@ -1284,13 +1284,20 @@ const HANDLERS: Record<string, Handler> = {
     const workspace = abs(ctx, str(ctx, "workspace") ?? OUT_ROOT);
     fs.mkdirSync(workspace, { recursive: true });
     const { startServer } = await import("./server");
-    const srv = await startServer({ port, host, token, workspace, concurrency });
+    const srv = await startServer({ port, host, token, workspace, concurrency, keepCache: bool(ctx, "keep-cache") });
+    const c = srv.cleaned;
+    if (c) {
+      log(
+        `Cleaned the workspace cache: ${c.runs} run record(s), ${c.inspect} inspect folder(s), narration/preview of ${c.jobs} job(s) — ${(c.bytes / 1024 / 1024).toFixed(1)} MB` +
+          (c.skippedLocked.length ? `; skipped ${c.skippedLocked.length} job(s) in use` : ""),
+      );
+    }
     server = srv;
     // /v1 needs the token, which is never echoed back; the docs routes are public.
     const next = [`curl -s ${q(`${srv.url}/docs.md`)}`];
     if (!token) next.unshift(`curl -s ${q(`${srv.url}/v1/health`)}`);
     return {
-      result: { url: srv.url, docs: `${srv.url}/docs`, workspace, auth: token ? "bearer" : "none" },
+      result: { url: srv.url, docs: `${srv.url}/docs`, workspace, auth: token ? "bearer" : "none", ...(c ? { cleaned: c } : {}) },
       next,
       stay: true,
     };
