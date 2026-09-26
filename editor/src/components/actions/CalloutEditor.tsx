@@ -140,8 +140,32 @@ export function CalloutEditor({ action, onUpdate }: CalloutEditorProps) {
           <option value="label">Label (boxed text)</option>
           <option value="step-counter">Step Counter (numbered badge)</option>
           <option value="lower-third">Lower Third (bottom banner)</option>
+          <option value="arrow">Arrow (points at the first region)</option>
         </select>
       </div>
+
+      {action.calloutStyle === "arrow" && (
+        <div>
+          <label className="block text-xs text-zinc-400 font-medium mb-1">
+            Arrow comes from
+          </label>
+          <select
+            value={action.arrowFrom ?? ""}
+            onChange={(e) =>
+              onUpdate({ arrowFrom: (e.target.value || undefined) as TimelineAction["arrowFrom"] })
+            }
+            className="w-full bg-zinc-950 border border-zinc-700/50 rounded px-3 py-1.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-400"
+          >
+            <option value="">Auto (first that fits)</option>
+            {(["bottom-left", "bottom-right", "top-left", "top-right", "left", "right", "below", "above"] as const).map((f) => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+          <p className="text-[10px] text-zinc-500 mt-1">
+            Draw one region around the element to point at. Its text (optional) is shown at the arrow's tail. The arrow is drawn when you produce the video.
+          </p>
+        </div>
+      )}
 
       {action.calloutStyle === "step-counter" && (
         <div>

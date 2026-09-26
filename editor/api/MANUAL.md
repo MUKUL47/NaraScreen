@@ -287,6 +287,8 @@ A complete example (a task-manager web app):
 ### Patterns that make good demos
 
 - **Say, do, show:** narrate what's about to happen → act → spotlight/zoom the result.
+- **Point without dimming:** `arrow` is the light-touch spotlight — good for "click here" moments,
+  small buttons, or when the rest of the screen should stay readable.
 - **One idea per step**, 1–3 sentences of narration. Long monologues over a frozen frame feel slow.
 - **Wait for the screen, not the clock:** after navigation or anything asynchronous, add a `waitFor`
   on something that only appears when the page is ready. Use `wait` only for pure animations.
@@ -364,6 +366,7 @@ disappeared before you reached it (act on it sooner or don't target it).
 | `narrate` | Voiceover; the frame freezes while it plays (`freeze: false` = video keeps moving) | no | length of the speech + 0.5 s |
 | `zoom` | Smooth zoom into the element on a frozen frame, hold, zoom out. Add `narrate` to talk while zoomed in | yes | `zoomDuration` in + hold + out; hold = speech length when narrated, else `zoomHold` |
 | `spotlight` | Everything except the element is dimmed | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
+| `arrow` | An animated arrow points at the element: a dashed line drawn in dash by dash, then the head; optional `text` label at its tail. The page stays bright (a lighter touch than spotlight) | yes | `auto` (default), `step-end`, `end`, or seconds |
 | `callout` | Text label: `label` (at the element), `lower-third` (bottom banner), `step-counter` ("Step N: …") | `label`/`step-counter`: yes | `auto` or seconds |
 | `blur` | The element is blurred (hide secrets) | yes | `step-end` (default), `end` (rest of the video), `auto`, or seconds |
 | `pause` | Frame freezes silently | no | `seconds` (default 3) |
@@ -374,6 +377,21 @@ disappeared before you reached it (act on it sooner or don't target it).
 **Several at once:** `spotlight` and `blur` take `anchors: [ … ]` to light or blur several elements
 together (they must all be on screen at the same moment). `zoom` takes `targets: [{ "anchor": …, "narrate": "…" }, …]`
 to zoom into several elements one after another on the same frozen frame, each with its own narration.
+
+**Arrow:**
+
+```json
+{ "fx": "arrow", "anchor": { "role": "button", "name": "Export CSV" }, "text": "Click here" }
+```
+
+- It comes from the first side with room — bottom-left, bottom-right, top-left, top-right, left, right,
+  below, above — or the one you set with `from` (same names).
+- `color` is `#RRGGBB` (default `#FBBF24`, amber — readable on light and dark pages). `fontSize` sizes the label (default 24).
+- `text` can be per language, like callouts: `{"en": "Click here", "hi": "यहाँ क्लिक करें"}`.
+- Without `anchor` it points at the element of the act just before it, like spotlight. In video-source
+  scripts give `rect` (and `at`).
+- Point, then talk: put a `narrate` right after it — with the default `auto` duration the arrow stays
+  until that narration ends. An arrow and a label/spotlight can be on screen together.
 
 **Callout look:** `fontSize` (12–96) and `placement` (`above` — the default —, `below`, `over`) position the text next to its element.
 

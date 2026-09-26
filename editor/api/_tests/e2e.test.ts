@@ -30,6 +30,7 @@ import { exitCodeFor, type ErrorCode } from "../errors.ts";
 import type { Envelope, NaraEvent } from "../output.ts";
 import { DEFAULT_VOICES } from "../../src/lib/voices.ts";
 import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../../electron/ffmpeg.ts";
+import { arrowGeometry } from "../../electron/produce.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Rec = Record<string, any>;
@@ -53,6 +54,7 @@ const SCRIPT = {
   imported: path.join(RUN, "imported.demo-script.json"),
   badRect: path.join(RUN, "bad-rect.demo-script.json"),
   upload: path.join(RUN, "upload.demo-script.json"),
+  arrow: path.join(RUN, "arrow.demo-script.json"),
 };
 const JOB = path.join(RUN, "job");
 const VIDEO_JOB = path.join(RUN, "job-video");
@@ -277,6 +279,15 @@ function makeTone(file: string, freqs: number[], seconds: number) {
 const readJobJson = () => JSON.parse(fs.readFileSync(path.join(JOB, "job.json"), "utf-8")) as Rec;
 const readTrace = (job: string): Rec[] =>
   fs.readFileSync(path.join(job, "trace.jsonl"), "utf-8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as Rec);
+
+/** RGB of one pixel of a video frame at time t. */
+function pixelAt(video: string, t: number, x: number, y: number): [number, number, number] {
+  const res = ffmpegSync(["-v", "error", "-i", video, "-ss", String(t), "-frames:v", "1", "-vf", `format=rgb24,crop=1:1:${Math.round(x)}:${Math.round(y)}`, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+  assert.ok(res.status === 0 && res.stdout.length >= 3, `could not read pixel (${x}, ${y}) at ${t}s of ${video}`);
+  return [res.stdout[0], res.stdout[1], res.stdout[2]];
+}
+/** The default arrow colour (#FBBF24) after H.264, on a grey background. */
+const isAmber = ([r, g, b]: number[]) => r > 190 && g > 140 && b < 120;
 
 /** Mean absolute luma difference between the same box in two video frames (0–255). */
 function regionDiff(videoA: string, tA: number, videoB: string, tB: number, rect: number[]): number {
@@ -636,6 +647,15 @@ describe("narascreen CLI, end to end", () => {
       assert.ok(typeof n.step === "string" && typeof n.entry === "number" && typeof n.text === "string" && typeof n.voice === "string" && typeof n.cached === "boolean" && n.durationSec > 0, `malformed narration: ${JSON.stringify(n)}`);
     }
 
+    // The arrow fx becomes a callout with style "arrow" whose first panel is the Overdue card.
+    const project = JSON.parse(fs.readFileSync(path.join(JOB, "demo-project.en.json"), "utf-8")) as Rec;
+    const arrow = (project.actions as Rec[]).find((a) => a.type === "callout" && a.calloutStyle === "arrow");
+    const overdue = readTrace(JOB).find((e) => e.fx === "arrow");
+    assert.ok(arrow && overdue?.rect, `the arrow reaches the project with a target\n${JSON.stringify(arrow)}`);
+    assert.deepEqual(arrow.calloutPanels?.[0]?.rect, overdue.rect, "the arrow points at the recorded element box");
+    assert.equal(arrow.calloutPanels[0].text, "Needs attention");
+    assert.ok(arrow.calloutDuration > 1, `"auto" keeps it up until the next narration ends: ${arrow.calloutDuration}`);
+
     assertFile(v.preview?.contactSheet, "preview.contactSheet", r);
     assert.ok(Array.isArray(v.preview?.frames) && v.preview.frames.length > 0, "preview.frames");
     for (const f of v.preview.frames) assertFile(f.path, `preview frame t=${f.t}`);
@@ -844,6 +864,55 @@ describe("narascreen CLI, end to end", () => {
     assert.equal(pr.video, path.join(VIDEO_JOB, "recordings", "recording.mp4"), `preview --raw looks at the imported recording\n${describeRun(p)}`);
     assertFile(pr.contactSheet, "raw contactSheet", p);
     assert.equal(pr.frames?.length, 4, `--tiles 4 → 4 frames\n${describeRun(p)}`);
+  });
+
+  test("arrow: drawn in dash by dash, then the head — at the computed spot; a label at its tail", { timeout: 10 * MIN }, async () => {
+    // A plain grey 1280x720 video: every amber pixel is the arrow.
+    const grey = path.join(RUN, "grey.mp4");
+    const gen = ffmpegSync(["-y", "-f", "lavfi", "-i", "color=c=0x808080:s=1280x720:r=30:d=5", "-pix_fmt", "yuv420p", grey]);
+    assert.equal(gen.status, 0, "ffmpeg could not generate the grey video");
+    const target: [number, number, number, number] = [600, 200, 200, 80];
+    const at = 1;
+    writeJson(SCRIPT.arrow, {
+      version: 1,
+      scope: "Arrow",
+      source: { video: grey },
+      steps: [{ id: "point", beat: [{ fx: "arrow", at, rect: target, text: "Click here", duration: 3 }] }],
+    });
+    expectOk(await cli(["validate", SCRIPT.arrow]), "validate");
+    const r = await cli(["make", SCRIPT.arrow, "--out", path.join(RUN, "job-arrow")], { timeoutMs: 8 * MIN });
+    const video = (expectOk(r, "make").videos as Rec[])[0].path as string;
+    assertFile(video, "arrow video", r);
+
+    // Same geometry as the renderer: default direction, 5 dashes, head 28 px × scale.
+    const g = arrowGeometry(target, { width: 1280, height: 720 });
+    assert.equal(g.from, "bottom-left", "default direction when there is room");
+    const [tx, ty] = g.tail;
+    const [px, py] = g.tip;
+    const len = Math.hypot(px - tx, py - ty);
+    const u = [(px - tx) / len, (py - ty) / len];
+    const along = (d: number) => [tx + u[0] * d, ty + u[1] * d] as const;
+    const seg = (len - 28 * g.scale) / 5;
+    const dash = (k: number) => along(k * seg + seg * 0.31); // middle of dash k
+    const head = along(len - 28 * g.scale * 0.35);
+
+    // 0.25 s in: the first dashes are drawn, the last dash and the head not yet.
+    const early = at + 0.25;
+    assert.ok(isAmber(pixelAt(video, early, ...dash(0))), `first dash drawn at ${early}s: ${pixelAt(video, early, ...dash(0))}`);
+    assert.ok(!isAmber(pixelAt(video, early, ...dash(4))), `last dash not drawn yet at ${early}s`);
+    assert.ok(!isAmber(pixelAt(video, early, ...head)), `head not drawn yet at ${early}s`);
+    // 2 s in: everything.
+    for (const [what, p] of [["dash 4", dash(4)], ["head", head]] as const) {
+      assert.ok(isAmber(pixelAt(video, at + 2, ...p)), `${what} drawn at ${at + 2}s: ${pixelAt(video, at + 2, ...p)}`);
+    }
+    // Gone after its duration; nothing before it starts.
+    assert.ok(!isAmber(pixelAt(video, at + 3.6, ...head)), "arrow gone after its duration");
+    assert.ok(!isAmber(pixelAt(video, at - 0.3, ...dash(0))), "no arrow before it starts");
+    // The label sits at the tail: its box's top padding, just left of the label's anchor (tail + 16 px outward).
+    const lx = tx - Math.SQRT1_2 * 16 * g.scale;
+    const ly = ty + Math.SQRT1_2 * 16 * g.scale;
+    const [lr, lg, lb] = pixelAt(video, at + 2, lx - 25, ly - 5);
+    assert.ok(lr < 90 && lg < 90 && lb < 90, `label box at the tail: ${[lr, lg, lb]}`);
   });
 
   test("video-source script: a rect outside the frame → SCRIPT_INVALID pointing at the entry", async (t) => {

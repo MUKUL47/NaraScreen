@@ -119,7 +119,7 @@ function indexTrace(trace: TraceEntry[]): Map<string, TraceEntry> {
 }
 
 function isOverlay(fx: FxEntry): boolean {
-  return fx.fx === "spotlight" || fx.fx === "callout" || fx.fx === "blur";
+  return fx.fx === "spotlight" || fx.fx === "callout" || fx.fx === "blur" || fx.fx === "arrow";
 }
 function isRange(fx: FxEntry): fx is FxEntry & { fx: "speed" | "skip" | "mute" } {
   return fx.fx === "speed" || fx.fx === "skip" || fx.fx === "mute";
@@ -268,6 +268,20 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
       if (panel) base.calloutPanels = [panel];
       return done();
     }
+    case "arrow": {
+      // Rendered as a callout with style "arrow": calloutPanels[0].rect = the target,
+      // its text = the optional label (so the desktop editor can open and edit it).
+      if (!rects[0]) throw fail("arrow needs a rect (anchor an element)");
+      const text = fx.text != null ? resolveNarration({ narrate: fx.text }, c.lang)?.text ?? "" : "";
+      base.type = "callout";
+      base.calloutStyle = "arrow";
+      base.calloutText = text || undefined;
+      base.calloutPanels = [{ text, rect: rects[0], fontSize: fx.fontSize ?? 24 }];
+      base.calloutDuration = overlayDuration(fx).value;
+      if (fx.from) base.arrowFrom = fx.from;
+      if (fx.color) base.arrowColor = fx.color;
+      return done();
+    }
     case "pause": {
       if (fx.seconds != null) base.resumeAfter = fx.seconds;
       return done();
@@ -319,7 +333,7 @@ export function compile(
   }
   script.steps.forEach((beat, s) =>
     beat.beat.forEach((e, i) => {
-      if (isFx(e) && e.fx === "callout" && !e.disabled && e.text && typeof e.text === "object" && e.text[lang] == null && e.text.en != null) {
+      if (isFx(e) && (e.fx === "callout" || e.fx === "arrow") && !e.disabled && e.text && typeof e.text === "object" && e.text[lang] == null && e.text.en != null) {
         warnings.push(`steps[${s}].beat[${i}]: no ${lang} callout text — used en. Add "${lang}": "…" to the text map.`);
       }
     }),
@@ -773,7 +787,9 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
     // "auto" never runs into the next overlay of its kind; the explicit end
     // modes only yield to the next spotlight (overlapping spotlights fail).
     const capSame = auto || sl.action.type === "spotlight";
-    const nextSame = capSame ? actions.slice(orderOf.get(sl.action)! + 1).find((a) => a.type === sl.action.type) : undefined;
+    // An arrow and a label are different kinds: an arrow isn't cut short by the label beside it.
+    const kind = (a: NaraAction) => (a.type === "callout" && a.calloutStyle === "arrow" ? "arrow" : a.type);
+    const nextSame = capSame ? actions.slice(orderOf.get(sl.action)! + 1).find((a) => kind(a) === kind(sl.action)) : undefined;
     if (nextSame) caps.push({ at: tl.placed(nextSame.timestamp) - P - CAP_GAP_SEC, why: "same", action: nextSame });
     const binding = caps.filter((c) => c.at < target).sort((x, y) => x.at - y.at)[0];
     const dur = Math.max(AUTO_MIN_SEC, round3(binding ? binding.at : target));

@@ -35,7 +35,14 @@
           ],
           "note": "Two cards lit at once: they are on screen together."
         },
-        { "fx": "narrate", "narrate": "Open work and anything overdue sit side by side, so nothing slips through." }
+        { "fx": "narrate", "narrate": "Open work and anything overdue sit side by side, so nothing slips through." },
+        {
+          "fx": "arrow",
+          "anchor": { "role": "article", "name": "Overdue" },
+          "text": "Needs attention",
+          "note": "An animated arrow (drawn in dash by dash) — the rest of the page stays bright."
+        },
+        { "fx": "narrate", "narrate": "The overdue card is the one to check first." }
       ]
     },
     {

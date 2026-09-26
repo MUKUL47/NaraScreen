@@ -282,7 +282,133 @@ const CALLOUT_STYLES = [
   (s) =>
     `Style: ${s.name},Noto Sans,${Math.round(s.size * ASS_FONT_SCALE)},&H00FFFFFF,&H00FFFFFF,&HFF000000,${s.box},` +
     `0,0,0,0,100,100,0,0,4,${s.pad},0,${s.align},0,0,0,1`,
+).concat(
+  // Arrow shapes (vector drawings): fill set per event, dark outline for contrast on any background.
+  `Style: CArrow,Noto Sans,20,&H0024BFFB,&H00FFFFFF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,2,1,7,0,0,0,1`,
 );
+
+// ─── arrow callouts ──────────────────────────────────────────────────
+//
+// calloutStyle "arrow": an arrow pointing at calloutPanels[0].rect (the target),
+// drawn in as a dashed line — each dash appears in turn, then the head — plus
+// the panel's text (if any) as a label at the arrow's tail.
+
+export type ArrowFrom = "left" | "right" | "above" | "below" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
+const ARROW_DIRS: Record<ArrowFrom, [number, number]> = {
+  left: [-1, 0], right: [1, 0], above: [0, -1], below: [0, 1],
+  "top-left": [-1, -1], "top-right": [1, -1], "bottom-left": [-1, 1], "bottom-right": [1, 1],
+};
+/** Tried in order when `arrowFrom` is not set: the first whose tail fits in the frame wins. */
+const ARROW_AUTO: ArrowFrom[] = ["bottom-left", "bottom-right", "top-left", "top-right", "left", "right", "below", "above"];
+export const ARROW_DEFAULT_COLOR = "#FBBF24";
+const ARROW_DASHES = 5;
+
+/** Where the arrow's tail and tip go for a target box (video pixels). */
+export function arrowGeometry(
+  rect: [number, number, number, number],
+  res: { width: number; height: number },
+  from?: ArrowFrom,
+): { tail: [number, number]; tip: [number, number]; scale: number; from: ArrowFrom } {
+  const scale = Math.max(0.6, Math.min(res.height, res.width * 0.625) / 900);
+  const len = 150 * scale;
+  const gap = 10 * scale;
+  const margin = 16 * scale;
+  const [x, y, w, h] = rect;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const place = (f: ArrowFrom) => {
+    const [dx0, dy0] = ARROW_DIRS[f];
+    const n = Math.hypot(dx0, dy0);
+    const dx = dx0 / n;
+    const dy = dy0 / n;
+    // distance from the centre to the box edge along d
+    const t = Math.min(dx ? w / 2 / Math.abs(dx) : Infinity, dy ? h / 2 / Math.abs(dy) : Infinity);
+    const tip: [number, number] = [cx + dx * (t + gap), cy + dy * (t + gap)];
+    const tail: [number, number] = [cx + dx * (t + gap + len), cy + dy * (t + gap + len)];
+    const inside = (p: [number, number]) => p[0] >= margin && p[0] <= res.width - margin && p[1] >= margin && p[1] <= res.height - margin;
+    return { tip, tail, fits: inside(tip) && inside(tail), d: [dx, dy] as const };
+  };
+  for (const f of from ? [from] : ARROW_AUTO) {
+    const g = place(f);
+    if (g.fits || from) {
+      const clamp = (p: [number, number]): [number, number] => [
+        Math.max(margin, Math.min(res.width - margin, p[0])),
+        Math.max(margin, Math.min(res.height - margin, p[1])),
+      ];
+      return { tail: clamp(g.tail), tip: clamp(g.tip), scale, from: f };
+    }
+  }
+  // Nothing fits (the element fills the frame): point at its centre from the lower left, inside it.
+  const tip: [number, number] = [cx, cy];
+  const d = Math.SQRT1_2;
+  return { tip, tail: [cx - d * len, cy + d * len].map((v, i) => Math.max(margin, Math.min((i ? res.height : res.width) - margin, v))) as [number, number], scale, from: "bottom-left" };
+}
+
+function assBgr(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex) ?? /^#?([0-9a-f]{6})$/i.exec(ARROW_DEFAULT_COLOR)!;
+  const v = m[1].toUpperCase();
+  return `&H${v.slice(4, 6)}${v.slice(2, 4)}${v.slice(0, 2)}&`;
+}
+
+/** One ASS drawing event for a polygon (absolute video coords). */
+function assPolygon(layer: number, start: number, end: number, pts: [number, number][], color: string, bord: number): string {
+  const minX = Math.min(...pts.map((p) => p[0]));
+  const minY = Math.min(...pts.map((p) => p[1]));
+  const rel = pts.map(([px, py]) => `${Math.round(px - minX)} ${Math.round(py - minY)}`);
+  // \an7 + \pos at the bounding box's corner: libass aligns a drawing by its bbox.
+  return (
+    `Dialogue: ${layer},${secToAssTs(start)},${secToAssTs(end)},CArrow,,0,0,0,,` +
+    `{\\an7\\pos(${Math.round(minX)},${Math.round(minY)})\\1c${color}\\bord${bord.toFixed(1)}\\shad0\\fad(70,180)\\p1}m ${rel[0]} l ${rel.slice(1).join(" ")}{\\p0}`
+  );
+}
+
+/** ASS events for one arrow callout: dashes drawn in one by one, then the head and the label. */
+function arrowEvents(action: Action, res: { width: number; height: number }, start: number, end: number): string[] {
+  const panel = action.calloutPanels?.[0];
+  if (!panel) return [];
+  const g = arrowGeometry(panel.rect, res, action.arrowFrom as ArrowFrom | undefined);
+  const color = assBgr(action.arrowColor ?? ARROW_DEFAULT_COLOR);
+  const [tx, ty] = g.tail;
+  const [px, py] = g.tip;
+  const total = Math.hypot(px - tx, py - ty);
+  if (total < 4) return [];
+  const ux = (px - tx) / total;
+  const uy = (py - ty) / total;
+  const nx = -uy;
+  const ny = ux;
+  const th = 6 * g.scale;
+  const headLen = Math.min(28 * g.scale, total * 0.4);
+  const headW = 24 * g.scale;
+  const bord = 1.5 * g.scale;
+  const shaft = total - headLen;
+  const seg = shaft / ARROW_DASHES;
+  const dash = seg * 0.62;
+  // The draw-in takes ≤ 0.6 s, and never more than a third of the arrow's time on screen.
+  const stepSec = Math.min(0.1, (end - start) / 3 / (ARROW_DASHES + 1));
+  const at = (d: number, off: number): [number, number] => [tx + ux * d + nx * off, ty + uy * d + ny * off];
+  const out: string[] = [];
+  for (let k = 0; k < ARROW_DASHES; k++) {
+    const a = k * seg;
+    const b = a + dash;
+    out.push(assPolygon(2, start + k * stepSec, end, [at(a, -th / 2), at(b, -th / 2), at(b, th / 2), at(a, th / 2)], color, bord));
+  }
+  const headAt = start + ARROW_DASHES * stepSec;
+  out.push(assPolygon(2, headAt, end, [at(shaft, -headW / 2), g.tip, at(shaft, headW / 2)], color, bord));
+  if (panel.text) {
+    // Label just beyond the tail, aligned away from the arrow.
+    const dx = -ux;
+    const dy = -uy;
+    const h = dx < -0.3 ? 3 : dx > 0.3 ? 1 : 2; // right / left / centre
+    const an = dy < -0.3 ? h : dy > 0.3 ? h + 6 : h + 3; // bottom / top / middle row
+    const lx = tx + dx * 16 * g.scale;
+    const ly = ty + dy * 16 * g.scale;
+    out.push(
+      `Dialogue: 2,${secToAssTs(headAt)},${secToAssTs(end)},CLabel,,0,0,0,,` +
+        `{\\an${an}\\q2\\pos(${Math.round(lx)},${Math.round(ly)})\\fs${Math.round((panel.fontSize || 24) * ASS_FONT_SCALE)}\\fad(120,180)}${assEscape(panel.text)}`,
+    );
+  }
+  return out;
+}
 
 /** ASS dialogue lines for every callout, on the final timeline. Positions are
  *  the drawtext ones: top-left of the text at calloutPosition (default
@@ -294,6 +420,12 @@ function calloutEvents(actions: Action[], res: { width: number; height: number }
     const end = Math.min(start + (action.calloutDuration ?? 3), totalDuration);
     if (!(end > start)) continue;
     const style = action.calloutStyle || "label";
+    if (style === "arrow") {
+      const lines = arrowEvents(action, res, start, end);
+      if (lines.length) emit(`    Arrow at ${start.toFixed(1)}s-${end.toFixed(1)}s${action.calloutPanels?.[0]?.text ? `: "${action.calloutPanels[0].text.slice(0, 30)}"` : ""}`);
+      out.push(...lines);
+      continue;
+    }
     const step = action.calloutStep;
     const prefix = (t: string) => (style === "step-counter" && step ? `Step ${step}: ${t}` : t);
     const line = (st: string, x: number, y: number, text: string, fs?: number) =>
@@ -1159,6 +1291,7 @@ export async function produceTimelineVideo(
   const blurActions = allActions.filter((a) => a.type === "blur" && a.blurRects && a.blurRects.length > 0);
   const spotlightActions = allActions.filter((a) => a.type === "spotlight" && (a.spotlightRect || (a.spotlightRects && a.spotlightRects.length > 0)));
   const calloutActions = allActions.filter((a) => a.type === "callout" && (a.calloutText || (a.calloutPanels && a.calloutPanels.length > 0)));
+  // (an arrow callout always has its target as calloutPanels[0])
   const zoomActions = allActions.filter((a) => a.type === "zoom" && (a.zoomRect || (a.zoomRects && a.zoomRects.length > 0) || (a.zoomTargets && a.zoomTargets.length > 0)));
   const pauseActions = allActions.filter((a) => a.type === "pause");
   const narrateActions = allActions.filter((a) => a.type === "narrate");

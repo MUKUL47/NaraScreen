@@ -71,6 +71,9 @@ export interface NaraAction {
   calloutDuration?: number;
   /** Positioned text with a font size (used when fontSize/placement is set). */
   calloutPanels?: { text: string; rect: Rect; fontSize: number }[];
+  /** calloutStyle "arrow": direction the arrow comes from (default: first that fits) and its colour */
+  arrowFrom?: string;
+  arrowColor?: string;
   // blur
   blurRects?: Rect[];
   blurRadius?: number;

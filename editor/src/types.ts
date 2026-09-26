@@ -84,6 +84,9 @@ export interface TimelineAction {
   calloutDuration?: number; // how long to display (seconds)
   /** Multiple text panels with position, text, and font size */
   calloutPanels?: CalloutPanel[];
+  /** calloutStyle "arrow": points at calloutPanels[0].rect (its text = optional label at the tail) */
+  arrowFrom?: "left" | "right" | "above" | "below" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  arrowColor?: string; // "#RRGGBB" (default amber #FBBF24)
 
   // Blur: apply blur to one or more regions
   blurRects?: [number, number, number, number][]; // array of [x, y, w, h] in video coords

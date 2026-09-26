@@ -168,7 +168,7 @@ const SECTIONS: Section[] = [
       { name: "Narrate",   what: "TTS voiceover via Kokoro. Multi-language support.",                  actions: ["Type text per language, pick voice/speed, Generate Audio.", "Generation auto-saves the project first."] },
       { name: "Spotlight", what: "Highlight one or more regions while dimming the rest.",             actions: ["Adjust dim opacity, duration, freeze toggle."] },
       { name: "Blur",      what: "Mask regions to hide sensitive content.",                           actions: ["Adjust blur radius, duration, freeze toggle."] },
-      { name: "Callout",   what: "Text panels positioned anywhere on the video.",                     actions: ["Draw a region, type text, set font size.", "Style: label / step counter / lower-third."] },
+      { name: "Callout",   what: "Text panels positioned anywhere on the video.",                     actions: ["Draw a region, type text, set font size.", "Style: label / step counter / lower-third / arrow (points at the first region)."] },
       { name: "Mute",      what: "Strip audio over a time range.",                                    actions: [] },
       { name: "Speed Ramp", what: "Change playback speed over a range.",                              actions: ["Set the speed factor (e.g. 2× fast-forward, 0.5× slow-mo)."] },
       { name: "Skip",      what: "Cut a section out of the recording.",                               actions: [] },

@@ -39,6 +39,9 @@ export interface Action {
   calloutStep?: number;
   calloutDuration?: number;
   calloutPanels?: { text: string; rect: [number, number, number, number]; fontSize: number }[];
+  /** calloutStyle "arrow": direction the arrow comes from (default: first that fits) and its colour */
+  arrowFrom?: string;
+  arrowColor?: string;
   musicPath?: string;
   musicVolume?: number;
   musicDuckTo?: number;

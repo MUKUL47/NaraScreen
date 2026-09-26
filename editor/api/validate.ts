@@ -389,6 +389,7 @@ function checkSemantics(script: DemoScript, dir: string, warnings: string[]): Sc
           warnings.push(`${ep}: step-counter callout has no \`step\` number.`);
         }
       }
+      if (fx.fx === "arrow" && fx.text && typeof fx.text === "object") checkLangMap(fx.text, `${ep}.text`, langs, true, issues);
       if (fx.duration != null && fx.duration !== "auto" && !OVERLAY_FX.includes(fx.fx)) {
         warnings.push(`${ep}: duration has no effect on ${fx.fx}.`);
       }

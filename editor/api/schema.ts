@@ -63,6 +63,7 @@ export type ActVerb =
 export type FxVerb =
   | "zoom"
   | "spotlight"
+  | "arrow"
   | "callout"
   | "blur"
   | "pause"
@@ -70,6 +71,9 @@ export type FxVerb =
   | "speed"
   | "skip"
   | "mute";
+
+export const ARROW_FROM = ["left", "right", "above", "below", "top-left", "top-right", "bottom-left", "bottom-right"] as const;
+export type ArrowFrom = (typeof ARROW_FROM)[number];
 
 /** [x, y, width, height] in video pixels. */
 export type Rect = [number, number, number, number];
@@ -83,9 +87,9 @@ export const TARGETED_ACTS: ActVerb[] = ["waitFor", "click", "fill", "select", "
  *  (when they have a selector; the box is measured after the act). */
 export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll", "waitFor", "press", "upload"];
 /** fx that need an element box (anchor or inherited from the previous act). */
-export const RECT_FX: FxVerb[] = ["zoom", "spotlight", "blur"];
+export const RECT_FX: FxVerb[] = ["zoom", "spotlight", "blur", "arrow"];
 /** fx that draw over the video for a time window (duration may be "auto"). */
-export const OVERLAY_FX: FxVerb[] = ["spotlight", "callout", "blur"];
+export const OVERLAY_FX: FxVerb[] = ["spotlight", "callout", "blur", "arrow"];
 /** fx that change a stretch of the recording (range = until | seconds). */
 export const RANGE_FX: FxVerb[] = ["speed", "skip", "mute"];
 
@@ -172,7 +176,10 @@ export interface FxEntry {
   /** callout: font size in px (default 28) and position relative to its element. */
   fontSize?: number;
   placement?: "above" | "below" | "over";
-  /** spotlight/callout/blur: seconds on screen, or "auto" (default) =
+  /** arrow: the side it comes from (default: the first that fits, bottom-left first) and its colour. */
+  from?: ArrowFrom;
+  color?: string;
+  /** spotlight/callout/blur/arrow: seconds on screen, or "auto" (default) =
    *  until the next narration in the same beat finishes, else 3s. */
   duration?: number | "auto" | "step-end" | "end";
   zoomDuration?: number;
@@ -420,6 +427,15 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
     duration: DurationSchema.optional(),
     dimOpacity: z.number().min(0).max(1).optional().describe("How dark the rest of the screen gets (default 0.7)."),
   }, "Dim everything except one or more elements."),
+  fx("arrow", {
+    anchor: SelectorSchema.optional(),
+    rect: RectSchema.optional(),
+    text: z.union([str(), z.record(z.string(), str())]).optional().describe("Optional label at the arrow's tail, or one per language like {\"en\": \"Click here\", \"hi\": \"यहाँ क्लिक करें\"} (falls back to en)."),
+    from: z.enum(ARROW_FROM).optional().describe("Side the arrow comes from (default: the first that fits on screen — bottom-left, bottom-right, top-left, top-right, left, right, below, above)."),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("Arrow colour as #RRGGBB (default #FBBF24, amber — visible on light and dark pages)."),
+    fontSize: z.number().int().min(12).max(96).optional().describe("Label text size in px (default 24)."),
+    duration: DurationSchema.optional(),
+  }, "Point at an element with an animated arrow: a dashed line drawn in dash by dash, then the head. Like spotlight, but the rest of the screen stays bright."),
   fx("blur", {
     anchor: SelectorSchema.optional(),
     anchors: z.array(SelectorSchema).min(1).max(10).optional().describe("Several elements blurred at once. Use instead of anchor."),
