@@ -170,7 +170,7 @@ export const COMMANDS: CommandDoc[] = [
       resolution,
       quality,
     ],
-    output: "{ job, videos: [{ lang, path, durationSec, narrations, preview }] }",
+    output: "{ job, videos: [{ lang, path, durationSec, narrations, timings, preview }] }",
     heavy: true,
   },
   {
@@ -186,7 +186,7 @@ export const COMMANDS: CommandDoc[] = [
       headed,
       { ...force, desc: "Always re-record, even if the recording could be reused." },
     ],
-    output: "{ job, recorded, videos: [{ lang, path, durationSec, narrations, preview }] }",
+    output: "{ job, recorded, videos: [{ lang, path, durationSec, narrations, timings, preview }] }",
     heavy: true,
   },
   {

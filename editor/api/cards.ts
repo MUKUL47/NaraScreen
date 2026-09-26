@@ -4,8 +4,8 @@
 // script's text, drawn by our own Chromium and captured frame by frame with its
 // CSS animations paused at each frame's time — so the same card always renders
 // the same frames. Its optional narration goes through the normal TTS (same
-// cache, voices and engine). The finished card clips are joined around the
-// rendered video in one final pass.
+// cache, voices and engine). The card clips are rendered first; the renderer's
+// final pass joins them around the video in the same encode (no extra pass).
 //
 // Only scripts with `intro`/`outro` get here: the rest of the pipeline is
 // untouched, and cards are text (not in the recording fingerprint), so editing
@@ -14,7 +14,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { chromium } from "@playwright/test";
-import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../electron/ffmpeg";
+import { ffmpegSync } from "../electron/ffmpeg";
 import { AgentError } from "./errors";
 import { synthesizeNarrations, resolveNarration } from "./narration";
 import type { Log } from "./output";
@@ -38,22 +38,22 @@ export interface CardResult {
 }
 
 /**
- * Render the script's cards for `lang` and join them around `videoPath` (in
- * place). Returns what was added. No-op when the script has no cards.
+ * Render the script's cards for `lang` at the video's final `size`. Returns
+ * what was made and the clip files; the renderer joins them around the video
+ * (ProduceOptions.wrap). Nothing when the script has no cards.
  */
-export async function addCards(
+export async function renderCards(
   script: DemoScript,
   lang: string,
-  videoPath: string,
+  size: { width: number; height: number },
   work: { audioDir: string; tmpDir: string },
   crf: number,
   log: Log,
-): Promise<CardResult[]> {
+): Promise<{ results: CardResult[]; intro?: string; outro?: string }> {
   const cards = (["intro", "outro"] as const).filter((w) => script[w]).map((w) => ({ which: w, card: script[w]! }));
-  if (!cards.length) return [];
+  if (!cards.length) return { results: [] };
   stage("render", `Rendering ${cards.map((c) => c.which).join(" + ")} card${cards.length > 1 ? "s" : ""} [${lang}]`, { lang });
 
-  const size = probeResolution(videoPath);
   fs.mkdirSync(work.tmpDir, { recursive: true });
   const results: CardResult[] = [];
   const clips: Record<string, string> = {};
@@ -90,8 +90,7 @@ export async function addCards(
     log(`${which} card ${durationSec.toFixed(1)}s (${card.template ?? "clean"})`);
   }
 
-  joinAround(videoPath, clips.intro, clips.outro, size, crf);
-  return results;
+  return { results, intro: clips.intro, outro: clips.outro };
 }
 
 // ─── rendering one card ──────────────────────────────────────────────
@@ -153,38 +152,6 @@ async function renderCard(
       details: { status: res.status },
     });
   }
-}
-
-/** intro + video + outro → video (in place). Every part is normalised to the video's size, 30 fps, stereo 48 kHz. */
-function joinAround(videoPath: string, intro: string | undefined, outro: string | undefined, size: { width: number; height: number }, crf: number): void {
-  const parts = [intro, videoPath, outro].filter((x): x is string => !!x);
-  const args = ["-y"];
-  const filters: string[] = [];
-  let idx = 0;
-  parts.forEach((file, k) => {
-    args.push("-i", file);
-    const v = idx++;
-    filters.push(`[${v}:v]scale=${size.width}:${size.height}:force_original_aspect_ratio=decrease,pad=${size.width}:${size.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS},format=yuv420p[v${k}]`);
-    if (hasAudioStream(file)) {
-      filters.push(`[${v}:a]aresample=48000,aformat=channel_layouts=stereo[a${k}]`);
-    } else {
-      // A silent part (no narration, no music) still needs a track for concat.
-      args.push("-f", "lavfi", "-t", String(probeDuration(file)), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
-      filters.push(`[${idx++}:a]anull[a${k}]`);
-    }
-  });
-  filters.push(`${parts.map((_, k) => `[v${k}][a${k}]`).join("")}concat=n=${parts.length}:v=1:a=1[v][a]`);
-  const tmp = videoPath.replace(/\.mp4$/, ".cards.mp4");
-  args.push("-filter_complex", filters.join(";"), "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "medium", "-crf", String(crf), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", tmp);
-  const res = ffmpegSync(args);
-  if (res.status !== 0 || !fs.existsSync(tmp)) {
-    fs.rmSync(tmp, { force: true });
-    throw new AgentError("RENDER_FAILED", "Could not join the title/end cards to the video", {
-      hint: "Run `narascreen doctor` (ffmpeg). If it repeats, report it with details.",
-      details: { status: res.status, parts },
-    });
-  }
-  fs.renameSync(tmp, videoPath);
 }
 
 // ─── templates ───────────────────────────────────────────────────────

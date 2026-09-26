@@ -179,6 +179,7 @@ function httpReference(base: string): string[] {
     "- **Every server start cleans the workspace cache:** run history (`runs/` — earlier runIds are gone), `inspect/` screenshots, and each job's narration audio and preview frames. Scripts, uploads, recordings and final videos stay, so `produce`/`make` on an existing job still skips the re-record (narration is generated again). Start with `--keep-cache` to keep everything.",
     "- `/v1/files` only serves files whose real location (symlinks followed) is inside the workspace; anything else is `403`, even through `..` or symlinks.",
     "- Runs execute the `narascreen` CLI as child processes. Cancelling a run, or stopping the server, stops its whole process tree (browser and ffmpeg included).",
+    "- A run's languages render at the same time (two at once; the server's `NARASCREEN_PARALLEL_LANGS` environment variable changes that, `1` = one after another). Each video in the result has `timings` (seconds: `narrationSec`, `cardsSec`, `renderSec` with its `passes`, `totalSec`) — where the time went.",
     "",
     "### HTTP status codes",
     "",

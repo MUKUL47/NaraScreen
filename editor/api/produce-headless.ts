@@ -4,10 +4,11 @@
 //            recorded `audio` files are used in place)
 //   compile  script + trace + clips → NaraScreen actions (auto durations fitted
 //            to the real clip lengths)
-//   render   demo-project.json → produceTimelineVideo — the SAME pipeline the
-//            desktop app uses, unchanged. The audio is pre-generated, so the
-//            producer only copies it (its own silent TTS fallback never runs).
-//   size     optional letterbox pass to an output resolution preset
+//   cards    optional title/end card clips, rendered first at the final size
+//   render   demo-project.<lang>.json → produceTimelineVideo — the SAME pipeline
+//            the desktop app uses. The audio is pre-generated, so the producer
+//            only copies it (its own silent TTS fallback never runs). Its final
+//            pass also letterboxes to an output resolution preset and joins the cards.
 //
 // The job folder doubles as a desktop session: demo-project.json has the
 // DemoProject shape (src/types.ts), so a human can open the job in NaraScreen
@@ -19,7 +20,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { produceTimelineVideo } from "../electron/produce";
-import { addCards, type CardResult } from "./cards";
+import { renderCards, type CardResult } from "./cards";
 import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../electron/ffmpeg";
 import { DEFAULT_VOICES } from "../src/lib/voices";
 import { compile, modelTimeline, spotlightOverlaps } from "./compiler";
@@ -44,6 +45,17 @@ export interface ProduceResult {
   warnings: string[];
   /** Title/end cards joined around the video (only when the script has them). */
   cards?: CardResult[];
+  /** Seconds spent per stage: narration (speech), cards, render (and its passes). */
+  timings: ProduceTimings;
+}
+
+export interface ProduceTimings {
+  narrationSec: number;
+  cardsSec?: number;
+  renderSec: number;
+  /** The renderer's passes: skip, speed, mute, blur, inserts, music, final. */
+  passes: Record<string, number>;
+  totalSec: number;
 }
 
 export interface ProduceOptions {
@@ -51,6 +63,9 @@ export interface ProduceOptions {
   resolution?: ResolutionName;
   /** overrides script.output.quality (CLI --quality) */
   quality?: Quality;
+  /** Also write demo-project.json, the file the desktop app opens (default true).
+   *  Off while languages render in parallel; the caller writes it afterwards. */
+  sessionProject?: boolean;
 }
 
 /** A rendered video this far off the modelled length lost an effect. */
@@ -109,6 +124,8 @@ export async function produceLanguage(
       hint: "Record first: `narascreen record <script> --out <job>` (or `narascreen make <script>`).",
     });
   }
+  const startedAt = Date.now();
+  const secSince = (t: number) => Math.round((Date.now() - t) / 100) / 10;
   const recordingSec = probeDuration(p.recording);
   const quality = opts.quality ?? script.output?.quality ?? "high";
   const resolution = opts.resolution ?? script.output?.resolution ?? "native";
@@ -117,7 +134,9 @@ export async function produceLanguage(
   // milliseconds, not after minutes of speech synthesis.
   compile(script, trace, lang, undefined, [], { durationSec: recordingSec });
 
+  const ttsAt = Date.now();
   const clips = await synthesizeNarrations(script, lang, p.audioDir, log);
+  const narrationSec = secSince(ttsAt);
 
   stage("compile", `Compiling effects [${lang}]`, { lang });
   const warnings: string[] = [];
@@ -145,9 +164,18 @@ export async function produceLanguage(
   const projectPath = path.join(p.root, `demo-project.${lang}.json`);
   const json = JSON.stringify(project, null, 2) + "\n";
   fs.writeFileSync(projectPath, json);
-  // produceTimelineVideo reads demo-project.json specifically; it is also what
-  // the desktop app opens (the most recently produced language).
-  fs.writeFileSync(path.join(p.root, "demo-project.json"), json);
+  // demo-project.json is what the desktop app opens (the most recently produced language).
+  if (opts.sessionProject !== false) fs.writeFileSync(path.join(p.root, "demo-project.json"), json);
+
+  // Title/end cards (only scripts that have them), at the video's final size:
+  // the renderer's final pass joins them in the same encode.
+  const native = probeResolution(p.recording);
+  const outSize = resolution !== "native" ? RESOLUTIONS[resolution] : native;
+  const cardsAt = Date.now();
+  const cardSet = script.intro || script.outro
+    ? await renderCards(script, lang, outSize, { audioDir: p.audioDir, tmpDir: path.join(p.root, "cards") }, crfFor(quality), log)
+    : { results: [] as CardResult[] };
+  const cardsSec = cardSet.results.length ? secSince(cardsAt) : undefined;
 
   stage("render", `Rendering video/final_${lang}.mp4 (${actions.length} actions)`, { lang, actions: actions.length, quality, resolution });
   fs.mkdirSync(p.logsDir, { recursive: true });
@@ -167,15 +195,24 @@ export async function produceLanguage(
       if (!l) continue;
       if (SKIPPED_PASS.test(l)) skippedPasses.push(l);
       else if (/^warning\b/i.test(l)) rendererWarnings.push(`renderer [${lang}]: ${l.replace(/^warning:?\s*/i, "")}`);
-      log(l);
+      // Languages can render at the same time: say whose line this is.
+      log(`[${lang}] ${l}`);
     }
   };
 
-  const crf = QUALITY_CRF[quality];
+  const crf = crfFor(quality);
+  const renderAt = Date.now();
+  let passes: Record<string, number> = {};
   try {
-    // The renderer's own `resolution` argument stays unset: it would mix frame
-    // sizes between passes. Size presets are applied afterwards (letterbox).
-    await produceTimelineVideo(p.root, emit, lang, undefined, undefined, crf);
+    // The renderer's own `resolution` argument stays unset: it would build
+    // freezes and zooms at the preset size while the clips keep the recording's.
+    // `letterbox` scales in the final pass only.
+    await produceTimelineVideo(p.root, emit, lang, undefined, undefined, crf, undefined, {
+      projectFile: projectPath,
+      letterbox: resolution !== "native" ? outSize : undefined,
+      wrap: { before: cardSet.intro, after: cardSet.outro },
+      onTimings: (t) => (passes = t),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     emit(`ERROR: ${message}`);
@@ -203,7 +240,8 @@ export async function produceLanguage(
       rejectedVideo: reject(videoPath, lang),
     });
   }
-  const expected = timeline.finalDuration(recordingSec);
+  const cardsTotal = cardSet.results.reduce((s, c) => s + c.durationSec, 0);
+  const expected = timeline.finalDuration(recordingSec) + cardsTotal;
   if (Math.abs(durationSec - expected) > Math.max(DURATION_TOLERANCE_SEC, expected * 0.05)) {
     rendererWarnings.push(
       `final_${lang}.mp4 is ${durationSec.toFixed(1)}s but the timeline adds up to ~${expected.toFixed(1)}s — ` +
@@ -211,14 +249,23 @@ export async function produceLanguage(
     );
   }
 
+  const renderSec = secSince(renderAt);
+  // Normally a no-op (the final pass letterboxed already); kept for a video
+  // the final pass left at another size.
   if (resolution !== "native") {
     resizeTo(videoPath, RESOLUTIONS[resolution], crf, emit, logPath);
     durationSec = probeDuration(videoPath);
   }
-  // Title/end cards (only scripts that have them): joined around the finished video.
-  const cards = script.intro || script.outro ? await addCards(script, lang, videoPath, { audioDir: p.audioDir, tmpDir: path.join(p.root, "cards") }, crf, log) : [];
-  if (cards.length) durationSec = probeDuration(videoPath);
+  const cards = cardSet.results;
   const { width, height } = probeResolution(videoPath);
+  const timings: ProduceTimings = {
+    narrationSec,
+    ...(cardsSec != null ? { cardsSec } : {}),
+    renderSec,
+    passes,
+    totalSec: secSince(startedAt),
+  };
+  emit(`\nTimings: speech ${narrationSec}s${cardsSec != null ? `, cards ${cardsSec}s` : ""}, render ${renderSec}s (${Object.entries(passes).map(([k, v]) => `${k} ${v}s`).join(", ") || "no passes"}), total ${timings.totalSec}s`);
   for (const w of rendererWarnings) warn(w);
 
   return {
@@ -240,7 +287,12 @@ export async function produceLanguage(
     })),
     warnings: [...warnings, ...rendererWarnings],
     ...(cards.length ? { cards } : {}),
+    timings,
   };
+}
+
+function crfFor(quality: Quality): number {
+  return QUALITY_CRF[quality];
 }
 
 /** Move an incomplete render away from final_<lang>.mp4 (kept for debugging)

@@ -49,6 +49,7 @@ import { DEFAULT_VOICES, LANG_CODES, LANG_LABELS } from "../src/lib/voices";
 import type { LoadedScript } from "./validate";
 import type { TraceEntry } from "./types";
 import type { ProduceResult } from "./produce-headless";
+import { parallelLanguages, stopRenderChildren } from "./produce-parallel";
 import type { PreviewResult } from "./preview";
 
 const EDITOR_DIR = path.resolve(__dirname, "..");
@@ -155,6 +156,8 @@ function onSignal(sig: NodeJS.Signals): void {
     );
     return;
   }
+  // Languages rendering in their own processes stop too (with their ffmpeg).
+  stopRenderChildren(sig);
   if (finished) process.exit(process.exitCode ?? 1);
   releaseLocks();
   finish(
@@ -769,6 +772,7 @@ interface VideoOutcome {
   height?: number;
   narrations: ProduceResult["narrations"];
   cards?: ProduceResult["cards"];
+  timings: ProduceResult["timings"];
   preview: Pick<PreviewResult, "contactSheet" | "frames"> | null;
 }
 
@@ -778,48 +782,83 @@ async function produceJob(ctx: Ctx, dir: string, script: DemoScript, langs: stri
   const { produceLanguage } = await import("./produce-headless");
   const { makePreview } = await import("./preview");
   const videos: VideoOutcome[] = [];
+
+  // A finished language: preview frames, job state, and its entry in the result.
+  const done = (lang: string, r: ProduceResult): VideoOutcome => {
+    ctx.warnings.push(...r.warnings);
+    const previewDir = path.join(p.previewDir, lang);
+    let preview: VideoOutcome["preview"] = null;
+    try {
+      stage("preview", `Making preview frames [${lang}]`);
+      const pv = makePreview(r.videoPath, previewDir);
+      preview = { contactSheet: pv.contactSheet, frames: pv.frames };
+    } catch (e) {
+      // The video is the product; a missing contact sheet should not throw it away.
+      const msg = `preview [${lang}]: ${toAgentError(e).message}`;
+      warn(msg);
+      ctx.warnings.push(msg);
+    }
+    const state = loadJob(dir);
+    state.produce[lang] = { status: "done", at: nowIso(), videoPath: r.videoPath, durationSec: r.durationSec, previewDir };
+    writeJob(dir, state);
+    return {
+      lang,
+      path: r.videoPath,
+      durationSec: r.durationSec,
+      ...(r.width && r.height ? { width: r.width, height: r.height } : {}),
+      narrations: r.narrations,
+      ...(r.cards ? { cards: r.cards } : {}),
+      timings: r.timings,
+      preview,
+    };
+  };
+  const failed = (lang: string, e: unknown): AgentError => {
+    const err = toAgentError(e);
+    try {
+      const state = loadJob(dir);
+      state.produce[lang] = { status: "failed", at: nowIso(), error: err.toJSON() };
+      writeJob(dir, state);
+    } catch {
+      // keep the original error
+    }
+    return err;
+  };
+  // Languages already rendered are finished products — say where they are.
+  const report = (lang: string, err: AgentError): AgentError =>
+    !videos.length
+      ? err
+      : new AgentError(err.code, `[${lang}] ${err.message}`, {
+          hint: err.hint,
+          where: err.where,
+          details: {
+            ...err.details,
+            failedLang: lang,
+            videos: videos.map((v) => ({ lang: v.lang, path: v.path, durationSec: v.durationSec, preview: v.preview })),
+          },
+        });
+
+  const parallel = Math.min(parallelLanguages(), langs.length);
+  if (parallel > 1) {
+    // Each language in its own process (the renderer's ffmpeg calls block), up to
+    // `parallel` at once. All of them run to the end; the first failure (in the
+    // order asked) is reported with the languages that did finish.
+    log(`Rendering ${langs.join(", ")} in parallel (${parallel} at a time)`);
+    const { produceLanguageInChild, runLimited } = await import("./produce-parallel");
+    const settled = await runLimited(langs, parallel, async (lang) => done(lang, await produceLanguageInChild(p.root, script, trace, lang, { ...output, sessionProject: false })));
+    const failures: { lang: string; err: AgentError }[] = [];
+    settled.forEach((s, i) => (s.status === "fulfilled" ? videos.push(s.value) : failures.push({ lang: langs[i], err: failed(langs[i], s.reason) })));
+    // The desktop app opens demo-project.json: the last language asked for that rendered.
+    const last = [...videos].reverse()[0];
+    if (last) fs.copyFileSync(path.join(p.root, `demo-project.${last.lang}.json`), path.join(p.root, "demo-project.json"));
+    if (failures.length) throw report(failures[0].lang, failures[0].err);
+    return videos;
+  }
+
   for (const lang of langs) {
     try {
-      const r = await produceLanguage(p.root, script, trace, lang, log, output);
-      ctx.warnings.push(...r.warnings);
-      const previewDir = path.join(p.previewDir, lang);
-      let preview: VideoOutcome["preview"] = null;
-      try {
-        stage("preview", `Making preview frames [${lang}]`);
-        const pv = makePreview(r.videoPath, previewDir);
-        preview = { contactSheet: pv.contactSheet, frames: pv.frames };
-      } catch (e) {
-        // The video is the product; a missing contact sheet should not throw it away.
-        const msg = `preview [${lang}]: ${toAgentError(e).message}`;
-        warn(msg);
-        ctx.warnings.push(msg);
-      }
-      const state = loadJob(dir);
-      state.produce[lang] = { status: "done", at: nowIso(), videoPath: r.videoPath, durationSec: r.durationSec, previewDir };
-      writeJob(dir, state);
-      // Final size (after any --resolution scaling), when the producer reports it.
-      const { width, height } = r as Partial<{ width: number; height: number }>;
-      videos.push({ lang, path: r.videoPath, durationSec: r.durationSec, ...(width && height ? { width, height } : {}), narrations: r.narrations, ...(r.cards ? { cards: r.cards } : {}), preview });
+      videos.push(done(lang, await produceLanguage(p.root, script, trace, lang, log, output)));
     } catch (e) {
-      const err = toAgentError(e);
-      try {
-        const state = loadJob(dir);
-        state.produce[lang] = { status: "failed", at: nowIso(), error: err.toJSON() };
-        writeJob(dir, state);
-      } catch {
-        // keep the original error
-      }
-      if (!videos.length) throw err;
-      // Languages already rendered are finished products — say where they are.
-      throw new AgentError(err.code, `[${lang}] ${err.message}`, {
-        hint: err.hint,
-        where: err.where,
-        details: {
-          ...err.details,
-          failedLang: lang,
-          videos: videos.map((v) => ({ lang: v.lang, path: v.path, durationSec: v.durationSec, preview: v.preview })),
-        },
-      });
+      throw report(lang, failed(lang, e));
     }
   }
   return videos;

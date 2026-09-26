@@ -6,6 +6,7 @@ import {
   extractFrame,
   cutClip,
   hasAudioStream,
+  INTERMEDIATE_VIDEO,
 } from "./ffmpeg";
 
 // ─── Types (shared with produce.ts) ───────────────────────────
@@ -770,8 +771,7 @@ export function cutSpeedClip(
     // fps=30 resamples the re-timed frames onto the 30 fps grid exactly
     // (letting the encoder do it duplicated a few frames at the start).
     "-vf", `setpts=${pts}*PTS,fps=30`,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-    "-pix_fmt", "yuv420p",
+    ...INTERMEDIATE_VIDEO,
   ];
   if (hasAudio) {
     args.push("-af", atempoChain(speedFactor));

@@ -50,6 +50,10 @@ let currentStage: Stage | undefined;
 export function setQuiet(q: boolean) {
   quiet = q;
 }
+/** The current progress settings, for a child process that should report the same way. */
+export function eventSettings(): { mode: "text" | "json"; quiet: boolean } {
+  return { mode, quiet };
+}
 export function setEventMode(m: "text" | "json") {
   mode = m;
 }

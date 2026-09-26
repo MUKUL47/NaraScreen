@@ -201,14 +201,24 @@ Fix the entry and check again until it passes.
 ### 7. Make
 
 `make` records the browser, generates the narration, renders every effect and writes a preview.
-It takes roughly 1–3× the video length. The result lists each video with its narrations and their spoken durations:
+Recording takes about as long as the demo itself; each language then renders in a fraction of that.
+Several languages render at the same time (two at once; set `NARASCREEN_PARALLEL_LANGS=1` to render
+one after another, or a higher number on a big machine). The result lists each video with its
+narrations, their spoken durations, and where the time went:
 
 ```json
 { "job": "/…/jobs/my-demo", "recorded": true,
   "videos": [{ "lang": "en", "path": "/…/video/final_en.mp4", "durationSec": 74.2,
                "narrations": [{ "step": "intro", "entry": 1, "text": "…", "voice": "af_heart", "durationSec": 4.1 }],
+               "timings": { "narrationSec": 3.2, "renderSec": 41.5, "totalSec": 45.1,
+                            "passes": { "skip": 2.1, "inserts": 12.4, "final": 26.8 } },
                "preview": { "contactSheet": "/…/preview/en/contact.jpg", "frames": [{ "t": 3.1, "path": "…" }] } }] }
 ```
+
+`timings` (seconds): `narrationSec` speech synthesis, `cardsSec` title/end cards (when the script has
+them), `renderSec` the renderer, split into its `passes` (skip, speed, mute, blur, inserts, music, and
+`final` — the one encode that draws spotlights, arrows, callouts and subtitles, scales, and joins the
+cards). The same line ends each language's log (`logs/produce-<lang>.log`).
 
 ### 8. Review
 
@@ -751,7 +761,8 @@ blocks until the run finishes (or 120 s pass) and returns its status plus `outco
 Add `?format=ndjson` to the events URL for newline-delimited JSON instead of SSE.
 
 Stages, in order: `validate` → `setup` → `record` → `tts` → `compile` → `render` → `preview`.
-From the CLI, `--events json` prints the same events as JSON lines on stderr.
+From the CLI, `--events json` prints the same events as JSON lines on stderr. While languages render
+at the same time their events interleave; each message names its language (`[en]`, `[hi]`).
 
 ---
 

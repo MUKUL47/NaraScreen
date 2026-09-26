@@ -150,9 +150,9 @@ Every project is a folder. The default parent is `~/NaraScreen/`, and the defaul
 
 ## Production pipeline
 
-`produceTimelineVideo(sessionDir, emit, version?, selectedActionIds?, resolution?, crf?, trim?)` in [electron/produce.ts](editor/electron/produce.ts).
+`produceTimelineVideo(sessionDir, emit, version?, selectedActionIds?, resolution?, crf?, trim?, opts?)` in [electron/produce.ts](editor/electron/produce.ts). `opts` (headless only): the project file to read, a `letterbox` size, `wrap` clips (title/end cards) and an `onTimings` callback (seconds per pass).
 
-Each pass reads the previous pass's output from `video/temp/pass_N.mp4`:
+Each pass reads the previous pass's output from `video/temp[-<version>]/pass_N.mp4` (one temp folder per version, so two languages can render at once). Passes 0–5b write **intermediates** with `INTERMEDIATE_VIDEO` ([ffmpeg.ts](editor/electron/ffmpeg.ts): x264 ultrafast, CRF 12 — fast and near-lossless); only the final pass encodes the delivered file:
 
 | # | Pass | Notes |
 |---|---|---|
@@ -163,10 +163,8 @@ Each pass reads the previous pass's output from `video/temp/pass_N.mp4`:
 | 4 | **Mute** | Ranges are remapped through skip and speed |
 | 4b | **Blur** | Before the inserts, on the post-skip/speed timeline (duration in recording seconds), so freeze frames and zoom frames are cut from already-blurred video |
 | 5 | **Inserts** | Zoom, pause and narrate at remapped timestamps. TTS runs here if no audio file exists yet. Records how much time each insert adds (for remapping) and collects one subtitle cue per narration |
-| 5b | **Spotlight** | Remapped through skip, speed *and* inserts; batched into as few ffmpeg runs as possible, split only where they overlap |
-| 5c | **Text (ASS)** | Callouts and subtitles in one libass pass on the final timeline: subtitles above spotlight dimming and above lower-thirds; any script (Latin, Devanagari, CJK) renders |
-| 7 | **Music** | Mixed in with `amix`. The music is ducked during the narration ranges recorded by the insert pass |
-| 8 | **Final** | Scale and pad to `resolution`, and/or re-encode at `crf`, if either differs from the defaults (native size, CRF 18) |
+| 5b | **Music** | Mixed in with `amix` (video copied). The music is ducked during the narration ranges recorded by the insert pass. Before the final pass, so cards stay music-free |
+| 6 | **Final** | ONE encode (`-preset fast`, `medium` when cards are joined; CRF from `crf`) of a single filter graph: **spotlights** (remapped through skip, speed *and* inserts; every pixel filter gated with `enable=` to its own window, so frames without a spotlight pass straight through; soft/converging ones share one mask chain) → **text (ASS)** (callouts, arrows and subtitles in one libass filter: above spotlight dimming and lower-thirds; any script renders) → **scale/pad** to `resolution`/`letterbox` → **cards** (`wrap`, joined by `concat`). Skipped (the recording is copied) only when there is nothing at all to do |
 
 Output: `video/final_v{N+1}.mp4`, or `final_<version>.mp4` if a version label is passed.
 
@@ -245,7 +243,8 @@ agent ◄─ one JSON envelope per command (CLI stdout / HTTP), progress events 
 | [errors.ts](editor/api/errors.ts), [output.ts](editor/api/output.ts) | Stable error codes → exit codes; the envelope `{ok, command, result|error, warnings, next}` and the event stream. |
 | [job.ts](editor/api/job.ts) | Job folder, atomic lock, and the structure fingerprint that decides when a recording can be reused (text-only edits re-render without re-recording). |
 | [runner.ts](editor/api/runner.ts), [page-elements.ts](editor/api/page-elements.ts), [screencast.ts](editor/api/screencast.ts), [inspect.ts](editor/api/inspect.ts) | Browser side: selector semantics (one definition), reveal/measure, trace, failure diagnostics (screenshot + candidate selectors), page inspection. |
-| [cards.ts](editor/api/cards.ts) | Title/end cards (`intro`/`outro`): a built-in HTML template drawn by Chromium frame by frame with its CSS animations paused at each frame time (deterministic), narration through the normal TTS path, then one ffmpeg concat around the rendered video. Called from `produce-headless.ts` only when the script has cards; not in the structure hash, so card edits never re-record. |
+| [cards.ts](editor/api/cards.ts) | Title/end cards (`intro`/`outro`): a built-in HTML template drawn by Chromium frame by frame with its CSS animations paused at each frame time (deterministic), narration through the normal TTS path. Rendered first at the final size; the renderer's final pass joins them (`wrap`) in the same encode. Called from `produce-headless.ts` only when the script has cards; not in the structure hash, so card edits never re-record. |
+| [produce-parallel.ts](editor/api/produce-parallel.ts), [produce-child.ts](editor/api/produce-child.ts) | Languages render at the same time: the renderer's ffmpeg calls are synchronous, so each language runs `produceLanguage` in its own Node process (tsx loader, own process group so a cancel stops its ffmpeg), up to `NARASCREEN_PARALLEL_LANGS` (default 2). The child prints one JSON line (result or error); progress goes straight to stderr. |
 | [plugins/](editor/api/plugins/index.ts) | Recording plugins, opted into per script under `plugins`. The core only calls hooks (context options, `ready` before each act, `afterFocus`, plugin acts, browser→video box scaling, compile-time restyling); scripts without `plugins` never reach them and keep their structure hash. [flutter/](editor/api/plugins/flutter/index.ts): a Flutter web build recorded as an Android phone (device emulation, auto-enabled accessibility tree via the centre-tap on Flutter's placeholder, taps, `swipe`, overlays scaled by the pixel ratio; `health.ts`: console/page-error/rejection/pending-request collection, `FLUTTER_APP_NOT_READY` / `FLUTTER_SEMANTICS_UNAVAILABLE` explanations of step failures, the `allowedHosts` request guard, and the `FLUTTER_NOT_WEB_BUILD` preflight); its fixture app (with `?stuck=1` / `?api=` test switches) lives in `plugins/flutter/fixture/` (built on demand by the e2e test when the Flutter SDK is installed). |
 | [narration.ts](editor/api/narration.ts), [compiler.ts](editor/api/compiler.ts), [produce-headless.ts](editor/api/produce-headless.ts), [preview.ts](editor/api/preview.ts) | Produce side: TTS (fails loudly, retried, cached), timeline model (auto durations, ranges, stop rules), render + output presets, contact sheets. |
 | [cli.ts](editor/api/cli.ts), [commands.ts](editor/api/commands.ts), [doctor.ts](editor/api/doctor.ts), [init.ts](editor/api/init.ts), [bin/narascreen](editor/bin/narascreen) | CLI. `commands.ts` is the single command catalog (help, parsing, server mapping, docs). |

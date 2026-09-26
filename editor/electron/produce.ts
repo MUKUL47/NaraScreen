@@ -12,6 +12,8 @@ import {
   normalizeSegmentAudio,
   concatSegments,
   hasAudioStream,
+  INTERMEDIATE_VIDEO,
+  FILTER_THREADS,
 } from "./ffmpeg";
 import { generateTTS } from "./tts";
 import {
@@ -174,63 +176,66 @@ function applyBlurBatch(
 
   if (!filterChain) { fs.copyFileSync(inputPath, outputPath); return; }
 
-  const args = ["-y", "-i", inputPath, "-filter_complex", filterChain];
+  const args = ["-y", "-i", inputPath, "-filter_complex_threads", FILTER_THREADS, "-filter_complex", filterChain];
   args.push("-map", `[${lastLabel}]`);
   if (hasAudioStream(inputPath)) {
     args.push("-map", "0:a", "-c:a", "copy");
   }
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
+  args.push(...INTERMEDIATE_VIDEO);
   args.push(outputPath);
   ffmpegSync(args);
 }
 
-function applySpotlightBatch(
-  inputPath: string,
+/**
+ * Spotlight filters for the final graph, from [inLabel] to the returned label.
+ *
+ * Spotlights never overlap in time, and every filter that touches pixels is
+ * switched on only inside its spotlight's window (`enable=`), so the frames
+ * with no spotlight pass straight through. (Before, each spotlight blurred and
+ * blended the WHOLE video: 17 soft spotlights in a 7-minute video meant 17
+ * full-frame blurs per frame — 40 minutes of a 44-minute render.)
+ *
+ * Hard spotlights: darken, then paste the element's own pixels back (crop).
+ * Soft (feather) and animated (converge) spotlights share one mask chain:
+ * white boxes on black, snapped to exact 0/255, blurred by the feather, used as
+ * the lit copy's alpha over the darkened frame. A converging box is re-aimed
+ * every 1/60 s by sendcmd (commands in `cmdFile`, relative to ffmpeg's cwd).
+ */
+function spotlightGraph(
   actions: Action[],
-  outputPath: string,
   res: { width: number; height: number },
   totalDuration: number,
   emit: (msg: string) => void,
-): void {
-  // Each spotlight action builds: split → darken → crop bright regions → overlay enabled by time
-  // We chain them sequentially — output of one feeds into the next
-  let filterChain = "";
-  let lastLabel = "0:v";
-  let ai = 0;
-  const cmdFiles: string[] = [];
+  inLabel: string,
+  cmdFile: string,
+): { graph: string[]; out: string; commands: string[] } {
+  const graph: string[] = [];
+  const commands: { at: number; line: string }[] = [];
+  let last = inLabel;
+  const soft: { win: string; alpha: string; feather: number; boxes: string[] }[] = [];
 
-  for (const action of actions) {
+  actions.forEach((action, ai) => {
     const rects = action.spotlightRects ?? (action.spotlightRect ? [action.spotlightRect] : []);
-    if (rects.length === 0) continue;
-
+    if (rects.length === 0) return;
     const alpha = (action.dimOpacity ?? 0.7).toFixed(2);
     const start = action.timestamp;
     const end = start + (action.spotlightDuration ?? 3);
-    const enableExpr = `between(t,${start.toFixed(3)},${Math.min(end, totalDuration).toFixed(3)})`;
-
+    const win = `between(t,${start.toFixed(3)},${Math.min(end, totalDuration).toFixed(3)})`;
     emit(`    Spotlight at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
 
-    // Soft edge (spotlightFeather px): the lit area is blended in through a blurred
-    // mask instead of hard-cut rectangles. The mask box is grown by the feather so
-    // the element itself stays fully lit and the falloff happens outside it.
-    // Converge (spotlightConverge s): the lit box starts as the whole frame and
-    // closes in on the element, easing out; drawbox is re-aimed every frame by sendcmd.
+    // Soft edge (spotlightFeather px): the mask box is grown by the feather so the
+    // element itself stays fully lit and the falloff happens outside it.
+    // Converge (spotlightConverge s): the box starts as the whole frame and closes
+    // in on the element, easing out.
     const feather = Math.max(0, Math.round(action.spotlightFeather ?? 0));
     const converge = Math.min(Math.max(0, action.spotlightConverge ?? 0), (end - start) / 2);
     if (feather > 0 || converge > 0) {
-      const sep0 = filterChain ? ";" : "";
-      filterChain += `${sep0}[${lastLabel}]split=4[pass${ai}][dark${ai}][lit${ai}][mk${ai}]`;
-      filterChain += `;[dark${ai}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill[dimmed${ai}]`;
       const target = (r: number[]) => [r[0] - feather, r[1] - feather, r[2] + 2 * feather, r[3] + 2 * feather];
       const full = [-feather, -feather, res.width + 2 * feather, res.height + 2 * feather];
       const box = (b: number[]) => `x=${Math.round(b[0])}:y=${Math.round(b[1])}:w=${Math.round(b[2])}:h=${Math.round(b[3])}`;
-      const boxes = rects
-        .map((r, ri) => `drawbox@sp${ai}_${ri}=${box(converge > 0 ? full : target(r))}:color=white:t=fill`)
-        .join(",");
-      let cmds = "";
+      const boxes = rects.map((r, ri) => `drawbox@sp${ai}_${ri}=${box(converge > 0 ? full : target(r))}:color=white:t=fill:enable='${win}'`);
       if (converge > 0) {
         const steps = Math.max(1, Math.round(converge * 60));
-        const lines: string[] = [];
         for (let k = 1; k <= steps; k++) {
           const e = 1 - Math.pow(1 - k / steps, 3);
           const at = start + (converge * k) / steps;
@@ -239,62 +244,52 @@ function applySpotlightBatch(
             const b = full.map((f, i) => f + (tg[i] - f) * e);
             return ["x", "y", "w", "h"].map((key, i) => `drawbox@sp${ai}_${ri} ${key} ${Math.round(b[i])}`);
           });
-          lines.push(`${at.toFixed(3)} ${sets.join(", ")};`);
+          commands.push({ at, line: `${at.toFixed(3)} ${sets.join(", ")};` });
         }
-        const file = path.join(path.dirname(outputPath), `.spotlight-${ai}-${process.pid}.cmd`);
-        fs.writeFileSync(file, lines.join("\n") + "\n");
-        cmdFiles.push(file);
-        cmds = `sendcmd=f='${file.replace(/\\/g, "/").replace(/'/g, "'\\\\''").replace(/:/g, "\\\\:")}',`;
       }
-      // drawbox writes limited-range levels (black 16, white 235): snap to exact 0/255
-      // first, or the "dark" part of the mask would let the bright video bleed through.
-      const blur = feather > 0 ? `,gblur=sigma=${(feather / 2).toFixed(1)}` : "";
-      filterChain += `;[mk${ai}]format=gray,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill,${cmds}${boxes},lut=y='if(gt(val,128),255,0)'${blur}[mask${ai}]`;
-      filterChain += `;[lit${ai}]format=yuva420p[lita${ai}];[lita${ai}][mask${ai}]alphamerge[soft${ai}]`;
-      filterChain += `;[dimmed${ai}][soft${ai}]overlay=0:0[spotlight${ai}]`;
-      const outSoft = `out${ai}`;
-      filterChain += `;[pass${ai}][spotlight${ai}]overlay=0:0:enable='${enableExpr}'[${outSoft}]`;
-      lastLabel = outSoft;
-      ai++;
-      continue;
+      soft.push({ win, alpha, feather, boxes });
+      return;
     }
 
-    const splitCount = 2 + rects.length;
-    const splitLabels = [`pass${ai}`, `dark${ai}`, ...rects.map((_, ri) => `crop${ai}_${ri}`)];
-    const sep = filterChain ? ";" : "";
-    filterChain += `${sep}[${lastLabel}]split=${splitCount}${splitLabels.map((l) => `[${l}]`).join("")}`;
+    // Hard-edged: darken, then paste the element's own pixels back.
+    const labels = [`pass${ai}`, `dark${ai}`, ...rects.map((_, ri) => `crop${ai}_${ri}`)];
+    graph.push(`[${last}]split=${labels.length}${labels.map((l) => `[${l}]`).join("")}`);
+    graph.push(`[dark${ai}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill:enable='${win}'[dimmed${ai}]`);
+    let comp = `dimmed${ai}`;
+    rects.forEach(([sx, sy, sw, sh], ri) => {
+      graph.push(`[crop${ai}_${ri}]crop=${sw}:${sh}:${sx}:${sy}[bright${ai}_${ri}]`);
+      const o = ri < rects.length - 1 ? `comp${ai}_${ri}` : `spotlight${ai}`;
+      graph.push(`[${comp}][bright${ai}_${ri}]overlay=${sx}:${sy}:enable='${win}'[${o}]`);
+      comp = o;
+    });
+    graph.push(`[pass${ai}][spotlight${ai}]overlay=0:0:enable='${win}'[spout${ai}]`);
+    last = `spout${ai}`;
+  });
 
-    filterChain += `;[dark${ai}]drawbox=x=0:y=0:w=iw:h=ih:color=black@${alpha}:t=fill[dimmed${ai}]`;
-
-    let compositeLabel = `dimmed${ai}`;
-    for (let ri = 0; ri < rects.length; ri++) {
-      const [sx, sy, sw, sh] = rects[ri];
-      filterChain += `;[crop${ai}_${ri}]crop=${sw}:${sh}:${sx}:${sy}[bright${ai}_${ri}]`;
-      const outLabel = ri < rects.length - 1 ? `comp${ai}_${ri}` : `spotlight${ai}`;
-      filterChain += `;[${compositeLabel}][bright${ai}_${ri}]overlay=${sx}:${sy}[${outLabel}]`;
-      compositeLabel = outLabel;
-    }
-
-    const outLabel = `out${ai}`;
-    filterChain += `;[pass${ai}][spotlight${ai}]overlay=0:0:enable='${enableExpr}'[${outLabel}]`;
-    lastLabel = outLabel;
-    ai++;
+  if (soft.length) {
+    const any = soft.map((x) => x.win).join("+");
+    graph.push(`[${last}]split=3[sfpass][sflit][sfmk]`);
+    // Darken (each spotlight its own dimOpacity, only in its window).
+    graph.push(`[sfpass]${soft.map((x) => `drawbox=x=0:y=0:w=iw:h=ih:color=black@${x.alpha}:t=fill:enable='${x.win}'`).join(",")}[sfdim]`);
+    // The mask. drawbox writes limited-range levels (black 16, white 235): snap to
+    // exact 0/255 before blurring, or the "dark" part would let the lit copy bleed through.
+    const blurs = soft.filter((x) => x.feather > 0).map((x) => `gblur=sigma=${(x.feather / 2).toFixed(1)}:enable='${x.win}'`);
+    const mask = [
+      "format=gray",
+      `drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='${any}'`,
+      ...(commands.length ? [`sendcmd=f=${cmdFile}`] : []),
+      ...soft.flatMap((x) => x.boxes),
+      `lut=y='if(gt(val,128),255,0)':enable='${any}'`,
+      ...blurs,
+    ];
+    graph.push(`[sfmk]${mask.join(",")}[sfmask]`);
+    graph.push(`[sflit]format=yuva420p[sflita]`);
+    graph.push(`[sflita][sfmask]alphamerge=enable='${any}'[sfsoft]`);
+    graph.push(`[sfdim][sfsoft]overlay=0:0:enable='${any}'[sfout]`);
+    last = "sfout";
   }
-
-  if (!filterChain) { fs.copyFileSync(inputPath, outputPath); return; }
-
-  const args = ["-y", "-i", inputPath, "-filter_complex", filterChain];
-  args.push("-map", `[${lastLabel}]`);
-  if (hasAudioStream(inputPath)) {
-    args.push("-map", "0:a", "-c:a", "copy");
-  }
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
-  args.push(outputPath);
-  try {
-    ffmpegSync(args);
-  } finally {
-    for (const f of cmdFiles) fs.rmSync(f, { force: true });
-  }
+  commands.sort((x, y) => x.at - y.at);
+  return { graph, out: last, commands: commands.map((c) => c.line) };
 }
 
 // Callouts are drawn by libass (in the final ASS pass, see calloutEvents), not
@@ -1091,19 +1086,6 @@ ${[...callouts, ...dialogues].join("\n")}
   fs.writeFileSync(outputPath, assContent, "utf-8");
 }
 
-/** Burn an ASS file. ffmpeg runs IN the subtitle's folder with a bare file
- *  name: the `ass=` filter argument can't carry paths with , ' [ ] : or a
- *  Windows drive letter without fragile escaping. */
-function burnSubtitles(videoPath: string, subtitlePath: string, outputPath: string): boolean {
-  const res = spawnSync(FFMPEG_PATH, [
-    "-y", "-i", path.resolve(videoPath),
-    "-vf", `ass=${path.basename(subtitlePath)}`,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
-    "-c:a", "copy",
-    path.resolve(outputPath),
-  ], { cwd: path.dirname(path.resolve(subtitlePath)), stdio: ["pipe", "pipe", "ignore"] });
-  return res.status === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0;
-}
 
 // ═════════════════════════════════════════════════════════════
 // Insert Effect Builders (zoom, pause, narrate)
@@ -1149,7 +1131,7 @@ function buildSingleZoom(
     `x='${xExpr}'`, `y='${yExpr}'`,
     `d=${inFrames}`, `s=${outW}x${outH}`, `fps=30`,
   ].join(":");
-  ffmpegSync(["-y", "-i", framePath, "-vf", zpIn, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", zoomInPath]);
+  ffmpegSync(["-y", "-i", framePath, "-vf", zpIn, ...INTERMEDIATE_VIDEO, zoomInPath]);
   paths.push(zoomInPath);
 
   // Hold (with narration audio if provided)
@@ -1157,7 +1139,7 @@ function buildSingleZoom(
   const zpHold = [`zoompan=z='${maxZ.toFixed(4)}'`, `x='${xExpr}'`, `y='${yExpr}'`, `d=${holdFrames}`, `s=${outW}x${outH}`, `fps=30`].join(":");
   const holdArgs = ["-y", "-i", framePath];
   if (narration) holdArgs.push("-i", narration.audioPath);
-  holdArgs.push("-vf", zpHold, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
+  holdArgs.push("-vf", zpHold, ...INTERMEDIATE_VIDEO);
   if (narration) holdArgs.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   holdArgs.push(holdPath);
   ffmpegSync(holdArgs);
@@ -1171,7 +1153,7 @@ function buildSingleZoom(
   // Zoom-out
   const zoomOutPath = path.join(tempDir, `zoomout_${tag}.mp4`);
   const zpOut = [`zoompan=z='1+(${maxZ.toFixed(4)}-1)*${ssReverse}'`, `x='${xExpr}'`, `y='${yExpr}'`, `d=${inFrames}`, `s=${outW}x${outH}`, `fps=30`].join(":");
-  ffmpegSync(["-y", "-i", framePath, "-vf", zpOut, "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", zoomOutPath]);
+  ffmpegSync(["-y", "-i", framePath, "-vf", zpOut, ...INTERMEDIATE_VIDEO, zoomOutPath]);
   paths.push(zoomOutPath);
 
   return paths;
@@ -1317,7 +1299,7 @@ function buildPauseInsert(
   const args = ["-y", "-loop", "1", "-framerate", "30", "-i", framePath];
   if (narration) args.push("-i", narration.audioPath);
   args.push("-t", duration.toFixed(3), "-r", "30", "-vf", vf);
-  args.push("-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p");
+  args.push(...INTERMEDIATE_VIDEO);
   if (narration) args.push("-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(freezePath);
   ffmpegSync(args);
@@ -1548,14 +1530,27 @@ function buildInsertRemap(
 //
 // Order of passes:
 // 1. Trim (pre-cut source)
-// 2. Overlay passes (blur → spotlight → callout) — original timestamps
-// 3. Skip pass — removes skipped sections
-// 4. Speed pass — applies speed ramps (remapped timestamps)
-// 5. Mute pass — silences audio ranges (remapped timestamps)
-// 6. Insert pass — zoom/pause/narrate (remapped timestamps)
-// 7. Music pass — background music mixing
-// 8. Final re-encode — resolution/CRF
+// 2. Skip — removes skipped sections
+// 3. Speed — applies speed ramps (remapped timestamps)
+// 4. Mute — silences audio ranges (remapped timestamps)
+// 4b. Blur — before inserts, so freezes and zooms stay blurred
+// 5. Insert pass — zoom/pause/narrate (remapped timestamps)
+// 5b. Music — background music mixing (audio only)
+// 6. Final — ONE encode: spotlights, callouts/arrows + subtitles, scaling,
+//    title/end cards. Passes 1–5 write fast near-lossless intermediates.
 // ═════════════════════════════════════════════════════════════
+
+/** Extra settings for produceTimelineVideo (all optional; the desktop app passes none). */
+export interface ProduceOptions {
+  /** Project file to read (default <sessionDir>/demo-project.json). */
+  projectFile?: string;
+  /** Final frame size, letterboxed, applied in the final pass only (inserts stay at the recording size). */
+  letterbox?: { width: number; height: number };
+  /** Clips joined before/after the video in the final pass (title/end cards). */
+  wrap?: { before?: string; after?: string };
+  /** Seconds per pass (skip, speed, mute, blur, inserts, music, final). */
+  onTimings?: (timings: Record<string, number>) => void;
+}
 
 export async function produceTimelineVideo(
   sessionDir: string,
@@ -1565,13 +1560,15 @@ export async function produceTimelineVideo(
   resolution?: { width: number; height: number },
   crf?: number,
   trim?: { start: number; end: number },
+  opts: ProduceOptions = {},
 ): Promise<string> {
   // ─── Setup ───
-  const project = JSON.parse(fs.readFileSync(path.join(sessionDir, "demo-project.json"), "utf-8"));
+  const project = JSON.parse(fs.readFileSync(opts.projectFile ?? path.join(sessionDir, "demo-project.json"), "utf-8"));
   const recordingPath = project.recordingPath;
   let allActions: Action[] = project.actions || [];
   const videoDir = path.join(sessionDir, "video");
-  const tempDir = path.join(videoDir, "temp");
+  // One temp folder per version, so two languages can render at the same time.
+  const tempDir = path.join(videoDir, version ? `temp-${version}` : "temp");
   fs.mkdirSync(videoDir, { recursive: true });
   fs.mkdirSync(tempDir, { recursive: true });
   const totalDuration = probeDuration(recordingPath);
@@ -1639,6 +1636,19 @@ export async function produceTimelineVideo(
 
   const effectiveTotalDuration = probeDuration(effectiveRecording);
 
+  // How long each pass took (seconds), logged and reported through opts.onTimings.
+  const timings: Record<string, number> = {};
+  const timed = <T>(name: string, fn: () => T): T => {
+    const t0 = Date.now();
+    try {
+      return fn();
+    } finally {
+      const sec = (Date.now() - t0) / 1000;
+      timings[name] = Math.round(((timings[name] ?? 0) + sec) * 10) / 10;
+      emit(`  (${name} took ${sec.toFixed(1)}s)`);
+    }
+  };
+
   // NOTE: Overlay effects (blur/spotlight/callout) are applied LAST (after
   // inserts), not here. Inserts (narrate freezes etc.) stretch the timeline, so
   // an overlay burned in on the original timeline would land BEFORE its content
@@ -1654,7 +1664,7 @@ export async function produceTimelineVideo(
 
   if (skipRanges.length > 0) {
     const out = nextOutput();
-    applySkipPass(currentInput, skipRanges, out, tempDir, emit);
+    timed("skip", () => applySkipPass(currentInput, skipRanges, out, tempDir, emit));
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
@@ -1672,7 +1682,7 @@ export async function produceTimelineVideo(
 
   if (postSkipSpeedRanges.length > 0) {
     const out = nextOutput();
-    applySpeedPass(currentInput, postSkipSpeedRanges, out, tempDir, emit);
+    timed("speed", () => applySpeedPass(currentInput, postSkipSpeedRanges, out, tempDir, emit));
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
@@ -1697,7 +1707,7 @@ export async function produceTimelineVideo(
 
     if (remappedMuteRanges.length > 0) {
       const out = nextOutput();
-      applyMutePass(currentInput, remappedMuteRanges, out, emit);
+      timed("mute", () => applyMutePass(currentInput, remappedMuteRanges, out, emit));
       if (fs.existsSync(out) && fs.statSync(out).size > 0) {
         currentInput = out;
       }
@@ -1727,7 +1737,7 @@ export async function produceTimelineVideo(
     for (let bi = 0; bi < batches.length; bi++) {
       const out = nextOutput();
       emit(`  Pass ${bi + 1}/${batches.length} (${batches[bi].length} blur${batches[bi].length > 1 ? "s" : ""}):`);
-      applyBlurBatch(currentInput, batches[bi], out, nativeRes, blurInputDuration, emit);
+      timed("blur", () => applyBlurBatch(currentInput, batches[bi], out, nativeRes, blurInputDuration, emit));
       if (fs.existsSync(out) && fs.statSync(out).size > 0) {
         currentInput = out;
       } else {
@@ -1763,10 +1773,10 @@ export async function produceTimelineVideo(
     }
 
     const out = nextOutput();
-    const result = executeInsertPass(
+    const result = timed("inserts", () => executeInsertPass(
       currentInput, insertActions, narrations,
       out, tempDir, res, project, emit, remapTs,
-    );
+    ));
     narrationTimestamps = result.narrationTimestamps;
     insertRemap = buildInsertRemap(result.insertExpansions);
     subtitleCues = result.subtitleCues;
@@ -1778,10 +1788,25 @@ export async function produceTimelineVideo(
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Pass 5b: Overlay Effects (spotlight → callout; blur ran in pass 4b)
-  // Applied AFTER inserts, with timestamps remapped through skip/speed/insert so
-  // each overlay lands on the SAME frame its rect was captured on. (Burning them
-  // before inserts made spotlights drift early as narrations stretched the line.)
+  // Pass 5b: Music — mix background music (audio only; the video is copied).
+  // Before the final pass, so title/end cards joined there stay music-free.
+  // ═══════════════════════════════════════════════════════════
+
+  if (musicAction) {
+    emit(`\n[Pass: Music] Mixing background music...`);
+    const out = nextOutput();
+    timed("music", () => mixBackgroundMusic(currentInput, musicAction, narrationTimestamps, out, emit));
+    if (fs.existsSync(out) && fs.statSync(out).size > 0) currentInput = out;
+    else emit("  Warning: music pass produced no output, skipping");
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Pass 6: Final — ONE encode for everything drawn on the finished timeline:
+  // spotlights, then callouts/arrows + subtitles (libass, burned last so
+  // dimming never covers them), then scaling, then any title/end cards.
+  // Overlay timestamps are remapped through skip/speed/insert so each lands on
+  // the SAME frame its rect was captured on. (These used to be separate full
+  // re-encodes; the earlier passes write fast near-lossless intermediates.)
   // ═══════════════════════════════════════════════════════════
 
   const overlayRemap = (ts: number) => insertRemap(remapTs(ts));
@@ -1809,33 +1834,16 @@ export async function produceTimelineVideo(
   }
 
   const finalDuration = probeDuration(currentInput);
-  const overlayGroups: Array<{ type: string; actions: Action[]; apply: (input: string, actions: Action[], output: string, res: { width: number; height: number }, dur: number, emit: (msg: string) => void) => void }> = [
-    { type: "spotlight", actions: remappedSpotlights, apply: applySpotlightBatch },
-  ];
-
-  for (const { type, actions: typeActions, apply } of overlayGroups) {
-    if (typeActions.length === 0) continue;
-    const batches = batchNonOverlapping(typeActions);
-    emit(`\n[Overlay: ${type}] ${typeActions.length} action(s) → ${batches.length} pass(es)`);
-
-    for (let bi = 0; bi < batches.length; bi++) {
-      const batch = batches[bi];
-      const out = nextOutput();
-      emit(`  Pass ${bi + 1}/${batches.length} (${batch.length} ${type}${batch.length > 1 ? "s" : ""}):`);
-      apply(currentInput, batch, out, res, finalDuration, emit);
-      if (fs.existsSync(out) && fs.statSync(out).size > 0) {
-        currentInput = out;
-      } else {
-        emit(`    Warning: ${type} batch pass produced no output, skipping`);
-      }
-    }
+  const graph: string[] = [];
+  let vLabel = "0:v";
+  const cmdFile = "spotlight.cmd";
+  if (remappedSpotlights.length > 0) {
+    emit(`\n[Overlay: spotlight] ${remappedSpotlights.length} action(s)`);
+    const sp = spotlightGraph(remappedSpotlights, res, finalDuration, emit, vLabel, cmdFile);
+    if (sp.commands.length) fs.writeFileSync(path.join(tempDir, cmdFile), sp.commands.join("\n") + "\n");
+    graph.push(...sp.graph);
+    vLabel = sp.out;
   }
-
-  // ═══════════════════════════════════════════════════════════
-  // Pass 5c: Callouts + subtitles — one ASS file on the final timeline,
-  // burned LAST so spotlight dimming never covers them (libass renders any
-  // script, with font fallback).
-  // ═══════════════════════════════════════════════════════════
 
   const calloutLines = remappedCallouts.length
     ? (emit(`\n[Overlay: callout] ${remappedCallouts.length} action(s)`), calloutEvents(remappedCallouts, res, finalDuration, emit))
@@ -1856,61 +1864,78 @@ export async function produceTimelineVideo(
       const over = banners.filter((b) => b.start < cue.start + cue.duration && b.end > cue.start);
       if (over.length) cue.marginV = Math.max(SUBTITLE_MARGIN_V, ...over.map((b) => b.lift));
     }
-    const subPath = path.join(tempDir, "subtitles.ass");
-    writeSubtitleFile(subtitleCues, subPath, res, calloutLines);
-    const out = nextOutput();
-    if (burnSubtitles(currentInput, subPath, out)) {
-      currentInput = out;
-    } else {
-      emit("  Warning: subtitle/callout pass produced no output, skipping");
-    }
+    writeSubtitleFile(subtitleCues, path.join(tempDir, "subtitles.ass"), res, calloutLines);
+    // ffmpeg runs IN tempDir with bare file names: the `ass=` argument can't carry
+    // paths with , ' [ ] : or a Windows drive letter without fragile escaping.
+    graph.push(`[${vLabel}]ass=subtitles.ass[subbed]`);
+    vLabel = "subbed";
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // Pass 6: Music — mix background music
-  // ═══════════════════════════════════════════════════════════
+  const outSize = opts.letterbox ?? resolution;
+  const needsScale = !!outSize && (outSize.width !== nativeRes.width || outSize.height !== nativeRes.height);
+  if (needsScale) {
+    emit(`\n[Final] Scaling to ${outSize!.width}x${outSize!.height}`);
+    const { width: W, height: H } = outSize!;
+    graph.push(`[${vLabel}]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1[scaled]`);
+    vLabel = "scaled";
+  }
 
   const versionLabel = version || computeVersionLabel(videoDir);
   const finalPath = path.join(videoDir, `final_${versionLabel}.mp4`);
+  const wrapParts = [opts.wrap?.before, opts.wrap?.after].filter((x): x is string => !!x);
+  const finalCrf = crf || 18;
 
-  if (musicAction) {
-    emit(`\n[Pass: Music] Mixing background music...`);
-    mixBackgroundMusic(currentInput, musicAction, narrationTimestamps, finalPath, emit);
-    currentInput = finalPath;
-  } else if (currentInput === effectiveRecording) {
+  if (currentInput === effectiveRecording && graph.length === 0 && finalCrf === 18 && wrapParts.length === 0) {
     emit("\nNo effects to apply, copying original recording...");
     fs.copyFileSync(currentInput, finalPath);
-    currentInput = finalPath;
   } else {
-    fs.renameSync(currentInput, finalPath);
-    currentInput = finalPath;
+    emit(`\n[Final] Encoding final_${versionLabel}.mp4 (CRF ${finalCrf})${wrapParts.length ? " with title/end cards" : ""}...`);
+    const finished = path.join(tempDir, "finished.mp4");
+    const args = ["-y", "-i", path.resolve(currentInput)];
+    let aMap: string | null = hasAudioStream(currentInput) ? "0:a" : null;
+    if (wrapParts.length) {
+      // intro + video + outro, each normalised to the output size, 30 fps and
+      // stereo 48 kHz (a part without sound gets silence), joined by concat.
+      const size = outSize ?? nativeRes;
+      // setpts/asetpts: concat places each part right after the previous one's
+      // end, so every part must start at 0 (a rendered video can start a frame
+      // late, which showed as the intro card's last frame held one frame longer).
+      const norm = `setpts=PTS-STARTPTS,scale=${size.width}:${size.height}:force_original_aspect_ratio=decrease,pad=${size.width}:${size.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p`;
+      const parts = [opts.wrap?.before, "main", opts.wrap?.after].filter((x): x is string => !!x);
+      let idx = 1;
+      const labels = parts.map((part, k) => {
+        const file = part === "main" ? currentInput : part;
+        const vi = part === "main" ? -1 : idx++;
+        if (vi >= 0) args.push("-i", path.resolve(file));
+        graph.push(`[${vi < 0 ? vLabel : `${vi}:v`}]${norm}[cv${k}]`);
+        if (hasAudioStream(file)) {
+          graph.push(`[${vi < 0 ? 0 : vi}:a]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[ca${k}]`);
+        } else {
+          args.push("-f", "lavfi", "-t", String(probeDuration(file)), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
+          graph.push(`[${idx++}:a]anull[ca${k}]`);
+        }
+        return `[cv${k}][ca${k}]`;
+      });
+      graph.push(`${labels.join("")}concat=n=${parts.length}:v=1:a=1[cv][ca]`);
+      vLabel = "cv";
+      aMap = "[ca]";
+    }
+    if (graph.length) args.push("-filter_complex_threads", FILTER_THREADS, "-filter_complex", graph.join(";"), "-map", vLabel.includes(":") ? vLabel : `[${vLabel}]`);
+    else args.push("-map", "0:v");
+    if (aMap) args.push("-map", aMap);
+    // Cards used to be joined in a separate "medium" re-encode; keep that preset for them.
+    args.push("-c:v", "libx264", "-preset", wrapParts.length ? "medium" : "fast", "-crf", String(finalCrf), "-pix_fmt", "yuv420p");
+    if (aMap) args.push(...(wrapParts.length ? ["-c:a", "aac", "-b:a", "192k"] : ["-c:a", "copy"]));
+    args.push("-movflags", "+faststart", path.resolve(finished));
+    const r = timed("final", () => spawnSync(FFMPEG_PATH, args, { cwd: tempDir, stdio: ["pipe", "pipe", "ignore"] }));
+    if (r.status === 0 && fs.existsSync(finished) && fs.statSync(finished).size > 0) {
+      fs.renameSync(finished, finalPath);
+    } else {
+      emit(`  Warning: final pass produced no output, skipping (ffmpeg exit ${r.status})`);
+      fs.copyFileSync(currentInput, finalPath);
+    }
   }
-
-  // ═══════════════════════════════════════════════════════════
-  // Pass 7: Final — Resolution scaling + CRF re-encode
-  // ═══════════════════════════════════════════════════════════
-
-  const needsScale = resolution && (resolution.width !== nativeRes.width || resolution.height !== nativeRes.height);
-  const needsReencode = crf && crf !== 18;
-
-  if (needsScale || needsReencode) {
-    emit(`\n[Final] Re-encoding${needsScale ? ` to ${res.width}x${res.height}` : ""}${needsReencode ? ` CRF ${crf}` : ""}...`);
-    const reencoded = path.join(tempDir, "final_reencoded.mp4");
-    fs.mkdirSync(tempDir, { recursive: true });
-    const args = ["-y", "-i", finalPath];
-    if (needsScale) {
-      args.push("-vf", `scale=${res.width}:${res.height}:force_original_aspect_ratio=decrease,pad=${res.width}:${res.height}:(ow-iw)/2:(oh-ih)/2`);
-    }
-    args.push("-c:v", "libx264", "-preset", "fast", "-crf", String(crf || 18), "-pix_fmt", "yuv420p");
-    if (hasAudioStream(finalPath)) {
-      args.push("-c:a", "aac", "-b:a", "192k");
-    }
-    args.push(reencoded);
-    ffmpegSync(args);
-    if (fs.existsSync(reencoded) && fs.statSync(reencoded).size > 0) {
-      fs.renameSync(reencoded, finalPath);
-    }
-  }
+  opts.onTimings?.(timings);
 
   // ─── Cleanup ───
   try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }

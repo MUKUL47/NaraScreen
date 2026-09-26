@@ -1,7 +1,20 @@
 import { spawnSync, type SpawnSyncReturns } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { FFMPEG_PATH, FFPROBE_PATH } from "./bin-paths";
+
+/**
+ * Video encoder settings for files that only feed a later pass (cut clips,
+ * freezes, zooms, skip/speed segments). ultrafast at near-lossless quality is
+ * several times faster to write than the delivered file's settings, and loses
+ * nothing visible between passes — only the last pass encodes the file people
+ * get. Every intermediate uses exactly these, so segments concat without re-encoding.
+ */
+export const INTERMEDIATE_VIDEO = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-pix_fmt", "yuv420p"];
+
+/** Threads for ffmpeg filter graphs (they default to one). */
+export const FILTER_THREADS = String(Math.max(1, os.cpus().length));
 
 // Ignore stderr to prevent Node from buffering ffmpeg's progress output
 // (which can be hundreds of MB for long videos and crash the process)
@@ -103,8 +116,7 @@ export function cutClip(
     "-ss", startTime.toFixed(3),   // before -i for fast seek
     "-i", inputPath,
     "-to", (endTime - startTime).toFixed(3),  // relative to seek point
-    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-    "-pix_fmt", "yuv420p",
+    ...INTERMEDIATE_VIDEO,
   ];
   if (hasAudio) {
     args.push("-c:a", "aac", "-b:a", "192k");
@@ -127,8 +139,7 @@ export function cutClipMuted(
     "-ss", startTime.toFixed(3),
     "-i", inputPath,
     "-to", (endTime - startTime).toFixed(3),
-    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-    "-pix_fmt", "yuv420p",
+    ...INTERMEDIATE_VIDEO,
     "-an",
     outputPath,
   ]);
@@ -194,8 +205,7 @@ export function concatSegments(
   ffmpegSync([
     "-y", "-f", "concat", "-safe", "0",
     "-i", concatListPath,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-    "-pix_fmt", "yuv420p",
+    ...INTERMEDIATE_VIDEO,
     "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
     outputPath,
   ]);
