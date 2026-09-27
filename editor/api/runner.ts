@@ -20,7 +20,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page } from "@playwright/test";
+import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page } from "playwright-core";
 import { AgentError, type ErrorCode, type ErrorWhere } from "./errors";
 import { log as defaultLog, stage, step, warn, type Log } from "./output";
 import {
@@ -39,7 +39,6 @@ import {
 import { pluginsFor, type NaraPlugin, type PluginActApi, type PluginPageApi } from "./plugins";
 import { startScreencast, type Screencast } from "./screencast";
 import { RANGE_FX } from "./schema";
-import type { TimedTraceEntry } from "./compiler";
 import {
   BUILTIN_DEFAULTS,
   isAct,
@@ -235,7 +234,7 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
     const now = () => (screencast ? screencast.now() : (Date.now() - t0) / 1000);
     env.now = now;
     env.lastChange = 0;
-    const trace: TimedTraceEntry[] = [];
+    const trace: TraceEntry[] = [];
 
     for (let si = 0; si < steps.length; si++) {
       const beat = steps[si];
@@ -334,7 +333,7 @@ async function runStep(
   d: DemoDefaults,
   fastCheck: boolean,
   now: () => number,
-  trace: TimedTraceEntry[],
+  trace: TraceEntry[],
 ): Promise<void> {
   step(`step ${si + 1}/${total} · ${beat.id}${beat.label ? ` — ${beat.label}` : ""}`, {
     index: si + 1,

@@ -25,6 +25,27 @@ import {
   cutSpeedClip,
   mixBackgroundMusic,
 } from "./effects";
+import {
+  type ArrowFrom,
+  type Pt,
+  ASS_FONT_SCALE,
+  ARROW_DEFAULT_COLOR,
+  arcLengths,
+  arrowGeometry,
+  arrowShape,
+  arrowLabelBox,
+  arrowStyle,
+  arrowTiming,
+  capsule,
+  highlightTiming,
+  loopPieces,
+  pencilLoop,
+  roundedRect,
+} from "./fx-geometry";
+
+// The arrow's shapes live in fx-geometry.ts (shared with the desktop preview);
+// re-exported for existing callers and tests.
+export { type ArrowFrom, ARROW_DEFAULT_COLOR, arrowGeometry, arrowShape, arrowLabelBox, pencilLoop } from "./fx-geometry";
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -340,10 +361,6 @@ function spotlightGraph(
 // drawtext: libass falls back across fonts and shapes complex scripts, so
 // Hindi, CJK and mixed-script text ("Settings / सेटिंग्स") render correctly.
 
-/** ASS font size that matches drawtext's pixel size (ASS sizes the whole line
- *  box, drawtext the em) — keeps the callouts the size they always were. */
-const ASS_FONT_SCALE = 1.25;
-
 /** Plain text → ASS dialogue text. `{…}` would start an override block and a
  *  backslash an escape (\N, \h, …): braces are escaped, and a backslash gets
  *  an invisible word joiner so it is drawn as-is. Newlines become \N. */
@@ -394,223 +411,10 @@ const CALLOUT_STYLES = [
 // drawn in as a dashed line — each dash appears in turn, then the head — plus
 // the panel's text (if any) as a label at the arrow's tail.
 
-export type ArrowFrom = "left" | "right" | "above" | "below" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
-const ARROW_DIRS: Record<ArrowFrom, [number, number]> = {
-  left: [-1, 0], right: [1, 0], above: [0, -1], below: [0, 1],
-  "top-left": [-1, -1], "top-right": [1, -1], "bottom-left": [-1, 1], "bottom-right": [1, 1],
-};
-/** Tried in order when `arrowFrom` is not set: the first whose tail fits in the frame wins. */
-const ARROW_AUTO: ArrowFrom[] = ["bottom-left", "bottom-right", "top-left", "top-right", "left", "right", "below", "above"];
-export const ARROW_DEFAULT_COLOR = "#F97316";
-
-/** Where the arrow's tail and tip go for a target box (video pixels). */
-export function arrowGeometry(
-  rect: [number, number, number, number],
-  res: { width: number; height: number },
-  from?: ArrowFrom,
-  scaleOverride?: number,
-): { tail: [number, number]; tip: [number, number]; scale: number; from: ArrowFrom } {
-  const scale = scaleOverride ?? Math.max(0.6, Math.min(res.height, res.width * 0.625) / 900);
-  const len = 150 * scale;
-  const gap = 10 * scale;
-  const margin = 16 * scale;
-  const [x, y, w, h] = rect;
-  // Wide targets (a full-width list row, a banner): an arrow at the edge would read
-  // as pointing at the neighbour, so the tip lands INSIDE, on the right-hand part
-  // (usually empty in rows), coming from the lower right.
-  if (w > res.width * 0.6 && h < res.height * 0.6) {
-    const d = Math.SQRT1_2;
-    const tip: [number, number] = [x + w * 0.66, y + h * 0.55];
-    const pick = (f: ArrowFrom): [number, number] => {
-      const [dx, dy] = ARROW_DIRS[f];
-      return [tip[0] + dx * d * len, tip[1] + dy * d * len];
-    };
-    const inFrame = (p: [number, number]) => p[0] >= margin && p[0] <= res.width - margin && p[1] >= margin && p[1] <= res.height - margin;
-    const order: ArrowFrom[] = from ? [from] : ["bottom-right", "top-right", "bottom-left", "top-left"];
-    const f = order.find((o) => inFrame(pick(o))) ?? order[0];
-    const tail = pick(f);
-    return { tip, tail: [Math.max(margin, Math.min(res.width - margin, tail[0])), Math.max(margin, Math.min(res.height - margin, tail[1]))], scale, from: f };
-  }
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  const place = (f: ArrowFrom) => {
-    const [dx0, dy0] = ARROW_DIRS[f];
-    const n = Math.hypot(dx0, dy0);
-    const dx = dx0 / n;
-    const dy = dy0 / n;
-    // distance from the centre to the box edge along d
-    const t = Math.min(dx ? w / 2 / Math.abs(dx) : Infinity, dy ? h / 2 / Math.abs(dy) : Infinity);
-    const tip: [number, number] = [cx + dx * (t + gap), cy + dy * (t + gap)];
-    const tail: [number, number] = [cx + dx * (t + gap + len), cy + dy * (t + gap + len)];
-    const inside = (p: [number, number]) => p[0] >= margin && p[0] <= res.width - margin && p[1] >= margin && p[1] <= res.height - margin;
-    return { tip, tail, fits: inside(tip) && inside(tail), d: [dx, dy] as const };
-  };
-  for (const f of from ? [from] : ARROW_AUTO) {
-    const g = place(f);
-    if (g.fits || from) {
-      const clamp = (p: [number, number]): [number, number] => [
-        Math.max(margin, Math.min(res.width - margin, p[0])),
-        Math.max(margin, Math.min(res.height - margin, p[1])),
-      ];
-      return { tail: clamp(g.tail), tip: clamp(g.tip), scale, from: f };
-    }
-  }
-  // Nothing fits (the element fills the frame): point at its centre from the lower left, inside it.
-  const tip: [number, number] = [cx, cy];
-  const d = Math.SQRT1_2;
-  return { tip, tail: [cx - d * len, cy + d * len].map((v, i) => Math.max(margin, Math.min((i ? res.height : res.width) - margin, v))) as [number, number], scale, from: "bottom-left" };
-}
-
 function assBgr(hex: string): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex) ?? /^#?([0-9a-f]{6})$/i.exec(ARROW_DEFAULT_COLOR)!;
   const v = m[1].toUpperCase();
   return `&H${v.slice(4, 6)}${v.slice(2, 4)}${v.slice(0, 2)}&`;
-}
-
-type Pt = [number, number];
-
-/** The arrow as shapes (video px): the curve it follows and, for any drawn length
- *  along it, the stroke so far and the chevron at its end. Exported for tests. */
-export function arrowShape(g: { tail: Pt; tip: Pt; scale: number }, frameCenter?: Pt): {
-  point(t: number): Pt;
-  length: number;
-  at(s: number): Pt;
-  stroke(s: number): Pt[];
-  head(s: number): { arms: [Pt, Pt]; tip: Pt };
-  thickness: number;
-} {
-  const [tx, ty] = g.tail;
-  const [px, py] = g.tip;
-  const len = Math.hypot(px - tx, py - ty);
-  const ux = (px - tx) / len;
-  const uy = (py - ty) / len;
-  // A gentle bow: the control point sits off the straight line by 16% of the length.
-  // Its side follows the direction: a diagonal bows toward the corner (tip x, tail y),
-  // so it leaves the tail sideways and arrives at the target vertically — bottom-left →
-  // top-right is a ")", bottom-right → top-left a "(", and the top ones mirror them.
-  // Straight across/up/down arrows bow toward the frame's centre, away from the edge.
-  const bow = 0.16 * len;
-  const mx = (tx + px) / 2;
-  const my = (ty + py) / 2;
-  const nx = uy;
-  const ny = -ux;
-  let side = (px - mx) * nx + (ty - my) * ny;
-  if (Math.abs(side) < 0.2 * len) side = frameCenter ? (frameCenter[0] - mx) * nx + (frameCenter[1] - my) * ny : 1;
-  const sgn = side < 0 ? -1 : 1;
-  const c: Pt = [mx + nx * bow * sgn, my + ny * bow * sgn];
-  const point = (t: number): Pt => {
-    const a = (1 - t) * (1 - t);
-    const b = 2 * (1 - t) * t;
-    const d = t * t;
-    return [a * tx + b * c[0] + d * px, a * ty + b * c[1] + d * py];
-  };
-  // Arc length → t (the bow makes t uneven along the curve).
-  const N = 96;
-  const cum = [0];
-  let prev = point(0);
-  for (let i = 1; i <= N; i++) {
-    const p = point(i / N);
-    cum.push(cum[i - 1] + Math.hypot(p[0] - prev[0], p[1] - prev[1]));
-    prev = p;
-  }
-  const total = cum[N];
-  const tAt = (s: number) => {
-    const target = Math.max(0, Math.min(total, s));
-    let i = 1;
-    while (i < N && cum[i] < target) i++;
-    const f = (target - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]);
-    return (i - 1 + f) / N;
-  };
-  const at = (s: number) => point(tAt(s));
-  const thickness = 6 * g.scale;
-  const fullHead = Math.min(24 * g.scale, total * 0.35);
-  const stroke = (s: number): Pt[] => Array.from({ length: 25 }, (_, i) => at((Math.max(1, s) * i) / 24));
-  // Open chevron at the stroke's end, along the curve's direction there; it grows in with the line.
-  const head = (s: number) => {
-    const end = at(s);
-    const back = at(s - 2);
-    const dx = end[0] - back[0];
-    const dy = end[1] - back[1];
-    const dl = Math.hypot(dx, dy) || 1;
-    const hx = dx / dl;
-    const hy = dy / dl;
-    const hl = fullHead * Math.min(1, s / (total * 0.35));
-    const arm = (sign: number): Pt => {
-      const a = (sign * 34 * Math.PI) / 180;
-      const rx = hx * Math.cos(a) - hy * Math.sin(a);
-      const ry = hx * Math.sin(a) + hy * Math.cos(a);
-      return [end[0] - rx * hl, end[1] - ry * hl];
-    };
-    return { arms: [arm(1), arm(-1)] as [Pt, Pt], tip: end };
-  };
-  return { point, length: total, at, stroke, head, thickness };
-}
-
-/** A thick stroke along `pts` with round caps, as one polygon. */
-function capsule(pts: Pt[], th: number): Pt[] {
-  const r = th / 2;
-  const n = pts.length;
-  // left normal at each point (the stroke's direction turned 90°)
-  const norm = (i: number): Pt => {
-    const a = pts[Math.max(0, i - 1)];
-    const b = pts[Math.min(n - 1, i + 1)];
-    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-    return [-(b[1] - a[1]) / l, (b[0] - a[0]) / l];
-  };
-  const left: Pt[] = pts.map((p, i) => [p[0] + norm(i)[0] * r, p[1] + norm(i)[1] * r]);
-  const right: Pt[] = pts.map((p, i): Pt => [p[0] - norm(i)[0] * r, p[1] - norm(i)[1] * r]).reverse();
-  // Half circle from `fromAngle`, sweeping 180° through the stroke's outward end.
-  const cap = (c: Pt, fromAngle: number): Pt[] =>
-    Array.from({ length: 7 }, (_, k) => {
-      const a = fromAngle - (Math.PI * (k + 1)) / 8;
-      return [c[0] + Math.cos(a) * r, c[1] + Math.sin(a) * r] as Pt;
-    });
-  const nEnd = norm(n - 1);
-  const nStart = norm(0);
-  return [...left, ...cap(pts[n - 1], Math.atan2(nEnd[1], nEnd[0])), ...right, ...cap(pts[0], Math.atan2(-nStart[1], -nStart[0]))];
-}
-
-/** Where the label pill goes: just beyond the tail, on the side away from the arrow, inside the frame. Exported for tests. */
-export function arrowLabelBox(
-  g: { tail: Pt; scale: number },
-  shape: { point(t: number): Pt },
-  text: string,
-  fontSize: number,
-  res: { width: number; height: number },
-): { cx: number; cy: number; pw: number; ph: number; fs: number } {
-  const [tx, ty] = g.tail;
-  const vx = tx - shape.point(0.08)[0];
-  const vy = ty - shape.point(0.08)[1];
-  const vl = Math.hypot(vx, vy) || 1;
-  const dx = vx / vl;
-  const dy = vy / vl;
-  const fs = fontSize * ASS_FONT_SCALE;
-  const graphemes = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].length;
-  const ph = fs * 1.25;
-  const pw = graphemes * fs * 0.55 + ph * 0.9;
-  const gap = 14 * g.scale;
-  let cx = tx + dx * gap + (dx < -0.3 ? -pw / 2 : dx > 0.3 ? pw / 2 : 0);
-  let cy = ty + dy * gap + (dy < -0.3 ? -ph / 2 : dy > 0.3 ? ph / 2 : 0);
-  const edge = 10;
-  cx = Math.max(edge + pw / 2, Math.min(res.width - edge - pw / 2, cx));
-  cy = Math.max(edge + ph / 2, Math.min(res.height - edge - ph / 2, cy));
-  return { cx, cy, pw, ph, fs };
-}
-
-/** A rounded rectangle as one polygon. */
-function roundedRect(x: number, y: number, w: number, h: number, r: number): Pt[] {
-  const out: Pt[] = [];
-  const corner = (cx: number, cy: number, a0: number) => {
-    for (let k = 0; k <= 6; k++) {
-      const a = a0 + (Math.PI / 2) * (k / 6);
-      out.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
-    }
-  };
-  corner(x + w - r, y + r, -Math.PI / 2);
-  corner(x + w - r, y + h - r, 0);
-  corner(x + r, y + h - r, Math.PI / 2);
-  corner(x + r, y + r, Math.PI);
-  return out;
 }
 
 /** One ASS drawing event for a polygon (absolute video coords). */
@@ -626,115 +430,34 @@ function assPolygon(layer: number, start: number, end: number, pts: Pt[], tags: 
 }
 
 /**
- * A hand-drawn loop around a box (video px), like a pencil circle: it hugs the
- * element's shape (a circle for square things, flatter and boxier for wide rows),
- * spirals out a little and overshoots its start, with a slight wobble and tilt.
- * Kept inside the frame. Exported for tests.
- */
-export function pencilLoop(rect: [number, number, number, number], res: { width: number; height: number }, scale: number): Pt[] {
-  const [x, y, w, h] = rect;
-  const cx = x + w / 2;
-  const cy = y + h / 2;
-  const pad = 6 * scale;
-  const grow = 7 * scale; // how far the overshoot spirals out
-  const wob = 2.5 * scale;
-  const margin = 6 * scale + grow + wob;
-  // Superellipse |x/rx|^n + |y/ry|^n = 1: n = 2 is an ellipse, higher is boxier.
-  const aspect = Math.max(w, h) / Math.max(1, Math.min(w, h));
-  const n = 2 + Math.min(4, (aspect - 1) * 0.6);
-  const k = Math.pow(2, 1 / n); // equal stretch that puts the box's corners on the curve
-  const maxRx = Math.max(12 * scale, Math.min(cx - margin, res.width - cx - margin));
-  const maxRy = Math.max(10 * scale, Math.min(cy - margin, res.height - cy - margin));
-  let rx = Math.min((w / 2) * k + pad, maxRx);
-  let ry = Math.min((h / 2) * k + pad, maxRy);
-  // Squeezed by the frame on one axis: open the other to clear the corners, but only a
-  // little (a full-width row's loop may clip the row's far ends; it must not cover the next row).
-  const fit = (half: number, r: number) => Math.pow(Math.min(0.95, half / r), n);
-  if (rx < (w / 2) * k + pad) ry = Math.min(maxRy, h / 2 + 1.5 * pad, (h / 2 + pad) / Math.pow(1 - fit(w / 2, rx), 1 / n));
-  else if (ry < (h / 2) * k + pad) rx = Math.min(maxRx, w / 2 + 1.5 * pad, (w / 2 + pad) / Math.pow(1 - fit(h / 2, ry), 1 / n));
-  // Tilt a few degrees, but never enough to lift a wide loop into the next row.
-  const tilt = -Math.min((3 * Math.PI) / 180, Math.atan((0.12 * ry) / rx));
-  const a0 = (-160 * Math.PI) / 180; // starts upper left, goes clockwise
-  const sweep = 2 * Math.PI + 0.45; // a little past a full turn
-  const e = 2 / n;
-  const N = 120;
-  return Array.from({ length: N + 1 }, (_, i): Pt => {
-    const u = i / N;
-    const a = a0 + sweep * u;
-    const c = Math.cos(a);
-    const sn = Math.sin(a);
-    const off = grow * u + wob * Math.sin(3 * a + 1);
-    // On a flat (or tall) loop the spiral and wobble shrink across the thin side, so it stays snug.
-    const ex = Math.sign(c) * Math.pow(Math.abs(c), e) * rx + c * off * Math.max(0.3, Math.min(1, rx / ry));
-    const ey = Math.sign(sn) * Math.pow(Math.abs(sn), e) * ry + sn * off * Math.max(0.3, Math.min(1, ry / rx));
-    return [cx + ex * Math.cos(tilt) - ey * Math.sin(tilt), cy + ex * Math.sin(tilt) + ey * Math.cos(tilt)];
-  });
-}
-
-/** The part of a polyline between arc lengths s0 and s1. */
-function polySlice(pts: Pt[], cum: number[], s0: number, s1: number): Pt[] {
-  const at = (s: number): Pt => {
-    let i = 1;
-    while (i < cum.length - 1 && cum[i] < s) i++;
-    const f = (s - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]);
-    return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * f, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * f];
-  };
-  const out: Pt[] = [at(s0)];
-  for (let i = 1; i < pts.length - 1; i++) if (cum[i] > s0 && cum[i] < s1) out.push(pts[i]);
-  out.push(at(s1));
-  return out;
-}
-
-/**
  * ASS events for the arrow's `highlight`: once the arrow has landed, a pencil loop is
  * drawn around the element, held for a moment, then wiped away from its start like a
- * laser-pointer trail. Squeezed to fit the time left; skipped when there is too little.
+ * laser-pointer trail — one event per step of highlightTiming (fx-geometry.ts, which
+ * the desktop preview uses too). Skipped when there is too little time.
  */
 function highlightEvents(rect: [number, number, number, number], res: { width: number; height: number }, scale: number, color: string, from: number, end: number): string[] {
-  const avail = end - from - 0.05;
-  if (avail < 0.6) return [];
-  const drawSec = Math.min(0.55, avail * 0.3);
-  const eraseSec = Math.min(0.45, avail * 0.25);
-  const holdSec = Math.max(0, Math.min(0.9, avail - drawSec - eraseSec));
+  const steps = highlightTiming(from, end);
+  if (!steps.length) return [];
   const pts = pencilLoop(rect, res, scale);
-  const cum = [0];
-  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const cum = arcLengths(pts);
   const total = cum[cum.length - 1];
-  const th = 4 * scale;
-  const halo = `\\1c&HFFFFFF&\\3c&HFFFFFF&\\bord${(1.6 * scale).toFixed(1)}\\shad0`;
+  const style = arrowStyle(scale);
+  const halo = `\\1c&HFFFFFF&\\3c&HFFFFFF&\\bord${style.loopHalo.toFixed(1)}\\shad0`;
   const fill = `\\1c${color}\\bord0\\shad0`;
   const out: string[] = [];
-  // The loop crosses itself where it overshoots: drawn as short pieces (each a simple
-  // polygon) so no fill rule can punch a hole where the stroke overlaps.
-  const frame = (t0: number, t1: number, s0: number, s1: number) => {
-    if (s1 - s0 < 1) return;
-    const pieces = Math.max(1, Math.ceil((s1 - s0) / (total / 4)));
-    const step = (s1 - s0) / pieces;
-    const polys = Array.from({ length: pieces }, (_, k) => capsule(polySlice(pts, cum, s0 + k * step, s0 + (k + 1) * step), th));
-    for (const poly of polys) out.push(assPolygon(2, t0, t1, poly, halo, 0, 0, ""));
-    for (const poly of polys) out.push(assPolygon(3, t0, t1, poly, fill, 0, 0, ""));
-  };
-  const easeInOut = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
-  const easeIn = (u: number) => u * u;
-  const nDraw = Math.max(1, Math.round(drawSec * ARROW_DRAW_FPS));
-  const nErase = Math.max(1, Math.round(eraseSec * ARROW_DRAW_FPS));
-  const drawAt = (k: number) => from + (drawSec * k) / nDraw;
-  for (let k = 0; k < nDraw; k++) frame(drawAt(k), drawAt(k + 1), 0, total * easeInOut((k + 1) / nDraw));
-  const eraseFrom = from + drawSec + holdSec;
-  frame(drawAt(nDraw), eraseFrom, 0, total);
-  const eraseAt = (k: number) => eraseFrom + (eraseSec * k) / nErase;
-  for (let k = 0; k < nErase - 1; k++) frame(eraseAt(k), eraseAt(k + 1), total * easeIn((k + 1) / nErase), total);
+  for (const st of steps) {
+    const polys = loopPieces(pts, cum, total * st.s0, total * st.s1, style.loopThickness);
+    for (const poly of polys) out.push(assPolygon(2, st.t0, st.t1, poly, halo, 0, 0, ""));
+    for (const poly of polys) out.push(assPolygon(3, st.t0, st.t1, poly, fill, 0, 0, ""));
+  }
   return out;
 }
-
-/** Frames per second of the arrow's draw-in (one ASS event per frame). */
-const ARROW_DRAW_FPS = 30;
 
 /**
  * ASS events for one arrow callout: one smooth curved line that draws itself
  * from the tail to the target (easing out), the chevron head riding its tip,
  * then the label in a rounded pill. White halo + soft shadow keep it readable
- * on light and dark pages.
+ * on light and dark pages. Shapes and timing come from fx-geometry.ts.
  */
 function arrowEvents(action: Action, res: { width: number; height: number }, start: number, end: number): string[] {
   const panel = action.calloutPanels?.[0];
@@ -745,10 +468,11 @@ function arrowEvents(action: Action, res: { width: number; height: number }, sta
   const color = assBgr(hex);
   const shape = arrowShape(g, [res.width / 2, res.height / 2]);
   const th = shape.thickness;
+  const style = arrowStyle(g.scale);
   const fill = `\\1c${color}\\bord0\\shad0`;
-  const halo = `\\1c&HFFFFFF&\\3c&HFFFFFF&\\bord${(2.2 * g.scale).toFixed(1)}\\shad0`;
-  const shadow = `\\1c&H000000&\\1a&HB0&\\3a&HFF&\\bord0\\shad0\\blur${(4 * g.scale).toFixed(1)}`;
-  const sdy = 3 * g.scale;
+  const halo = `\\1c&HFFFFFF&\\3c&HFFFFFF&\\bord${style.halo.toFixed(1)}\\shad0`;
+  const shadow = `\\1c&H000000&\\1a&HB0&\\3a&HFF&\\bord0\\shad0\\blur${style.shadowBlur.toFixed(1)}`;
+  const sdy = style.shadowOffset;
   const out: string[] = [];
   // One frame of the arrow: every piece's shadow, then every halo, then every fill,
   // so the halo never cuts across the line where the head joins it.
@@ -760,22 +484,18 @@ function arrowEvents(action: Action, res: { width: number; height: number }, sta
     for (const poly of pieces) out.push(assPolygon(3, from, to, poly, fill, 0, 0, fade));
   };
   // The draw-in takes ≤ 0.5 s, and never more than a third of the arrow's time on screen.
-  const drawSec = Math.min(0.5, (end - start) / 3);
-  const steps = Math.max(1, Math.round(drawSec * ARROW_DRAW_FPS));
-  const easeOut = (u: number) => 1 - Math.pow(1 - u, 3);
-  const at = (k: number) => start + (drawSec * k) / steps;
-  for (let k = 0; k < steps - 1; k++) frame(at(k), at(k + 1), shape.length * easeOut((k + 1) / steps), "");
-  const drawnAt = at(steps - 1);
-  frame(drawnAt, end, shape.length, "\\fad(0,200)");
-  if (action.arrowHighlight) out.push(...highlightEvents(panel.rect, res, g.scale, action.arrowHighlightColor ? assBgr(action.arrowHighlightColor) : color, start + drawSec + 0.1, end));
+  const timing = arrowTiming(start, end);
+  timing.steps.forEach((st, k) => frame(st.t0, st.t1, shape.length * st.s1, k === timing.steps.length - 1 ? "\\fad(0,200)" : ""));
+  const drawnAt = timing.drawnAt;
+  if (action.arrowHighlight) out.push(...highlightEvents(panel.rect, res, g.scale, action.arrowHighlightColor ? assBgr(action.arrowHighlightColor) : color, timing.highlightFrom, end));
 
   if (panel.text) {
     const { cx, cy, pw, ph, fs } = arrowLabelBox(g, shape, panel.text, panel.fontSize || 24, res);
     const pill = roundedRect(cx - pw / 2, cy - ph / 2, pw, ph, ph / 2);
-    const rise = Math.round(8 * g.scale);
+    const rise = style.labelRise;
     const fade = "\\fad(140,200)";
     out.push(assPolygon(4, drawnAt, end, pill, shadow, 0, sdy, fade));
-    out.push(assPolygon(5, drawnAt, end, pill, `\\1c${color}\\3c&HFFFFFF&\\bord${(1.6 * g.scale).toFixed(1)}\\shad0`, 0, 0, fade));
+    out.push(assPolygon(5, drawnAt, end, pill, `\\1c${color}\\3c&HFFFFFF&\\bord${style.labelHalo.toFixed(1)}\\shad0`, 0, 0, fade));
     out.push(
       `Dialogue: 6,${secToAssTs(drawnAt)},${secToAssTs(end)},CLabel,,0,0,0,,` +
         `{\\an5\\move(${Math.round(cx)},${Math.round(cy + rise)},${Math.round(cx)},${Math.round(cy)},0,180)\\bord0\\shad0\\3a&HFF&\\4a&HFF&\\b1\\1c&HFFFFFF&` +

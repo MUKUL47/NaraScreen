@@ -19,6 +19,7 @@ import { FLUTTER_DEVICES } from "./plugins/flutter/schema";
 import * as fs from "fs";
 import * as path from "path";
 import { parseArgs } from "util";
+import { isBundled, narascreenVersion } from "./cli-process";
 import { COMMANDS, GLOBAL_FLAGS, findCommand, type CommandDoc } from "./commands";
 import { AgentError, toAgentError } from "./errors";
 import { emit, emitEvent, failure, log, setEventMode, setQuiet, stage, success, warn, type Envelope } from "./output";
@@ -36,7 +37,9 @@ import {
   createJob,
   jobExists,
   jobPaths,
+  lockHolder,
   readJob,
+  releaseOwnLock,
   readTrace,
   structureHash,
   withJobLock,
@@ -53,7 +56,9 @@ import { parallelLanguages, stopRenderChildren } from "./produce-parallel";
 import type { PreviewResult } from "./preview";
 
 const EDITOR_DIR = path.resolve(__dirname, "..");
-const BIN_PATH = path.join(EDITOR_DIR, "bin", "narascreen");
+/** Running from the bundle the desktop app ships (dist-cli/narascreen.cjs) rather than from the sources. */
+const BUNDLED = isBundled(__dirname);
+const BIN_PATH = BUNDLED ? path.join(__dirname, "narascreen.cjs") : path.join(EDITOR_DIR, "bin", "narascreen");
 const OUT_ROOT = "narascreen-out";
 
 // ─── stdout guard ────────────────────────────────────────────────────
@@ -497,6 +502,12 @@ const nowIso = () => new Date().toISOString();
 const PROG = resolveProgName();
 
 function resolveProgName(): string {
+  // The bundled CLI has no launcher on PATH: it runs with the app's own binary.
+  if (BUNDLED) {
+    const run = `${q(process.execPath)} ${q(BIN_PATH)}`;
+    if (!process.versions.electron) return run;
+    return process.platform === "win32" ? `set ELECTRON_RUN_AS_NODE=1&& ${run}` : `ELECTRON_RUN_AS_NODE=1 ${run}`;
+  }
   const real = safeRealpath(BIN_PATH);
   if (real) {
     for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -959,8 +970,7 @@ const HANDLERS: Record<string, Handler> = {
   },
 
   async version() {
-    const pkg = JSON.parse(fs.readFileSync(path.join(EDITOR_DIR, "package.json"), "utf-8")) as { version?: string };
-    return { result: { version: pkg.version ?? "0.0.0", node: process.versions.node } };
+    return { result: { version: narascreenVersion(EDITOR_DIR), node: process.versions.node } };
   },
 
   async manual() {
@@ -1281,7 +1291,7 @@ const HANDLERS: Record<string, Handler> = {
     const p = jobPaths(dir);
     ctx.known.script = job.scriptPath;
 
-    const lockPid = lockHolder(p.lock);
+    const lockPid = lockHolder(p.root);
     let scriptStructureChanged: boolean | null = null;
     try {
       scriptStructureChanged = structureHash(loadScript(job.scriptPath).script) !== job.structureHash;
@@ -1398,37 +1408,19 @@ function decideRecording(dir: string, loaded: LoadedScript, force: boolean): { r
 const heldLocks = new Set<string>();
 
 async function locked<T>(dir: string, fn: () => Promise<T>): Promise<T> {
-  const lock = jobPaths(dir).lock;
-  heldLocks.add(lock);
+  heldLocks.add(dir);
   try {
     return await withJobLock(dir, fn);
   } finally {
-    heldLocks.delete(lock);
+    heldLocks.delete(dir);
   }
 }
 
 function releaseLocks(): void {
-  for (const lock of heldLocks) {
-    try {
-      if (fs.readFileSync(lock, "utf-8").trim() === String(process.pid)) fs.rmSync(lock, { force: true });
-    } catch {
-      // already gone
-    }
-  }
+  for (const dir of heldLocks) releaseOwnLock(dir);
 }
 
 // ─── small fs helpers ────────────────────────────────────────────────
-
-function lockHolder(lockFile: string): number | null {
-  try {
-    const pid = Number(fs.readFileSync(lockFile, "utf-8").trim());
-    if (!pid) return null;
-    process.kill(pid, 0);
-    return pid;
-  } catch {
-    return null;
-  }
-}
 
 function fileInfo(p: string): { path: string; exists: boolean; bytes?: number } {
   try {

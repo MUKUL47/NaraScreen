@@ -23,6 +23,20 @@ import * as fs from "fs";
 import * as http from "http";
 import type { AddressInfo } from "net";
 import * as path from "path";
+import {
+  CANCEL_GRACE_MS,
+  ENV_NAME_RE,
+  MAX_LINE,
+  MAX_STDOUT,
+  RESERVED_ENV_RE,
+  createLineSplitter,
+  defaultCliEntry,
+  isAlive,
+  killTree,
+  narascreenVersion,
+  parseEnvelope,
+  parseStderrLine,
+} from "./cli-process";
 import { findCommand, type CommandDoc } from "./commands";
 import { buildLlmsTxt, buildManualMarkdown, renderDocsHtml } from "./docs";
 import { AgentError, exitCodeFor, toAgentError, type AgentErrorInit, type ErrorCode } from "./errors";
@@ -44,7 +58,7 @@ export const INLINE_UPLOAD_EXTENSIONS = [".mp3", ".wav", ".m4a", ".ogg", ".aac",
 export const MAX_WAIT_SEC = 300;
 export const HEARTBEAT_SEC = 15;
 /** SIGTERM → wait this long → SIGKILL. */
-export const CANCEL_GRACE_MS = 5000;
+export { CANCEL_GRACE_MS };
 /** Commands an HTTP client may run through POST /v1/runs. */
 export const RUN_COMMANDS = ["inspect", "check", "record", "produce", "make", "preview", "status", "doctor", "validate"];
 /** CLI flags that make no sense without a terminal (`--hold` waits for Enter). */
@@ -391,14 +405,7 @@ const usage = (message: string, hint?: string, status = 400, details?: Record<st
   new HttpError(status, "USAGE", message, { hint, details });
 
 const VERSION = readVersion();
-const MAX_STDOUT = 8 * 1024 * 1024;
-/** Longest stderr line kept as one event; longer output is split. */
-const MAX_LINE = 16 * 1024;
 const RUN_ID_RE = /^r_[A-Za-z0-9_-]{1,64}$/;
-const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
-/** Variables a client may not set: they steer the process, the CLI or its tools, not the script. */
-const RESERVED_ENV_RE =
-  /^(PATH|HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|TMPDIR|TMP|TEMP|IFS|ENV|BASH_ENV|LANG|LANGUAGE|TZ|DISPLAY|WAYLAND_DISPLAY|NO_COLOR|FORCE_COLOR|(HTTPS?|ALL|NO|FTP)_PROXY|(LC|XDG|NODE|NPM|NARASCREEN|LD|DYLD|PLAYWRIGHT|ELECTRON|KOKORO|FFMPEG|FFPROBE|TSX|UV|SSL|OPENSSL|PYTHON|DBUS|CHROME|CHROMIUM|GTK|QT)(_.*)?)$/;
 const MAX_CLIENT_ENV = 50;
 
 /** Values worth masking: very short ones ("1", "on") would mangle unrelated text. */
@@ -421,7 +428,6 @@ function redactJson(v: unknown, secrets: string[]): unknown {
   }
   return JSON.parse(text);
 }
-const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 class NaraServer {
   private readonly ws: string;
@@ -461,7 +467,7 @@ class NaraServer {
     };
     this.token = opts.token || process.env.NARASCREEN_TOKEN || undefined;
     this.concurrency = Math.max(1, Math.floor(Number(opts.concurrency) || 1));
-    this.cliPath = path.resolve(opts.cliPath ?? path.join(__dirname, "..", "bin", "narascreen"));
+    this.cliPath = path.resolve(opts.cliPath ?? defaultCliEntry(__dirname));
     this.loopback = isLoopbackHost(opts.host || DEFAULT_HOST);
     this.routes = this.compileRoutes();
     this.http = http.createServer((req, res) => void this.handle(req, res));
@@ -1259,24 +1265,16 @@ class NaraServer {
     child.stdout!.on("data", (chunk: string) => {
       if (run.stdout.length < MAX_STDOUT) run.stdout += chunk;
     });
-    let partial = "";
+    // An endless line is emitted in pieces (addEvent truncates it).
+    const stderrLines = createLineSplitter((line) => this.onStderrLine(run, line));
     child.stderr!.setEncoding("utf8");
-    child.stderr!.on("data", (chunk: string) => {
-      const lines = (partial + chunk).split("\n");
-      partial = lines.pop() ?? "";
-      if (partial.length > MAX_LINE) {
-        lines.push(partial); // an endless line: emit what we have (addEvent truncates it)
-        partial = "";
-      }
-      for (const line of lines) this.onStderrLine(run, line);
-    });
+    child.stderr!.on("data", (chunk: string) => stderrLines.push(chunk));
 
     run.exited = new Promise<void>((resolve) => {
       let exitTimer: NodeJS.Timeout | undefined;
       const done = (code: number | null, signal: NodeJS.Signals | null) => {
         clearTimeout(exitTimer);
-        if (partial) this.onStderrLine(run, partial);
-        partial = "";
+        stderrLines.flush();
         this.finish(run, code, signal);
         resolve();
       };
@@ -1297,19 +1295,13 @@ class NaraServer {
   }
 
   private onStderrLine(run: Run, raw: string) {
-    const line = raw.replace(ANSI_RE, "").trimEnd();
-    if (!line.trim()) return;
-    if (line.startsWith("{")) {
-      try {
-        const ev = JSON.parse(line) as NaraEvent;
-        if (isNaraEvent(ev)) {
-          this.addEvent(run, ev);
-          return;
-        }
-      } catch {
-        // not an event: fall through and keep it as a log line
-      }
+    const parsed = parseStderrLine(raw);
+    if (!parsed) return;
+    if (parsed.kind === "event") {
+      this.addEvent(run, parsed.event);
+      return;
     }
+    const line = parsed.line;
     run.stderrTail.push(redact(line, run.secrets));
     if (run.stderrTail.length > 40) run.stderrTail.shift();
     this.addEvent(run, { type: "log", message: line });
@@ -1823,34 +1815,6 @@ function parseRunOptions(doc: CommandDoc, raw: unknown): Map<string, string | tr
   return out;
 }
 
-function parseEnvelope(stdout: string): Envelope | undefined {
-  const text = stdout.trim();
-  if (!text) return undefined;
-  const attempt = (s: string) => {
-    try {
-      const v = JSON.parse(s) as Envelope;
-      return isObject(v) && typeof v.ok === "boolean" && typeof v.command === "string" ? v : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-  const whole = attempt(text);
-  if (whole) return whole;
-  // Something printed before the envelope: try from each line that opens an object, last first.
-  const lines = text.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lines[i].startsWith("{")) continue;
-    const env = attempt(lines.slice(i).join("\n"));
-    if (env) return env;
-  }
-  return undefined;
-}
-
-function isNaraEvent(v: unknown): v is NaraEvent {
-  const e = v as NaraEvent;
-  return isObject(v) && typeof e.message === "string" && ["stage", "step", "log", "warning"].includes(e.type);
-}
-
 const MEDIA_EXT = /\.(mp4|webm|jpe?g|png)$/i;
 const MEDIA_KEYS = ["path", "video", "contactSheet", "screenshot", "fullPageScreenshot", "recording"];
 
@@ -2006,43 +1970,11 @@ function levenshtein(a: string, b: string): number {
 
 // ─── process + fs helpers ────────────────────────────────────────────
 
-/** Signal a child and everything it started (its process group on POSIX). */
-function killTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (!child.pid) return;
-  if (process.platform === "win32") {
-    try {
-      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-    } catch {
-      child.kill(signal);
-    }
-    return;
-  }
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      // already gone
-    }
-  }
-}
-
 function safeDecode(s: string): string {
   try {
     return decodeURIComponent(s);
   } catch {
     throw usage(`Malformed URL escape in "${s}"`);
-  }
-}
-
-function isAlive(pid: number | undefined): boolean {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -2122,9 +2054,5 @@ function urlHost(host: string): string {
 }
 
 function readVersion(): string {
-  try {
-    return (JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8")) as { version?: string }).version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
+  return narascreenVersion(path.join(__dirname, ".."));
 }

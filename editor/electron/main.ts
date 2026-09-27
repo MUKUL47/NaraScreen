@@ -8,8 +8,8 @@ import {
   startScreenRecording,
   stopScreenRecording,
 } from "./capture";
-import { generateTTSViaKokoro, generateTTSViaCurl, KOKORO_PYTHON } from "./tts";
 import { probeDuration, generateFilmstrip } from "./ffmpeg";
+import { registerCliBridge } from "./cli-bridge";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -32,6 +32,8 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    minWidth: 1280,
+    minHeight: 720,
     title: "NaraScreen",
     autoHideMenuBar: true,
     webPreferences: {
@@ -57,6 +59,9 @@ function createMainWindow() {
 
 // Disable overlay scrollbars so ::-webkit-scrollbar CSS works
 app.commandLine.appendSwitch("disable-features", "OverlayScrollbar");
+
+// The CLI bridge (cli:*, script:*, session:*, tts:*, audio:*, video:importFile, …).
+registerCliBridge();
 
 app.whenReady().then(createMainWindow);
 
@@ -247,65 +252,7 @@ ipcMain.handle("video:cancelProduce", async () => {
 });
 
 // ---- TTS IPC Handlers ----
-
-ipcMain.handle(
-  "tts:generate",
-  async (
-    _event,
-    sessionDir: string,
-    actionId: string,
-    text: string,
-    lang: string,
-    voiceOverride?: string,
-    langCodeOverride?: string,
-  ) => {
-    const projectPath = path.join(sessionDir, "demo-project.json");
-    const project = JSON.parse(fs.readFileSync(projectPath, "utf-8"));
-
-    const voice =
-      voiceOverride ||
-      (lang === "hi" ? project.tts?.voiceHi || "hf_alpha" : project.tts?.voiceEn || "af_heart");
-    const speed = project.tts?.speed || 1;
-    const langCode = langCodeOverride || (lang === "hi" ? "h" : "a");
-
-    const audioDir = path.join(sessionDir, "audio");
-    fs.mkdirSync(audioDir, { recursive: true });
-
-    const audioPath = path.join(audioDir, `${actionId}_${lang}.wav`);
-
-    console.log(`[tts] Generating ${lang} audio for ${actionId}: "${text.slice(0, 50)}..." voice=${voice} speed=${speed}`);
-
-    const useDirect = fs.existsSync(KOKORO_PYTHON);
-
-    if (useDirect) {
-      console.log("[tts] Using direct Kokoro Python");
-      const result = generateTTSViaKokoro(text, voice, speed, langCode, audioPath);
-      console.log(`[tts] Python exit: ${result.status}, stderr: ${result.stderr.slice(0, 300)}`);
-      if (result.status !== 0) {
-        throw new Error(`Kokoro TTS failed: ${result.stderr.slice(0, 500)}`);
-      }
-    } else {
-      const kokoroBase = process.env.KOKORO_URL || "http://localhost:8880";
-      const ttsEndpoint =
-        project.tts?.kokoroEndpoint || `${kokoroBase}/v1/audio/speech`;
-      console.log(`[tts] Using HTTP API: ${ttsEndpoint}`);
-      const result = generateTTSViaCurl(text, voice, speed, ttsEndpoint, audioPath);
-      console.log(`[tts] curl exit: ${result.status}`);
-      if (result.status !== null && result.status !== 0) {
-        throw new Error(`TTS HTTP failed (code ${result.status}). Is Kokoro running at ${ttsEndpoint}?`);
-      }
-    }
-
-    if (!fs.existsSync(audioPath) || fs.statSync(audioPath).size < 100) {
-      throw new Error("TTS returned empty or invalid audio");
-    }
-
-    const duration = probeDuration(audioPath);
-    console.log(`[tts] Audio saved: ${audioPath} (${(fs.statSync(audioPath).size / 1024).toFixed(1)} KB, ${duration.toFixed(1)}s)`);
-
-    return { audioPath, duration };
-  },
-);
+// tts:generate (legacy, now async) and tts:preview live in cli-bridge.ts.
 
 // ---- Version IPC Handlers ----
 

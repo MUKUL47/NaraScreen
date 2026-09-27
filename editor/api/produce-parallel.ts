@@ -47,14 +47,13 @@ export function produceLanguageInChild(
   lang: string,
   opts: ProduceOptions,
 ): Promise<ProduceResult> {
-  const editorDir = path.resolve(__dirname, "..");
-  const loader = pathToFileURL(path.join(editorDir, "node_modules", "tsx", "dist", "loader.mjs")).href;
+  const entry = childEntry();
   const inputFile = path.join(jobDir, `.produce-${lang}-${process.pid}.json`);
   const input: ChildInput = { jobDir, script, trace, lang, opts, events: eventSettings() };
   fs.writeFileSync(inputFile, JSON.stringify(input));
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", loader, path.join(__dirname, "produce-child.ts"), inputFile], {
-      env: { ...process.env, TSX_TSCONFIG_PATH: path.join(editorDir, "api", "tsconfig.json") },
+    const child = spawn(process.execPath, [...entry.args, inputFile], {
+      env: { ...process.env, ...entry.env },
       stdio: ["ignore", "pipe", "inherit"],
       detached: POSIX,
       windowsHide: true,
@@ -87,6 +86,19 @@ export function produceLanguageInChild(
       }));
     });
   });
+}
+
+/** How to start produce-child: the bundled produce-child.cjs next to this code
+ *  (dist-cli/, in the desktop app), else the .ts source through tsx's loader. */
+function childEntry(): { args: string[]; env: NodeJS.ProcessEnv } {
+  const bundled = path.join(__dirname, "produce-child.cjs");
+  if (fs.existsSync(bundled)) return { args: [bundled], env: {} };
+  const editorDir = path.resolve(__dirname, "..");
+  const loader = pathToFileURL(path.join(editorDir, "node_modules", "tsx", "dist", "loader.mjs")).href;
+  return {
+    args: ["--import", loader, path.join(__dirname, "produce-child.ts")],
+    env: { TSX_TSCONFIG_PATH: path.join(editorDir, "api", "tsconfig.json") },
+  };
 }
 
 /** Run `fn` over `items`, at most `limit` at a time; results in input order. */

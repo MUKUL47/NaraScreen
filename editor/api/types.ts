@@ -37,10 +37,25 @@ export interface TraceEntry {
   act?: ActVerb;
   fx?: FxVerb;
   t: number; // seconds into the recording when this slot ran
+  /** When the entry began running (a step begins at its first entry's start).
+   *  Absent in traces recorded before 2026-09 (everything falls back to `t`). */
+  start?: number;
+  /** When an act had finished, if later than `t` (a click is stamped at the click itself). */
+  end?: number;
   rect?: Rect; // post-reveal boundingBox (absent for non-element entries)
   /** fx with `anchors` (spotlight/blur) or zoom `targets`: one rect per
    *  anchor/target, index-aligned; rect === rects[0]. */
   rects?: Rect[];
+}
+
+/** Where a compiled action came from in the demo script. */
+export interface ActionSource {
+  /** step id */
+  step: string;
+  /** index of the entry in that step's `beat` */
+  entry: number;
+  /** zoom target index, for an action that stands for one target (not emitted today) */
+  target?: number;
 }
 
 /** NaraScreen action (subset we emit) — matches electron/effects.ts Action. */
@@ -49,6 +64,10 @@ export interface NaraAction {
   type: string;
   timestamp: number;
   name?: string;
+  /** The script entry this action was compiled from: steps[id=step].beat[entry].
+   *  (A zoom's `targets` stay in one action: zoomTargets[k] is targets[k]; `target`
+   *  is reserved for a per-target action.) Absent on the script-level music action. */
+  source?: ActionSource;
   // zoom (zoomTargets is used when the zoom is narrated)
   zoomRect?: Rect;
   zoomTargets?: {

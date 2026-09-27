@@ -998,3 +998,196 @@ test("callout without text → CompileError", () => {
   ];
   assert.throws(() => compile(script, trace), /needs text/);
 });
+
+// ── engine fixes (2026-09): talk-over narration, step ends, callout slots ──
+
+test("modelTimeline: a talk-over narration (freeze:false) adds nothing — overlays after it keep their recording time", () => {
+  const actions: NaraAction[] = [
+    { id: "n", type: "narrate", timestamp: 2, narrations: { en: "x" }, audioPath: { en: "/n.wav" }, freeze: false },
+    { id: "c", type: "callout", timestamp: 7, calloutText: "Muted", calloutStyle: "lower-third", calloutDuration: 7 },
+  ];
+  const tl = modelTimeline(actions, () => 4.3, 30);
+  assert.deepEqual([tl.inserts[0].length, tl.inserts[0].added, tl.inserts[0].delta], [4.8, 0, 0]);
+  // produce.ts used to drop the 0.5 s tail, so this callout showed 0.5 s late on the picture
+  assert.equal(tl.placed(7), 7);
+  assert.equal(tl.realAt(7), 7);
+  assert.equal(tl.finalDuration(30), 30);
+});
+
+test("modelTimeline: an insert inside a talk-over narration's stretch waits until it ends (produce.ts does the same)", () => {
+  const actions: NaraAction[] = [
+    { id: "a", type: "narrate", timestamp: 10, narrations: { en: "x" }, audioPath: { en: "/a.wav" }, freeze: false },
+    { id: "b", type: "narrate", timestamp: 11.5, narrations: { en: "y" }, audioPath: { en: "/b.wav" }, freeze: true },
+    { id: "p", type: "pause", timestamp: 14, resumeAfter: 1 },
+  ];
+  const tl = modelTimeline(actions, (p) => ({ "/a.wav": 3, "/b.wav": 2 })[p]);
+  // a plays 10 → 13.5; b (stamped 11.5, inside it) freezes at 13.5; the pause at 14 is after both
+  assert.deepEqual(tl.inserts.map((s) => [s.action.id, s.at, round(s.start)]), [["a", 10, 10], ["b", 13.5, 13.5], ["p", 14, 16]]);
+  assert.equal(round(tl.placed(13)), 13, "an overlay during a's stretch is not moved by b");
+  assert.equal(round(tl.placed(13.6)), 15.6, "one after b's freeze point is");
+});
+
+test("modelTimeline: a talk-over narration past the recording's end holds the last frame (counted in the length)", () => {
+  const actions: NaraAction[] = [{ id: "n", type: "narrate", timestamp: 9, narrations: { en: "x" }, audioPath: { en: "/n.wav" }, freeze: false }];
+  assert.equal(round(modelTimeline(actions, () => 2.5, 10).finalDuration(10)), 12); // plays 9 → 10, holds 2 s
+  assert.equal(round(modelTimeline(actions, () => 2.5).finalDuration(10)), 12, "also when only finalDuration knows the length");
+  assert.equal(round(modelTimeline(actions, () => 0.2).finalDuration(10)), 10, "no hold when it ends in time");
+});
+
+test("step-end: ends when the next step BEGINS (its first entry's start), not after that entry ran", () => {
+  const script = baseScript([
+    { id: "a", beat: [{ fx: "callout", style: "lower-third", text: "One", duration: "step-end" }, { fx: "spotlight", anchor: { text: "x" }, duration: "step-end" }] },
+    { id: "b", beat: [{ act: "click", text: "Next" }, { fx: "narrate", narrate: "Two." }] },
+  ]);
+  const trace: TraceEntry[] = [
+    { beat: "a", i: 0, kind: "fx", fx: "callout", t: 2, start: 2 },
+    { beat: "a", i: 1, kind: "fx", fx: "spotlight", t: 2.6, rect: R, start: 2 },
+    // b began at 4.1 (after a's dwell); the click landed at 5.0 once its target had been scrolled to
+    { beat: "b", i: 0, kind: "act", act: "click", t: 5, end: 5.1, rect: R, start: 4.1 },
+    { beat: "b", i: 1, kind: "fx", fx: "narrate", t: 6.5, start: 6.1 },
+  ];
+  const actions = compile(script, trace, "en", undefined, [], { durationSec: 10 });
+  assert.equal(byName(actions, "a #0 callout").calloutDuration, 2.1);
+  assert.equal(byName(actions, "a #1 spotlight").spotlightDuration, 1.5);
+  // traces recorded before step start times existed: the next step's first slot, as before
+  const old = trace.map(({ start, end, ...e }) => e);
+  assert.equal(byName(compile(script, old, "en", undefined, [], { durationSec: 10 }), "a #0 callout").calloutDuration, 3);
+});
+
+test("step-end ranges end where the next step begins, too", () => {
+  const script = baseScript([
+    { id: "a", beat: [{ fx: "speed", factor: 2 }, { act: "fill", label: "Name", value: "x" }] },
+    { id: "b", beat: [{ act: "click", text: "Save" }] },
+  ]);
+  const trace: TraceEntry[] = [
+    { beat: "a", i: 0, kind: "fx", fx: "speed", t: 1, start: 1 },
+    { beat: "a", i: 1, kind: "act", act: "fill", t: 3, rect: R, start: 1.2 },
+    { beat: "b", i: 0, kind: "act", act: "click", t: 5.2, rect: R, start: 4.5 },
+  ];
+  assert.equal(byName(compile(script, trace, "en", undefined, [], { durationSec: 8 }), "a #0 speed").speedEndTimestamp, 4.5);
+});
+
+test("blur step-end holds until the next step's first entry has FINISHED (a secret stays hidden while it clicks away)", () => {
+  const script = baseScript([
+    { id: "a", beat: [{ fx: "blur", anchor: { label: "API key" } }] },
+    { id: "b", beat: [{ act: "click", text: "Dashboard" }, { fx: "narrate", narrate: "Back." }] },
+  ]);
+  const trace: TraceEntry[] = [
+    { beat: "a", i: 0, kind: "fx", fx: "blur", t: 0, rect: R, start: 0.5 },
+    { beat: "b", i: 0, kind: "act", act: "click", t: 3, end: 3.2, rect: R, start: 2 },
+    { beat: "b", i: 1, kind: "fx", fx: "narrate", t: 4.2, start: 4.2 },
+  ];
+  assert.equal(compile(script, trace, "en", undefined, [], { durationSec: 8 })[0].blurDuration, 3.2);
+});
+
+test("auto blur: a narration that waits for an earlier talk-over one is covered to its real end", () => {
+  const script = baseScript([{ id: "s", beat: [
+    { fx: "narrate", narrate: "Talking over the video.", freeze: false },
+    { fx: "blur", anchor: { label: "API key" }, duration: "auto" },
+    { fx: "narrate", narrate: "Hidden.", freeze: false },
+  ] }]);
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "narrate", t: 1 },
+    { beat: "s", i: 1, kind: "fx", fx: "blur", t: 1.5, rect: R },
+    { beat: "s", i: 2, kind: "fx", fx: "narrate", t: 2 },
+  ];
+  // the first plays 1 → 4.5, so the second waits until 4.5 and speaks 2 s: blur until 7 (+0.5)
+  const [, blur] = compile(script, trace, "en", clips({ "s:0": 3, "s:2": 2 }), [], { durationSec: 20 });
+  assert.equal(blur.blurDuration, 7 - 1.5);
+});
+
+test("callout slots: a lower-third is not cut short by a label next to an element; labels share only where they overlap", () => {
+  const script = baseScript([{ id: "s", beat: [
+    { fx: "callout", style: "lower-third", text: "Banner" },
+    { fx: "callout", text: "A label", anchor: { text: "a" } },
+    { fx: "callout", text: "Far away", anchor: { text: "b" } },
+    { fx: "callout", text: "On top of A", anchor: { text: "c" } },
+    { fx: "narrate", narrate: "Talk." },
+  ] }]);
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "callout", t: 10 },
+    { beat: "s", i: 1, kind: "fx", fx: "callout", t: 10.5, rect: [100, 300, 200, 40] },
+    { beat: "s", i: 2, kind: "fx", fx: "callout", t: 11, rect: [900, 300, 200, 40] },
+    { beat: "s", i: 3, kind: "fx", fx: "callout", t: 11.5, rect: [120, 300, 200, 40] },
+    { beat: "s", i: 4, kind: "fx", fx: "narrate", t: 12 },
+  ];
+  const warnings: string[] = [];
+  const actions = compile(script, trace, "en", clips({ "s:4": 2 }), warnings);
+  const target = (t: number) => round(12 - t + 2 + 0.5); // until the narration has spoken (+0.5 s)
+  assert.equal(byName(actions, "s #0 callout").calloutDuration, target(10), "the lower-third runs until the narration ends");
+  assert.equal(byName(actions, "s #1 callout").calloutDuration, 0.95, "a label is replaced by the overlapping one at 11.5");
+  assert.equal(byName(actions, "s #2 callout").calloutDuration, target(11), "a label elsewhere stays");
+  assert.equal(byName(actions, "s #3 callout").calloutDuration, target(11.5));
+  assert.deepEqual(warnings, []);
+});
+
+test("callout slots: lower-third replaces lower-third, step-counter replaces step-counter, arrows don't touch text", () => {
+  const script = baseScript([{ id: "s", beat: [
+    { fx: "callout", style: "lower-third", text: "First" },
+    { fx: "callout", style: "step-counter", step: 1, text: "Name it", anchor: { text: "a" } },
+    { fx: "arrow", anchor: { text: "b" } },
+    { fx: "callout", style: "lower-third", text: "Second" },
+    { fx: "callout", style: "step-counter", step: 2, text: "Save it", anchor: { text: "c" } },
+    { fx: "arrow", anchor: { text: "d" } },
+    { fx: "narrate", narrate: "Talk." },
+  ] }]);
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "callout", t: 10 },
+    { beat: "s", i: 1, kind: "fx", fx: "callout", t: 10.2, rect: [100, 200, 200, 40] },
+    { beat: "s", i: 2, kind: "fx", fx: "arrow", t: 10.4, rect: [400, 400, 60, 30] },
+    { beat: "s", i: 3, kind: "fx", fx: "callout", t: 11 },
+    { beat: "s", i: 4, kind: "fx", fx: "callout", t: 11.2, rect: [700, 600, 200, 40] },
+    { beat: "s", i: 5, kind: "fx", fx: "arrow", t: 11.4, rect: [900, 400, 60, 30] },
+    { beat: "s", i: 6, kind: "fx", fx: "narrate", t: 12 },
+  ];
+  const actions = compile(script, trace, "en", clips({ "s:6": 2 }));
+  assert.equal(byName(actions, "s #0 callout").calloutDuration, 0.95, "lower-third → next lower-third");
+  assert.equal(byName(actions, "s #1 callout").calloutDuration, 0.95, "Step 1 → Step 2 (even far apart)");
+  assert.equal(byName(actions, "s #2 arrow").calloutDuration, 0.95, "arrow → next arrow only");
+  assert.equal(byName(actions, "s #3 callout").calloutDuration, 3.5);
+  assert.equal(byName(actions, "s #4 callout").calloutDuration, 3.3);
+});
+
+test("callout slots: a label low on the screen that overlaps the lower-third banner ends it", () => {
+  const script = baseScript([{ id: "s", beat: [
+    { fx: "callout", style: "lower-third", text: "Bottom banner text" },
+    { fx: "callout", text: "Status bar", placement: "over", anchor: { text: "a" } },
+  ] }]);
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "callout", t: 1 },
+    { beat: "s", i: 1, kind: "fx", fx: "callout", t: 2, rect: [600, 820, 300, 30] },
+  ];
+  assert.equal(compile(script, trace)[0].calloutDuration, 0.95);
+});
+
+test("every action compiled from a step entry says which one (action.source); disabled/act entries emit none, music has none", () => {
+  const script = {
+    ...baseScript([
+      { id: "a", beat: [{ act: "click", text: "Go" }, { fx: "spotlight", anchor: { text: "x" } }, { fx: "narrate", narrate: "Hi.", disabled: true }] },
+      { id: "b", beat: [
+        { fx: "zoom", targets: [{ anchor: { text: "p" } }, { anchor: { text: "q" } }] },
+        { fx: "arrow", anchor: { text: "r" } },
+        { fx: "skip", seconds: 1 },
+      ] },
+    ]),
+    music: { path: "/m.mp3" },
+  };
+  const trace: TraceEntry[] = [
+    { beat: "a", i: 0, kind: "act", act: "click", t: 1, rect: R },
+    { beat: "a", i: 1, kind: "fx", fx: "spotlight", t: 2, rect: R },
+    { beat: "b", i: 0, kind: "fx", fx: "zoom", t: 3, rects: [R, R2], rect: R },
+    { beat: "b", i: 1, kind: "fx", fx: "arrow", t: 4, rect: R3 },
+    { beat: "b", i: 2, kind: "fx", fx: "skip", t: 5 },
+  ];
+  const actions = compile(script, trace, "en", undefined, [], { durationSec: 10 });
+  assert.deepEqual(
+    actions.map((a) => [a.type, a.source]),
+    [
+      ["music", undefined],
+      ["spotlight", { step: "a", entry: 1 }],
+      ["zoom", { step: "b", entry: 0 }],
+      ["callout", { step: "b", entry: 1 }],
+      ["skip", { step: "b", entry: 2 }],
+    ],
+  );
+});

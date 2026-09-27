@@ -1,32 +1,330 @@
 @import "tailwindcss";
 
-html, body, #root {
-  height: 100%;
-  margin: 0;
-  overflow: hidden;
-  font-family: system-ui, -apple-system, sans-serif;
-  background: #09090b;
-  color: #d4d4d8;
+/* Fonts (Inter Variable, JetBrains Mono Variable) are bundled via @fontsource-variable and
+   imported in main.tsx, so they work offline and render the same on every OS. */
+
+/* NaraScreen design tokens (design brief §14).
+   NOTE: this intentionally overrides Tailwind's default text-xs/sm/base sizes for a denser desktop
+   scale. Tailwind's default colour palette (zinc-*, …) is kept until every old class is migrated. */
+@theme static {
+  /* ── Fonts ── */
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  /* ── Type scale (desktop-dense) ── */
+  --text-2xs: 0.625rem;   --text-2xs--line-height: 0.875rem;  /* 10/14  ruler labels, Kbd */
+  --text-xs: 0.6875rem;   --text-xs--line-height: 1rem;       /* 11/16  meta, clip labels, hints */
+  --text-sm: 0.75rem;     --text-sm--line-height: 1rem;       /* 12/16  control labels, buttons, menus */
+  --text-base: 0.8125rem; --text-base--line-height: 1.25rem;  /* 13/20  inputs, body */
+  --text-md: 0.875rem;    --text-md--line-height: 1.25rem;    /* 14/20  panel + section titles */
+  --text-lg: 1rem;        --text-lg--line-height: 1.5rem;     /* 16/24  dialog titles */
+  --text-xl: 1.25rem;     --text-xl--line-height: 1.75rem;    /* 20/28  Home headings */
+  --text-2xl: 1.5rem;     --text-2xl--line-height: 2rem;      /* 24/32  Home hero */
+  --tracking-caps: 0.06em;
+
+  /* ── Surfaces ── */
+  --color-app: #0A0A0C;
+  --color-panel: #111114;
+  --color-raised: #17171B;
+  --color-hover: #1D1D22;
+  --color-selected: #24242A;
+  --color-scrim: rgb(0 0 0 / 0.55);
+
+  /* ── Lines ── */
+  --color-line-subtle: #222228;
+  --color-line: #2C2C33;
+  --color-line-strong: #3A3A43;
+  --color-line-control: #4A4A55;
+
+  /* ── Text ── */
+  --color-fg: #ECECF1;
+  --color-fg-muted: #A0A0AC;
+  --color-fg-subtle: #83838F;
+  --color-fg-disabled: #5A5A64;
+  --color-fg-inverse: #0A0A0C;
+
+  /* ── Interaction ── */
+  --color-primary: #ECECF1;
+  --color-primary-hover: #FFFFFF;
+  --color-brand: #8B7CFF;
+  --color-brand-hover: #A195FF;
+  --color-focus: #8B7CFF;
+  --color-playhead: #F4F4F6;
+
+  /* ── Status ── */
+  --color-success: #3DD68C;
+  --color-warning: #F6C445;
+  --color-danger: #FF6369;
+  --color-danger-solid: #D93A3F;
+  --color-record: #D93A3F;
+  --color-info: #5B9CFF;
+
+  /* ── Effects (timeline clips, canvas overlays, inspector chips) — §14.1 with the accepted changes ── */
+  --color-fx-narrate: #3DD68C;
+  --color-fx-zoom: #5B9CFF;
+  --color-fx-spotlight: #F6C445;
+  --color-fx-arrow: #FF8A3D;
+  --color-fx-callout: #2CC9E8;
+  --color-fx-blur: #8F9BFF;
+  --color-fx-speed: #C586FF;
+  --color-fx-skip: #FF6369;
+  --color-fx-pause: #7DD3FC;
+  --color-fx-mute: #98A2B3;
+  --color-fx-music: #FF6FB5;
+
+  /* ── Named sizes (h-*, w-*, p-* utilities). Compact density redefines some below. ── */
+  --spacing-control-xs: 1.5rem;    /* 24 timeline toolbar, chips */
+  --spacing-control-sm: 1.75rem;   /* 28 default: inspector, menus (24 compact) */
+  --spacing-control-md: 2rem;      /* 32 dialogs, top-bar primary */
+  --spacing-control-lg: 2.25rem;   /* 36 Home CTA */
+  --spacing-topbar: 2.75rem;       /* 44 */
+  --spacing-addbar: 2.25rem;       /* 36 (32 compact) */
+  --spacing-transport: 2.5rem;     /* 40 (36 compact) */
+  --spacing-ruler: 1.5rem;         /* 24 (20 compact) */
+  --spacing-lane-video: 2.75rem;   /* 44 (36 compact) */
+  --spacing-lane-time: 1.5rem;     /* 24 (20 compact) */
+  --spacing-lane-voice: 2.25rem;   /* 36 (28 compact) */
+  --spacing-lane: 1.75rem;         /* 28 camera / overlay row / music (24 compact) */
+  --spacing-overview: 0.875rem;    /* 14 (12 compact) */
+  --spacing-lane-header: 7rem;     /* 112 */
+  --spacing-inspector: 20rem;      /* 320 */
+  --spacing-left-panel: 17.5rem;   /* 280 */
+  --spacing-label: 5.5rem;         /* 88 PropertyRow label column */
+  --spacing-numfield: 3.5rem;      /* 56 NumberField next to a slider */
+
+  /* ── Radii ── */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* ── Elevation ── */
+  --shadow-popover: 0 0 0 1px rgb(255 255 255 / 0.06), 0 12px 32px -8px rgb(0 0 0 / 0.65);
+  --shadow-modal: 0 0 0 1px rgb(255 255 255 / 0.08), 0 24px 64px -12px rgb(0 0 0 / 0.75);
+  --shadow-drag: 0 8px 20px -6px rgb(0 0 0 / 0.8);
+
+  /* ── Motion ── */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --animate-pop-in: pop-in 160ms var(--ease-standard);
+  --animate-fade-in: fade-in 120ms linear;
+  --animate-indeterminate: indeterminate 1.2s var(--ease-standard) infinite;
+  --animate-rec-pulse: rec-pulse 1.4s ease-in-out infinite;
+
+  /* ── Layers (z-canvas, z-popover, …). Native dialogs/popovers use the top layer anyway. ── */
+  --z-index-canvas: 10;
+  --z-index-playhead: 20;
+  --z-index-sticky: 30;
+  --z-index-drawer: 40;
+  --z-index-popover: 50;
+  --z-index-tooltip: 60;
+  --z-index-modal: 70;
+  --z-index-palette: 80;
 }
 
-/* Timeline scrollbar — force visible */
-.timeline-scroll {
-  overflow-x: scroll !important;
-  scrollbar-width: auto;
-  scrollbar-color: #3f3f46 #18181b;
+@keyframes pop-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes indeterminate { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes rec-pulse { 50% { opacity: 0.35; } }
+
+/* ── Density ─────────────────────────────────────────────────────────────────────────────
+   Compact: `<html data-density="compact">` (forced) or a `.compact` class on any subtree.
+   `data-density="default"` / "comfortable" forces the default sizes. With no attribute (or
+   "auto") compact applies automatically below 800 px of window height (§7.3). */
+@layer base {
+  :root[data-density="compact"],
+  .compact {
+    --spacing-control-sm: 1.5rem;
+    --spacing-addbar: 2rem;
+    --spacing-transport: 2.25rem;
+    --spacing-ruler: 1.25rem;
+    --spacing-lane-video: 2.25rem;
+    --spacing-lane-time: 1.25rem;
+    --spacing-lane-voice: 1.75rem;
+    --spacing-lane: 1.5rem;
+    --spacing-overview: 0.75rem;
+  }
+  @media (max-height: 799.98px) {
+    :root:not([data-density]),
+    :root[data-density="auto"] {
+      --spacing-control-sm: 1.5rem;
+      --spacing-addbar: 2rem;
+      --spacing-transport: 2.25rem;
+      --spacing-ruler: 1.25rem;
+      --spacing-lane-video: 2.25rem;
+      --spacing-lane-time: 1.25rem;
+      --spacing-lane-voice: 1.75rem;
+      --spacing-lane: 1.5rem;
+      --spacing-overview: 0.75rem;
+    }
+  }
 }
-.timeline-scroll::-webkit-scrollbar {
-  height: 16px !important;
-  display: block !important;
+
+/* ── Base ── */
+@layer base {
+  :root { color-scheme: dark; }
+  html, body, #root { height: 100%; margin: 0; overflow: hidden; }
+  body {
+    background: var(--color-app);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+  ::selection { background: color-mix(in oklab, var(--color-brand) 40%, transparent); }
+  * { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+  button, [role="button"], .chrome { user-select: none; }
+  input::placeholder, textarea::placeholder { color: var(--color-fg-subtle); opacity: 1; }
+  select option { background: var(--color-raised); color: var(--color-fg); }
+  code, kbd, samp, pre { font-family: var(--font-mono); }
+
+  /* Reduced motion: OS setting, or forced with <html data-motion="reduce"> (preference override). */
+  @media (prefers-reduced-motion: reduce) {
+    :root:not([data-motion="full"]) *, :root:not([data-motion="full"]) ::before, :root:not([data-motion="full"]) ::after {
+      animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important;
+    }
+  }
+  :root[data-motion="reduce"] *, :root[data-motion="reduce"] ::before, :root[data-motion="reduce"] ::after {
+    animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important;
+  }
 }
-.timeline-scroll::-webkit-scrollbar-track {
-  background: #18181b;
+
+/* ── Utilities ── */
+/* Timecodes and other aligned numbers: Inter with tabular figures (not mono). */
+@utility timecode {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
-.timeline-scroll::-webkit-scrollbar-thumb {
-  background: #3f3f46;
-  border-radius: 7px;
-  border: 2px solid #18181b;
+/* Section overline label ("EXPORT SETTINGS"): 10 px caps, used sparingly. */
+@utility overline {
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
+  font-weight: 500;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
 }
-.timeline-scroll::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
+/* Focus ring drawn inside the box (for controls clipped by overflow:hidden parents). */
+@utility focus-ring-inset {
+  &:focus-visible { outline-offset: -2px; }
+}
+/* Thin scrollbars (ScrollArea). The base layer already makes every scrollbar thin; this adds a
+   stable gutter so content does not shift when a scrollbar appears. */
+@utility scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+  scrollbar-gutter: stable;
+}
+@utility scroll-none {
+  scrollbar-width: none;
+}
+
+@layer components {
+  /* Legacy alias for the old Timeline (remove with components/Timeline.tsx): its horizontal
+     scrollbar stays always visible and full-size, in token colours. */
+  .timeline-scroll {
+    overflow-x: scroll !important;
+    scrollbar-width: auto;
+    scrollbar-color: var(--color-line-strong) var(--color-app);
+  }
+
+  /* ── Popover / menu / listbox surface (native popover + CSS anchor positioning) ── */
+  .ui-popover {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: auto;
+    color: var(--color-fg);
+    background: var(--color-raised);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-popover);
+    max-height: calc(100vh - 16px);
+    max-width: calc(100vw - 16px);
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+  }
+  .ui-popover:popover-open { animation: var(--animate-pop-in); }
+
+  /* ── Tooltip ── */
+  .ui-tooltip {
+    position: fixed;
+    inset: auto;
+    margin: 6px;
+    padding: 4px 8px;
+    border: 0;
+    overflow: visible;
+    pointer-events: none;
+    max-width: 280px;
+    color: var(--color-fg);
+    background: var(--color-selected);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-popover);
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
+    position-try-fallbacks: flip-block, flip-inline;
+  }
+  .ui-tooltip:popover-open { animation: var(--animate-fade-in); }
+
+  /* ── Modal (native <dialog>) ── */
+  .ui-modal {
+    padding: 0;
+    border: 0;
+    color: var(--color-fg);
+    background: var(--color-raised);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-modal);
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    overflow: hidden;
+  }
+  .ui-modal[open] { display: flex; flex-direction: column; animation: var(--animate-pop-in); }
+  .ui-modal::backdrop { background: var(--color-scrim); animation: var(--animate-fade-in); }
+
+  /* ── Drawer (manual popover pinned to a side) ── */
+  .ui-drawer {
+    position: fixed;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    color: var(--color-fg);
+    background: var(--color-panel);
+    box-shadow: var(--shadow-popover);
+  }
+  .ui-drawer:popover-open { display: flex; flex-direction: column; animation: var(--animate-fade-in); }
+
+  /* ── Range slider (SliderField): neutral filled track via --pct ── */
+  .ui-range {
+    appearance: none;
+    background: transparent;
+    height: 16px;
+    margin: 0;
+    min-width: 0;
+    --pct: 0%;
+  }
+  .ui-range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 9999px;
+    background: linear-gradient(to right, var(--color-fg-muted) var(--pct), var(--color-line-control) var(--pct));
+  }
+  .ui-range:hover::-webkit-slider-runnable-track {
+    background: linear-gradient(to right, var(--color-fg) var(--pct), var(--color-line-control) var(--pct));
+  }
+  .ui-range::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4px;
+    border-radius: 9999px;
+    background: var(--color-fg);
+    box-shadow: 0 0 0 3px var(--color-panel);
+  }
+  .ui-range:focus-visible { outline: none; }
+  .ui-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--color-panel), 0 0 0 4px var(--color-focus); }
+  .ui-range:disabled::-webkit-slider-thumb { background: var(--color-fg-disabled); }
+  .ui-range:disabled::-webkit-slider-runnable-track { background: var(--color-line); }
 }

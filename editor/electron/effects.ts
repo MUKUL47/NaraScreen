@@ -15,6 +15,8 @@ export interface Action {
   type: string;
   timestamp: number;
   name?: string;
+  /** The demo-script entry it was compiled from (headless jobs): steps[id=step].beat[entry]. Ignored by the renderer. */
+  source?: { step: string; entry: number; target?: number };
   resumeAfter?: string | number;
   narration?: string;
   narration_hi?: string;

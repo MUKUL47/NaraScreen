@@ -15,9 +15,10 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
+import { FFPROBE_PATH } from "../electron/bin-paths";
 import { probeDuration } from "../electron/ffmpeg";
-import { generateTTSViaKokoro } from "../electron/tts";
+import { generateTTSViaKokoroAsync } from "../electron/tts";
 import { DEFAULT_VOICES, LANG_CODES } from "../src/lib/voices";
 import { AgentError } from "./errors";
 import { stage, type Log } from "./output";
@@ -299,7 +300,7 @@ export async function synthesizeNarrations(
       cached = wavProblem(audioPath) === null;
       if (!cached) {
         if (target.mode === "http") await synthesizeHttp(target.endpoint!, job, speed, audioPath);
-        else synthesizePython(job, speed, audioPath);
+        else await synthesizePython(target.python!, job, speed, audioPath);
         const problem = wavProblem(audioPath);
         if (problem) {
           fs.rmSync(audioPath, { force: true });
@@ -329,6 +330,100 @@ export async function synthesizeNarrations(
     log(`${job.key} [${job.lang}] ${what} ${durationSec.toFixed(1)}s${cached ? " (cached)" : ""}${preview ? ` "${preview}"` : ""}`);
   }
   return clips;
+}
+
+// ─── one clip (the desktop app's "Generate / Play") ──────────────────
+
+export interface ClipRequest {
+  /** Folder the clip goes in; the file name is the content-addressed cache name. */
+  audioDir: string;
+  lang: string;
+  /** Kokoro voice id. */
+  voice: string;
+  speed: number;
+  text: string;
+  /** Kokoro HTTP endpoint (default DEFAULT_KOKORO_ENDPOINT); ignored when KOKORO_PYTHON is set. */
+  endpoint?: string;
+}
+
+export interface ClipResult {
+  /** <audioDir>/tts_<sha256(lang|voice|speed|text)[:16]>.wav */
+  audioPath: string;
+  durationSec: number;
+  cached: boolean;
+}
+
+/**
+ * One narration clip, made exactly as produce makes it: same engine choice,
+ * retries, errors (TTS_UNAVAILABLE / TTS_FAILED) and cache file name, so a clip
+ * generated here is found cached (`cached: true`) by the next make/produce with
+ * the same language, voice, speed and text. Nothing in it blocks the event
+ * loop, so it is safe to call from Electron's main process.
+ */
+export async function synthesizeClip(req: ClipRequest): Promise<ClipResult> {
+  const text = req.text;
+  const job: Job = { key: "preview", step: "preview", entry: 0, path: "the preview", lang: req.lang, voice: req.voice, text };
+  if (!text.trim()) {
+    throw new AgentError("TTS_FAILED", "There is no text to speak", { hint: "Type the narration first, then generate it." });
+  }
+  const dir = path.resolve(req.audioDir);
+  await fs.promises.mkdir(dir, { recursive: true });
+  const audioPath = path.join(dir, clipFileName(req.lang, req.voice, req.speed, text));
+  if ((await wavProblemAsync(audioPath)) === null) {
+    return { audioPath, durationSec: await probeDurationAsync(audioPath), cached: true };
+  }
+  const py = process.env.KOKORO_PYTHON;
+  if (py && path.isAbsolute(py) && fs.existsSync(py)) await synthesizePython(py, job, req.speed, audioPath);
+  else await synthesizeHttp(req.endpoint || DEFAULT_KOKORO_ENDPOINT, job, req.speed, audioPath);
+  const problem = await wavProblemAsync(audioPath);
+  if (problem) {
+    await fs.promises.rm(audioPath, { force: true });
+    throw new AgentError("TTS_FAILED", `The speech engine returned unusable audio: ${problem}`, {
+      hint: "Retry once. If it repeats, try another voice or simplify the text (unusual symbols).",
+      details: { voice: req.voice, lang: req.lang, text: text.slice(0, 120) },
+    });
+  }
+  return { audioPath, durationSec: await probeDurationAsync(audioPath), cached: false };
+}
+
+/** Duration of a media file in seconds (0 when unreadable), without blocking. */
+export function probeDurationAsync(file: string): Promise<number> {
+  return new Promise((resolve) => {
+    let out = "";
+    const child = spawn(FFPROBE_PATH, ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file], {
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    child.stdout!.on("data", (d) => (out += d));
+    child.on("error", () => resolve(0));
+    child.on("close", () => {
+      const d = parseFloat(out.trim());
+      resolve(Number.isFinite(d) ? d : 0);
+    });
+  });
+}
+
+/** wavProblem without blocking. */
+async function wavProblemAsync(file: string): Promise<string | null> {
+  let size: number;
+  try {
+    size = (await fs.promises.stat(file)).size;
+  } catch {
+    return "no file";
+  }
+  if (size <= MIN_WAV_BYTES) return `only ${size} bytes`;
+  const fh = await fs.promises.open(file, "r");
+  const head = Buffer.alloc(12);
+  try {
+    await fh.read(head, 0, 12, 0);
+  } finally {
+    await fh.close();
+  }
+  if (head.toString("ascii", 0, 4) !== "RIFF" || head.toString("ascii", 8, 12) !== "WAVE") {
+    return `not a WAV file (starts with ${JSON.stringify(head.toString("latin1", 0, 12))})`;
+  }
+  if (!((await probeDurationAsync(file)) > 0)) return "ffprobe reads no duration";
+  return null;
 }
 
 /** Attempts per clip, and the pause before each retry: a busy engine drops
@@ -413,10 +508,10 @@ async function synthesizeHttp(endpoint: string, job: Job, speed: number, outPath
   fs.renameSync(tmp, outPath);
 }
 
-function synthesizePython(job: Job, speed: number, outPath: string): void {
+async function synthesizePython(python: string, job: Job, speed: number, outPath: string): Promise<void> {
   const where = { step: job.step, entry: job.entry, path: job.path };
   const tmp = `${outPath}.part-${process.pid}.wav`;
-  const r = generateTTSViaKokoro(job.text, job.voice, speed, LANG_CODES[job.lang] ?? "a", tmp);
+  const r = await generateTTSViaKokoroAsync(job.text, job.voice, speed, LANG_CODES[job.lang] ?? "a", tmp, python);
   if (r.status !== 0) {
     fs.rmSync(tmp, { force: true });
     const stderr = lastLines(r.stderr, 6).slice(-600);

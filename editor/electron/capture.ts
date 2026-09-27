@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from "electron";
+import { BrowserWindow, desktopCapturer, screen } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import { spawn, spawnSync, type ChildProcess } from "child_process";
@@ -188,17 +188,33 @@ export async function stopRecording(): Promise<{
 
 // ---- Screen Recording (records actual screen, not a BrowserWindow) ----
 
-/** Get available screens/monitors */
-export function getScreenSources(): { id: string; name: string; x: number; y: number; width: number; height: number }[] {
+/** Get available screens/monitors, each with a small thumbnail (data: URL) when the OS allows capturing it */
+export async function getScreenSources(): Promise<{ id: string; name: string; x: number; y: number; width: number; height: number; thumbnail?: string }[]> {
   const displays = screen.getAllDisplays();
-  return displays.map((d, i) => ({
-    id: String(d.id),
-    name: `Display ${i + 1} (${d.size.width}x${d.size.height})`,
-    x: d.bounds.x,
-    y: d.bounds.y,
-    width: d.size.width,
-    height: d.size.height,
-  }));
+  let thumbs = new Map<string, string>();
+  try {
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 320, height: 180 } });
+    thumbs = new Map(
+      sources
+        .filter((s) => s.display_id && !s.thumbnail.isEmpty())
+        .map((s) => [s.display_id, s.thumbnail.toJPEG(70)] as const)
+        .map(([id, jpg]) => [id, `data:image/jpeg;base64,${jpg.toString("base64")}`]),
+    );
+  } catch {
+    // No capture permission (macOS) or no capturer (some Wayland setups): names only.
+  }
+  return displays.map((d, i) => {
+    const thumbnail = thumbs.get(String(d.id));
+    return {
+      id: String(d.id),
+      name: `Display ${i + 1} (${d.size.width}x${d.size.height})`,
+      x: d.bounds.x,
+      y: d.bounds.y,
+      width: d.size.width,
+      height: d.size.height,
+      ...(thumbnail ? { thumbnail } : {}),
+    };
+  });
 }
 
 /** Build platform-specific ffmpeg input args for screen capture */

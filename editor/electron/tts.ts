@@ -1,4 +1,4 @@
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 
@@ -25,14 +25,8 @@ function resolveKokoroPython(): string {
 
 export const KOKORO_PYTHON = resolveKokoroPython();
 
-export function generateTTSViaKokoro(
-  text: string,
-  voice: string,
-  speed: number,
-  langCode: string,
-  outputPath: string,
-): { status: number | null; stderr: string } {
-  const pyScript = `
+/** Kokoro in Python: argv = text voice speed lang_code output → a 24 kHz WAV. */
+const KOKORO_PY = `
 import sys, json
 from kokoro import KPipeline
 import soundfile as sf
@@ -54,15 +48,60 @@ sf.write(output, full_audio, 24000)
 print(json.dumps({"samples": len(full_audio), "duration": len(full_audio) / 24000}))
 `;
 
+const KOKORO_TIMEOUT_MS = 120_000;
+
+export function generateTTSViaKokoro(
+  text: string,
+  voice: string,
+  speed: number,
+  langCode: string,
+  outputPath: string,
+): { status: number | null; stderr: string } {
   const result = spawnSync(KOKORO_PYTHON, [
-    "-c", pyScript,
+    "-c", KOKORO_PY,
     text, voice, String(speed), langCode, outputPath,
-  ], { timeout: 120000, encoding: "utf-8" });
+  ], { timeout: KOKORO_TIMEOUT_MS, encoding: "utf-8" });
 
   return {
     status: result.status,
     stderr: (result.stderr || "").toString(),
   };
+}
+
+/** generateTTSViaKokoro without blocking the caller's event loop (Electron main). */
+export function generateTTSViaKokoroAsync(
+  text: string,
+  voice: string,
+  speed: number,
+  langCode: string,
+  outputPath: string,
+  python: string = KOKORO_PYTHON,
+): Promise<{ status: number | null; stderr: string }> {
+  return new Promise((resolve) => {
+    let stderr = "";
+    let settled = false;
+    const done = (status: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, stderr });
+    };
+    const child = spawn(python, ["-c", KOKORO_PY, text, voice, String(speed), langCode, outputPath], {
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
+    child.stderr!.setEncoding("utf-8");
+    child.stderr!.on("data", (d: string) => (stderr = (stderr + d).slice(-8000)));
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done(null);
+    }, KOKORO_TIMEOUT_MS);
+    child.on("error", (e) => {
+      stderr += e.message;
+      done(null);
+    });
+    child.on("close", (code) => done(code));
+  });
 }
 
 export function generateTTSViaCurl(

@@ -153,6 +153,26 @@ export async function withJobLock<T>(jobDir: string, fn: () => Promise<T>): Prom
   }
 }
 
+/** The live process holding the job's lock, or null (no lock, or its owner exited). */
+export function lockHolder(jobDir: string): number | null {
+  try {
+    const pid = Number(fs.readFileSync(jobPaths(jobDir).lock, "utf-8").trim().split(":")[0]);
+    return pid && isAlive(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remove the job's lock if this process holds it (crash/signal cleanup). */
+export function releaseOwnLock(jobDir: string): void {
+  const lock = jobPaths(jobDir).lock;
+  try {
+    if (fs.readFileSync(lock, "utf-8").trim() === lockToken()) fs.rmSync(lock, { force: true });
+  } catch {
+    /* already gone */
+  }
+}
+
 /** "<pid>:<process start time>" — a reused pid does not look like the old owner. */
 function lockToken(pid = process.pid): string {
   return `${pid}:${pid === process.pid ? Math.round(Date.now() / 1000 - process.uptime()) : "?"}`;

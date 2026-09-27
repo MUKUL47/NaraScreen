@@ -54,16 +54,6 @@ export class CompileError extends AgentError {
   }
 }
 
-/**
- * Extra timing the runner records per trace slot (traces from older recordings
- * lack it; everything falls back to `t`).
- */
-export type TimedTraceEntry = TraceEntry & {
-  /** When the entry began running (a step begins at its first entry's `start`). */
-  start?: number;
-  /** When an act had finished, if that is later than `t` (a click is stamped at the click itself). */
-  end?: number;
-};
 
 export interface CompileOptions {
   /** Recording length — where "step-end" of the last step (and every range) ends.
@@ -157,10 +147,10 @@ function overlayDuration(fx: FxEntry): { value: number; mode: DurationMode } {
 }
 
 /** The next step's trace slots, in order (none for the last step). */
-function nextStepSlots(script: DemoScript, byKey: Map<string, TraceEntry>, k: number): TimedTraceEntry[] {
+function nextStepSlots(script: DemoScript, byKey: Map<string, TraceEntry>, k: number): TraceEntry[] {
   const next = script.steps[k + 1];
   if (!next) return [];
-  return next.beat.map((_, j) => byKey.get(`${next.id}:${j}`)).filter((x): x is TimedTraceEntry => x != null);
+  return next.beat.map((_, j) => byKey.get(`${next.id}:${j}`)).filter((x): x is TraceEntry => x != null);
 }
 
 /** Where step k ends in recording time: when the next step BEGINS (its first
@@ -473,6 +463,8 @@ export function compile(
       const key = `${beat.id}:${i}`;
       const out = emitAction(entry, `action-${++n}`, tr, { d, lang, viewport: script.viewport, ctx, where, key, speakers, clips });
       out.action.name = `${beat.id} #${i} ${entry.fx}`;
+      // Lets the desktop editor open the script entry behind a timeline clip.
+      out.action.source = { step: beat.id, entry: i };
       if (isRange(entry)) setRangeEnd(out.action, rangeEnd(script, byKey, s, i, entry, tr.t, endOfRecording, opts.durationSec));
       const mode = overlayDuration(entry).mode;
       const windowEnd =

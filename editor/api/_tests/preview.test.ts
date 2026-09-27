@@ -98,9 +98,10 @@ test("produceLanguage: recorded narration, auto spotlight, quality + resolution 
   assert.deepEqual(r.warnings, []);
   // the job opens in the desktop app: DemoProject shape
   const project = JSON.parse(fs.readFileSync(path.join(job, "demo-project.json"), "utf-8"));
-  assert.deepEqual(Object.keys(project).sort(), ["actions", "baseUrl", "output", "recordingDuration", "recordingPath", "title", "tts", "viewport"]);
+  // (the desktop model v2, src/types.ts DemoProject, owned by the desktop side: check what it needs)
+  for (const k of ["actions", "baseUrl", "output", "recordingDuration", "recordingPath", "title", "tts", "viewport"]) assert.ok(k in project, `project.${k}`);
   assert.equal(project.recordingPath, jobPaths(job).recording);
-  assert.deepEqual(project.output, { width: 640, height: 400, fps: 30, format: "mp4" });
+  assert.deepEqual([project.output.width, project.output.height, project.output.fps, project.output.format], [640, 400, 30, "mp4"]);
   assert.equal(project.tts.voices.en[0], "af_heart");
   const spot = project.actions.find((a: { type: string }) => a.type === "spotlight");
   assert.equal(spot.spotlightDuration, 2.5); // (1 − 0.5) + 1.5 + 0.5

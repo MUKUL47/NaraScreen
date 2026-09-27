@@ -120,7 +120,9 @@ Before touching the site, turn the request into a storyboard:
 - **Who watches and what should they learn?** One demo = one goal ("create your first task").
 - **Steps:** 3–10 scenes, each one idea. Give each a short `id` (`open-tasks`) and a human `label`.
 - **Narration:** 1–3 short sentences per scene, spoken language (it is read aloud).
-- **Length:** narration drives length — about 15 characters per second of speech. `validate` estimates it.
+- **Length:** narration drives length — about 17 characters per second of speech. A narration that freezes
+  the frame (the default) adds its speech to the recording; one with `"freeze": false` talks over it and adds
+  nothing. `validate` estimates it (`summary.estimatedVideoSec`, and `estimatedAddedSec` for what the effects add).
 - **Languages:** one video per language (`languages: ["en", "hi"]`).
 
 Write the answers down as the script's optional `plan` — it is kept with the job, so whoever edits the
@@ -313,11 +315,38 @@ A complete example (a task-manager web app):
 - Before acting on an element NaraScreen scrolls it to the middle of the screen and lets it settle.
 - `fill` types key by key on camera (`typeDelayMs`).
 - An **fx happens at the moment it appears in the list** — put it right after the act it belongs to.
+  An act's moment is the interaction itself: a click counts from the click, even when the button then
+  renames itself ("Export CSV" → "Exporting…") or disappears.
+- The recording starts 0.5 s before the first step. An fx that is the **very first entry** of the video
+  (nothing has happened on screen yet) starts at 0, so it covers that lead-in too.
 - **Narration freezes the video** (default) for as long as the speech lasts, so the viewer hears the
-  explanation while looking at the frame it describes. Use `"freeze": false` to talk over moving video.
-- `spotlight` and `callout` stay on screen **until the next narration in the same step has finished**
-  (`duration: "auto"`, the default), or 3 s if the step has no narration after them. `blur` defaults to the
-  end of its step (`"step-end"`). Any of them accepts seconds, `"step-end"` or `"end"` (rest of the video).
+  explanation while looking at the frame it describes. Use `"freeze": false` to talk over moving video:
+  the video keeps playing for the speech + 0.5 s and nothing is cut, so effects after it stay on the frames
+  they were placed on. If another narration, pause or zoom comes up while it is still talking, that one
+  waits until it has finished (the frames in between are not shown twice). Near the end of the video the
+  last frame is held until it has finished speaking.
+- `spotlight`, `arrow` and `callout` stay on screen **until the next narration in the same step has finished**
+  (`duration: "auto"`, the default), or 3 s if the step has no narration after them — unless a later effect
+  takes their place on screen first (see *Callouts that share the screen*). `blur` defaults to the end of its
+  step (`"step-end"`). Any of them accepts seconds, `"step-end"` or `"end"` (rest of the video).
+- **`"step-end"` ends when the next step begins** — before that step scrolls to or clicks anything. For a
+  `blur` it lasts a little longer, until the next step's first entry has finished (e.g. the click that
+  navigates away), so the secret is never readable while that happens.
+
+#### Callouts that share the screen
+
+With `"auto"`, a later effect ends an earlier one only when it takes the same place on screen:
+
+| Earlier | Ended by a later… |
+|---|---|
+| `lower-third` | `lower-third` (there is one bottom banner) — or a label/step-counter whose box overlaps it |
+| `step-counter` | `step-counter` ("Step 2" replaces "Step 1") — or a label/lower-third overlapping it |
+| `label` | a label, step-counter or lower-third whose box **overlaps** it |
+| `arrow` | `arrow` |
+| `spotlight` | `spotlight` (two can't be on screen at once) |
+
+So a lower-third and a label next to an element stay up together, as do labels on different elements, and
+arrows never end text callouts (or the other way round). Explicit durations are always kept as written.
 
 ### Patterns that make good demos
 
@@ -330,6 +359,13 @@ A complete example (a task-manager web app):
 - **Use `setup` for anything the viewer shouldn't see** (logging in, resetting data). It runs before recording starts.
 - **Upload files on camera** with the `upload` act (see *Uploading files* below) — no OS file dialog appears.
 - **Blur secrets** (API keys, emails, balances) with `{"fx": "blur", "anchor": …}` placed as soon as they appear. A blur lasts until its step ends by default; add `"duration": "end"` to keep it hidden for the rest of the video.
+  **When a blur starts:** if its element is already on screen, where it will be blurred, the blur covers it
+  from the moment the page last changed — the act that brought it up (the click, the navigation, the typing),
+  or the very first frame when nothing came before it in the video — not from where the blur entry sits after
+  the dwell. So `click Settings` → `blur the key` hides the key from the first frame it appears, and a blur as
+  the first entry of the video covers the 0.5 s lead-in as well. A blur target that is already fully visible is
+  not scrolled to the middle (that glide would show it). One that has to be scrolled into view starts once it
+  is in place, with a warning: scroll to it (or blur it) earlier.
 
 ### Uploading files
 
@@ -438,7 +474,7 @@ disappeared before you reached it (act on it sooner or don't target it).
 
 | fx | What the viewer sees | Needs an element? | Duration |
 |---|---|---|---|
-| `narrate` | Voiceover; the frame freezes while it plays (`freeze: false` = video keeps moving) | no | length of the speech + 0.5 s |
+| `narrate` | Voiceover; the frame freezes while it plays (`freeze: false` = video keeps moving) | no | freeze: the speech; `freeze: false`: the speech + 0.5 s of video (nothing is cut) |
 | `zoom` | Smooth zoom into the element on a frozen frame, hold, zoom out. Add `narrate` to talk while zoomed in | yes | `zoomDuration` in + hold + out; hold = speech length when narrated, else `zoomHold` |
 | `spotlight` | Everything except the element is dimmed; `padding` (px) leaves extra room around it, `feather` (px) gives it a soft edge, `converge` (s) animates it closing in from the whole screen | yes | `auto` (default: until the step's next narration ends), `step-end`, `end`, or seconds |
 | `arrow` | An animated arrow points at the element: one smooth, gently curved line that draws itself to the element, a chevron head riding its tip; optional `text` label in a rounded pill at its tail; optional `highlight` pencil loop around the element. White halo + soft shadow, so it reads on light and dark pages. The page stays bright (a lighter touch than spotlight) | yes | `auto` (default), `step-end`, `end`, or seconds |
@@ -509,6 +545,10 @@ to zoom into several elements one after another on the same frozen frame, each w
   until that narration ends. An arrow and a label/spotlight can be on screen together.
 
 **Callout look:** `fontSize` (12–96) and `placement` (`above` — the default —, `below`, `over`) position the text next to its element.
+The label's box (text + padding, about 1.25 × `fontSize` + 12 px tall) sits 6 px above the element's top edge
+(`below`: 6 px under its bottom; `over`: on its top-left corner), lined up with its left edge, and never
+covers the element itself. It does cover what is right above: on a form field with its own label above it,
+use `"placement": "below"` (or anchor the field's label instead) so the label stays readable.
 
 **Turn an effect off** without deleting it: `"disabled": true`. Toggling it never needs a re-record.
 
@@ -519,10 +559,12 @@ A range starts where the entry sits and ends at:
 | `until` | Ends when… | Default for |
 |---|---|---|
 | `"next-act"` | the next browser action in the same step has finished | `skip` |
-| `"step-end"` | this step ends | `speed`, `mute` |
-| `"<step-id>"` | that later step ends | — |
+| `"step-end"` | this step ends (= the next step begins) | `speed`, `mute` |
+| `"<step-id>"` | that later step ends (= the step after it begins) | — |
 
-…or give `"seconds": N` instead. Typical uses:
+…or give `"seconds": N` instead. A cut lands on whole frames: the skip keeps the frames before its start and
+resumes on the first frame after its end, so a narration or pause placed right after a skip freezes on that
+first frame after the cut (the result), never on the last one before it. Typical uses:
 
 ```json
 { "act": "click", "role": "button", "name": "Export CSV" },
@@ -563,8 +605,9 @@ Rules the renderer enforces:
 - **Your own recording instead of a generated voice:** `"audio": "voiceover/intro.mp3"` (or one file per
   language, `{"en": "…", "hi": "…"}`) on a `narrate` or `zoom` (or a zoom target). Keep `narrate` text as
   well if you want subtitles. Paths are relative to the script file.
-- **Subtitles** are burned in with word highlighting by default; `"subtitles": false` turns them off,
-  `"subtitleSize": 36` changes their size.
+- **Subtitles** are burned in with word highlighting by default — white text on a soft dark box, sized to
+  the video (they read the same at 480p and 4K); `"subtitles": false` turns them off, `"subtitleSize": 36`
+  changes their size.
 
 ### Music and output
 

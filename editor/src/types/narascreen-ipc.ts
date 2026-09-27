@@ -2,7 +2,13 @@
 //
 // The desktop runs every heavy operation (validate, check, make, produce, doctor…)
 // through the same CLI that agents use, as a child process with `--events json`.
-// These types are shared by electron/preload.ts, electron/main.ts and the renderer.
+// These types are shared by electron/preload.ts, electron/cli-bridge.ts and the renderer.
+//
+// Errors: a rejected bridge call carries an Error whose message starts with a
+// stable code, "CODE: message" (e.g. "JOB_LOCKED: …", "TTS_UNAVAILABLE: …"),
+// followed by the hint on the next line when there is one. Custom Error
+// properties do not survive Electron's context bridge, so the code lives in the
+// message: read it with `bridgeErrorCode(err)`.
 
 import type { Envelope, NaraEvent } from "../../api/protocol";
 
@@ -26,9 +32,11 @@ export interface CliRunRequest {
   command: CliCommand;
   /** Positional arg, absolute: the script (validate|check|record|make) or the job dir (produce|preview|status). */
   arg?: string;
-  /** Flag names exactly as api/commands.ts FlagDoc.name, no dashes, e.g. { out, lang: "en,hi", resolution, quality, force: true }. */
+  /** Flag names exactly as api/commands.ts FlagDoc.name, no dashes, e.g. { out, lang: "en,hi", resolution, quality, force: true }.
+   *  `false` leaves a boolean flag out. `events` is set by the bridge. */
   flags?: Record<string, string | boolean>;
-  /** ${env:NAME} values: put in the child's env only; never logged, persisted or echoed back. */
+  /** ${env:NAME} values: put in the child's env only; never logged, persisted or echoed back.
+   *  Names must be UPPER_CASE and not process settings (PATH, NODE_*, ELECTRON_*, NARASCREEN_*, …). */
   env?: Record<string, string>;
   /** Working directory (default: dirname(arg) ?? home). Always also pass --out where the command takes one. */
   cwd?: string;
@@ -57,8 +65,11 @@ export interface CliEndMsg {
   envelope: Envelope | null;
   /** Raw stdout when the command prints raw output (schema, manual) or crashed. */
   raw?: string;
+  /** Last plain-text stderr lines, when there is no envelope (what the crash said). */
+  stderrTail?: string[];
   exitCode: number | null;
   signal: string | null;
+  /** Stopped by cli.cancel (or by a signal: the CLI's "Interrupted by SIGTERM" envelope). */
   cancelled: boolean;
   durationMs: number;
 }
@@ -89,17 +100,33 @@ export type InlineValidateResult =
       };
     };
 
+export interface ScriptReadResult {
+  text: string;
+  /** The parsed JSON; null when the file is not valid JSON (see parseError). */
+  json: unknown;
+  parseError?: string;
+}
+
+export interface ScriptWriteOptions {
+  /** The job this script belongs to: the write is refused (JOB_LOCKED) while a run holds it.
+   *  Without it the bridge still checks the script's own folder and its own active runs. */
+  jobDir?: string;
+}
+
 export interface SessionProbe {
   kind: "timeline" | "job" | "none";
   dir: string;
   /** demo-project.json exists */
   hasProject: boolean;
   job?: {
+    /** job.json scriptPath when that file exists, else <job>/script.json */
     scriptPath: string;
     producedLangs: string[];
     /** lang → demo-project.<lang>.json path */
     projectFiles: Record<string, string>;
     recorded: boolean;
+    /** pid of the CLI run holding the job lock right now (editing and produce must wait). */
+    busyPid?: number;
   };
 }
 
@@ -127,7 +154,7 @@ export interface OpenFileOptions {
 }
 
 export interface AudioPeaks {
-  /** Normalised 0..1 peak per bucket. */
+  /** 0..1 per bucket, relative to the file's loudest bucket (1 = loudest). Empty when the file has no audio. */
   peaks: number[];
   bucketsPerSec: number;
   durationSec: number;
@@ -144,6 +171,38 @@ export interface ScreenSource {
   thumbnail?: string;
 }
 
+export interface VideoProbe {
+  durationSec: number;
+  width: number;
+  height: number;
+  fps: number;
+  hasAudio: boolean;
+  /** first video stream's codec, e.g. "h264" */
+  codec?: string;
+}
+
+export interface VideoImportRequest {
+  /** The file the user picked (any format ffmpeg reads). */
+  src: string;
+  /** Session folder: the result is <sessionDir>/recordings/recording.mp4. */
+  sessionDir: string;
+  /** auto (default): copy an H.264/yuv420p MP4/MOV with even dimensions as-is, re-encode anything else
+   *  like the CLI's import (H.264, 30 fps, even dimensions). */
+  mode?: "auto" | "copy" | "normalize";
+}
+
+export interface VideoImportResult extends VideoProbe {
+  recordingPath: string;
+  /** true when it was re-encoded, false when copied as-is */
+  normalized: boolean;
+}
+
+export interface VideoImportProgress {
+  sessionDir: string;
+  /** 0..1 */
+  fraction: number;
+}
+
 /** The new preload surface (added next to the existing flat electronAPI methods). */
 export interface NaraBridgeAPI {
   cli: {
@@ -156,9 +215,10 @@ export interface NaraBridgeAPI {
     onEnd(cb: (m: CliEndMsg) => void): () => void;
   };
   script: {
-    read(path: string): Promise<{ text: string; json: unknown }>;
-    /** Atomic write (tmp + rename). Rejects with code JOB_LOCKED while a CLI run holds the job. */
-    write(path: string, script: unknown): Promise<{ ok: true }>;
+    read(path: string): Promise<ScriptReadResult>;
+    /** Atomic write (tmp + rename). A string is written verbatim (the JSON editor's text), anything else as
+     *  pretty JSON. Rejects with "JOB_LOCKED: …" while a CLI run holds the job. */
+    write(path: string, script: unknown, opts?: ScriptWriteOptions): Promise<{ ok: true }>;
     validateInline(req: InlineValidateRequest): Promise<InlineValidateResult>;
   };
   session: {
@@ -173,11 +233,24 @@ export interface NaraBridgeAPI {
   audio: {
     peaks(path: string, bucketsPerSec?: number): Promise<AudioPeaks>;
   };
+  video: {
+    /** ffprobe, off the main thread. */
+    probe(path: string): Promise<VideoProbe>;
+    /** Copy or normalise a picked video into the session in the main process (never through renderer memory). */
+    importFile(req: VideoImportRequest): Promise<VideoImportResult>;
+    onImportProgress(cb: (p: VideoImportProgress) => void): () => void;
+  };
   fsWatch: {
-    /** Watch files; cb fires with the changed path. Returns an unsubscribe function. */
+    /** Watch files; cb fires with the changed path (debounced). Returns an unsubscribe function. */
     watch(paths: string[], cb: (path: string) => void): () => void;
   };
   win: {
     setTitle(title: string): Promise<void>;
   };
+}
+
+/** The code at the start of a bridge error's message ("JOB_LOCKED: …" → "JOB_LOCKED"). */
+export function bridgeErrorCode(err: unknown): string | undefined {
+  const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /^([A-Z][A-Z0-9_]+):/.exec(msg)?.[1];
 }

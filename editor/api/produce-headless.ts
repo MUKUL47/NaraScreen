@@ -25,7 +25,7 @@ import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../e
 import { DEFAULT_VOICES } from "../src/lib/voices";
 import { compile, modelTimeline, spotlightOverlaps } from "./compiler";
 import { AgentError } from "./errors";
-import { jobPaths } from "./job";
+import { jobPaths, readJob } from "./job";
 import { scriptVoice, synthesizeNarrations } from "./narration";
 import { stage, warn, type Log } from "./output";
 import { DEFAULT_KOKORO_ENDPOINT, QUALITY_CRF, RESOLUTIONS, type DemoScript, type Quality, type ResolutionName } from "./schema";
@@ -74,22 +74,36 @@ const DURATION_TOLERANCE_SEC = 2;
  *  (skip/speed/insert/overlay passes, and a music file that vanished). */
 const SKIPPED_PASS = /produced no output, skipping|music file not found, skipping/i;
 
-/** The desktop app's project file (src/types.ts DemoProject). */
+/** What the desktop needs to link a compiled project back to its job and script. */
+export interface ProjectOrigin {
+  /** The script the job was recorded from (job.json scriptPath). */
+  scriptPath?: string;
+  /** The output settings this render used (flags over script.output). */
+  resolution?: ResolutionName;
+  quality?: Quality;
+}
+
+/** The desktop app's project file (src/types.ts DemoProject, projectVersion 2). */
 export function buildProject(
   script: DemoScript,
   recordingPath: string,
   actions: NaraAction[],
   lang: string,
+  origin: ProjectOrigin = {},
 ): Record<string, unknown> {
   const native = probeResolution(recordingPath);
   const languages = [...new Set([...(script.languages ?? ["en"]), lang])];
+  const resolution = origin.resolution ?? script.output?.resolution ?? "native";
+  const quality = origin.quality ?? script.output?.quality ?? "high";
   return {
+    projectVersion: 2,
+    ...(origin.scriptPath ? { origin: { kind: "job", scriptPath: origin.scriptPath, lang } } : {}),
     title: script.scope,
     baseUrl: script.baseUrl ?? "",
     recordingPath,
     recordingDuration: probeDuration(recordingPath),
     viewport: script.viewport,
-    output: { width: native.width, height: native.height, fps: 30, format: "mp4" },
+    output: { width: native.width, height: native.height, fps: 30, format: "mp4", resolution, quality },
     tts: {
       provider: "kokoro",
       kokoroEndpoint: script.tts?.kokoroEndpoint ?? DEFAULT_KOKORO_ENDPOINT,
@@ -106,8 +120,24 @@ export function buildProject(
       ),
       languages,
     },
+    // Whole-video music, as in the script (the compiler also emits it as a music action).
+    ...(script.music
+      ? { music: { path: script.music.path, volume: script.music.volume ?? 0.5, duckTo: script.music.duckTo ?? 0.2 } }
+      : {}),
+    ...(script.intro ? { intro: script.intro } : {}),
+    ...(script.outro ? { outro: script.outro } : {}),
+    ...(script.plan ? { plan: script.plan } : {}),
     actions,
   };
+}
+
+/** job.json's scriptPath, when this folder is a job (it always is under produce). */
+function jobScriptPath(jobDir: string): string | undefined {
+  try {
+    return readJob(jobDir).scriptPath;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function produceLanguage(
@@ -160,7 +190,7 @@ export async function produceLanguage(
     );
   }
 
-  const project = buildProject(script, p.recording, actions, lang);
+  const project = buildProject(script, p.recording, actions, lang, { scriptPath: jobScriptPath(p.root), resolution, quality });
   const projectPath = path.join(p.root, `demo-project.${lang}.json`);
   const json = JSON.stringify(project, null, 2) + "\n";
   fs.writeFileSync(projectPath, json);

@@ -12,6 +12,7 @@
 import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { isBundled } from "./cli-process";
 import { DEFAULT_KOKORO_ENDPOINT, isFx, type DemoScript } from "./schema";
 import { log, stage } from "./output";
 
@@ -42,13 +43,15 @@ const MIN_NODE_MAJOR = 18;
 
 const FFMPEG_FIX =
   process.platform === "darwin" ? "brew install ffmpeg" : process.platform === "win32" ? "winget install Gyan.FFmpeg" : "sudo apt install ffmpeg";
-const FFMPEG_NOTE = "install a full ffmpeg build with libfreetype and libass, on PATH (the npm ffmpeg-static build lacks drawtext)";
+const FFMPEG_NOTE = "install a full ffmpeg build (with libass), on PATH";
 const KOKORO_DOCKER = "docker run -d --name narascreen-kokoro -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest";
 
-/** Filters the renderer uses. drawtext/ass draw callouts and captions (required);
- *  zoompan and boxblur only power the zoom/blur effects. */
+/** Filters the renderer uses. ass draws callouts and captions (required);
+ *  zoompan and boxblur only power the zoom/blur effects. drawtext is only used
+ *  for the optional frame labels of `preview` (the renderer no longer needs it,
+ *  and the ffmpeg bundled with the desktop app does not have it). */
 const FILTERS: { name: string; required: boolean; usedFor: string }[] = [
-  { name: "drawtext", required: true, usedFor: "callout text and labels" },
+  { name: "drawtext", required: false, usedFor: "timestamps on preview frames" },
   { name: "ass", required: true, usedFor: "lower-third and caption rendering" },
   { name: "zoompan", required: false, usedFor: "the zoom effect" },
   { name: "boxblur", required: false, usedFor: "the blur effect" },
@@ -73,8 +76,9 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
   for (const c of checkFilters(FFMPEG_PATH, ffmpeg.ok)) add(c);
 
   // The two slow checks (browser launch, TTS round trip) run side by side.
-  // A video-source script never opens a browser.
-  const needsBrowser = !opts.script?.source;
+  // A video-source script opens a browser only to draw its title/end cards.
+  const s = opts.script;
+  const needsBrowser = !s?.source || !!(s.intro || s.outro);
   const [browser, tts] = await Promise.all([checkChromium(needsBrowser), checkTtsEngine(opts.script)]);
   add(browser);
   add(tts);
@@ -161,22 +165,22 @@ function parseFilterList(text: string): Set<string> {
 }
 
 async function checkChromium(required: boolean): Promise<DoctorCheck> {
-  const install = `cd ${quote(EDITOR_DIR)} && npx playwright install chromium`;
-  let chromium: typeof import("@playwright/test").chromium;
+  let chromium: typeof import("playwright-core").chromium;
   try {
-    ({ chromium } = await import("@playwright/test"));
+    ({ chromium } = await import("playwright-core"));
   } catch (e) {
     return {
       id: "chromium",
       ok: false,
       required,
-      detail: `Playwright is not installed: ${firstLine(e)}`,
-      fix: `cd ${quote(EDITOR_DIR)} && npm install && npx playwright install chromium`,
+      ...(isBundled()
+        ? { detail: `playwright-core is missing from the app (${firstLine(e)}) — reinstall NaraScreen` }
+        : { detail: `Playwright is not installed: ${firstLine(e)}`, fix: `cd ${quote(EDITOR_DIR)} && npm install && ${playwrightInstall(false)}` }),
     };
   }
   const exe = chromium.executablePath();
   if (!exe || !fs.existsSync(exe)) {
-    return { id: "chromium", ok: false, required, detail: `Playwright Chromium is not installed (expected at ${exe})`, fix: install };
+    return { id: "chromium", ok: false, required, detail: `Playwright Chromium is not installed (expected at ${exe})`, fix: playwrightInstall(false) };
   }
   // Launching (not just finding the file) also catches missing system libraries
   // and a missing headless shell, which a bare existence check would not.
@@ -191,9 +195,23 @@ async function checkChromium(required: boolean): Promise<DoctorCheck> {
       ok: false,
       required,
       detail: `Chromium is installed but did not start: ${firstLine(e)}`,
-      fix: process.platform === "linux" ? `cd ${quote(EDITOR_DIR)} && npx playwright install --with-deps chromium` : install,
+      fix: playwrightInstall(process.platform === "linux"),
     };
   }
+}
+
+/** `playwright install chromium`, run with this very Node (or Electron-as-Node)
+ *  and the playwright-core it loads — no npx, which a packaged app does not have. */
+function playwrightInstall(withDeps: boolean): string {
+  let cliJs: string;
+  try {
+    cliJs = path.join(path.dirname(require.resolve("playwright-core/package.json")), "cli.js");
+  } catch {
+    return `cd ${quote(EDITOR_DIR)} && npx playwright install${withDeps ? " --with-deps" : ""} chromium`;
+  }
+  const run = `${quote(process.execPath)} ${quote(cliJs)} install${withDeps ? " --with-deps" : ""} chromium`;
+  if (!process.versions.electron) return run;
+  return process.platform === "win32" ? `set ELECTRON_RUN_AS_NODE=1&& ${run}` : `ELECTRON_RUN_AS_NODE=1 ${run}`;
 }
 
 async function checkTtsEngine(script?: DemoScript): Promise<DoctorCheck> {
