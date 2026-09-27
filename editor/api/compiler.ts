@@ -54,6 +54,17 @@ export class CompileError extends AgentError {
   }
 }
 
+/**
+ * Extra timing the runner records per trace slot (traces from older recordings
+ * lack it; everything falls back to `t`).
+ */
+export type TimedTraceEntry = TraceEntry & {
+  /** When the entry began running (a step begins at its first entry's `start`). */
+  start?: number;
+  /** When an act had finished, if that is later than `t` (a click is stamped at the click itself). */
+  end?: number;
+};
+
 export interface CompileOptions {
   /** Recording length — where "step-end" of the last step (and every range) ends.
    *  Without it: the last trace timestamp + 0.5 s. */

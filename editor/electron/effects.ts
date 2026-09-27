@@ -795,13 +795,20 @@ export function atempoChain(factor: number): string {
   return parts.map((x) => `atempo=${Number(x.toFixed(6))}`).join(",");
 }
 
-/** Mix background music into the final video */
+/**
+ * Mix background music into the final video. The music loops, and is placed on
+ * the final timeline: it starts at `window.start` (fading in when that is not
+ * 0) and stops at `window.end` with a short fade (the desktop app's music
+ * action from its timestamp to musicEndTimestamp; no end = to the end of the
+ * video). It is ducked to musicDuckTo while each narration speaks.
+ */
 export function mixBackgroundMusic(
   videoPath: string,
   musicAction: Action,
   narrationTimestamps: Array<{ start: number; end: number }>,
   outputPath: string,
   emit: (msg: string) => void,
+  window: { start: number; end?: number } = { start: 0 },
 ): void {
   const musicPath = musicAction.musicPath;
   if (!musicPath || !fs.existsSync(musicPath)) {
@@ -812,26 +819,40 @@ export function mixBackgroundMusic(
 
   const volume = musicAction.musicVolume ?? 0.5;
   const duckTo = musicAction.musicDuckTo ?? 0.2;
-  emit(`Mixing background music (vol=${volume}, duck=${duckTo})...`);
-
-  let volumeFilter = `volume=${volume}`;
-  if (narrationTimestamps.length > 0) {
-    const enableParts: string[] = [];
-    for (const seg of narrationTimestamps) {
-      enableParts.push(
-        `volume=enable='between(t,${seg.start.toFixed(1)},${seg.end.toFixed(1)})':volume=${duckTo / volume}`
-      );
-    }
-    volumeFilter = `volume=${volume},${enableParts.join(",")}`;
+  const videoSec = probeDuration(videoPath);
+  const start = Math.max(0, window.start);
+  // An end at (or past) the end of the video is no end: the music just runs out with it.
+  const end = window.end != null && window.end < videoSec - 0.05 ? window.end : undefined;
+  if (start >= videoSec - 0.05 || (end != null && end <= start + 0.05)) {
+    emit(`Music starts at ${start.toFixed(1)}s${end != null ? ` and ends at ${end.toFixed(1)}s` : ""}, outside the ${videoSec.toFixed(1)}s video: no music`);
+    fs.copyFileSync(videoPath, outputPath);
+    return;
   }
+  const len = (end ?? videoSec) - start;
+  emit(`Mixing background music (vol=${volume}, duck=${duckTo}, ${start.toFixed(1)}s–${(end ?? videoSec).toFixed(1)}s)...`);
+
+  // Loop first, THEN place and duck, so the ducking follows the final timeline
+  // (it used to be applied before the loop, i.e. only to the music's first pass).
+  const chain = ["aloop=loop=-1:size=2e9", "asetpts=N/SR/TB", `atrim=0:${len.toFixed(3)}`];
+  const fade = Math.min(1, len / 4);
+  if (start > 0) chain.push(`afade=t=in:st=0:d=${fade.toFixed(3)}`);
+  if (end != null) chain.push(`afade=t=out:st=${(len - fade).toFixed(3)}:d=${fade.toFixed(3)}`);
+  if (start > 0) chain.push(`adelay=${Math.round(start * 1000)}:all=1`);
+  chain.push("apad", "asetpts=N/SR/TB", `volume=${volume}`);
+  for (const seg of narrationTimestamps) {
+    chain.push(`volume=enable='between(t,${seg.start.toFixed(3)},${seg.end.toFixed(3)})':volume=${duckTo / volume}`);
+  }
+  chain.push(`atrim=0:${videoSec.toFixed(3)}`);
+  const music = `[1:a]aresample=44100,${chain.join(",")}`;
 
   // A video without an audio track (e.g. a screen recording with no
   // narration inserts) gets the music as its only audio, cut to its length.
   const mix = hasAudioStream(videoPath)
     // normalize=0: amix otherwise halves both inputs, which left the narration ~6 dB
     // quieter than the title/end cards. A limiter catches the rare voice+music peak.
-    ? `[1:a]${volumeFilter},aloop=-1:2e9[music];[0:a][music]amix=inputs=2:duration=shortest:dropout_transition=2:normalize=0,alimiter=limit=0.95:level=0[aout]`
-    : `[1:a]${volumeFilter},aloop=-1:2e9,atrim=0:${probeDuration(videoPath).toFixed(3)}[aout]`;
+    // duration=first: the video's own track sets the length (the music may end early).
+    ? `${music}[music];[0:a][music]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0[aout]`
+    : `${music}[aout]`;
   ffmpegSync([
     "-y",
     "-i", videoPath,

@@ -4,11 +4,11 @@
 
 Free. Local. Open source. No cloud, no accounts, no watermarks.
 
-[![NaraScreen showcase: a 71-second video made from one JSON script](docs/media/showcase-poster.jpg)](docs/media/narascreen-showcase.mp4)
+[![NaraScreen showcase: a 71-second video made from one JSON script](docs/media/showcase-poster.jpg)](https://mukul47.github.io/NaraScreen/media/narascreen-showcase.mp4)
 
-▶ [Watch the showcase](docs/media/narascreen-showcase.mp4). Every second of it came from [one JSON script](docs/media/showcase.demo-script.json): a real browser recording, voices in English, Hindi and Japanese, spotlights, zoom, arrows, blur and title cards, all rendered on one laptop.
+▶ [Watch the showcase](https://mukul47.github.io/NaraScreen/media/narascreen-showcase.mp4). Every second of it came from [one JSON script](docs/media/showcase.demo-script.json): a real browser recording, voices in English, Hindi and Japanese, spotlights, zoom, arrows, blur and title cards, all rendered on one laptop.
 
-📖 **Step-by-step desktop tutorial:** [`docs/tutorial/`](docs/tutorial/index.html) (the GitHub Pages site, served from `docs/`).
+📖 **Step-by-step desktop tutorial:** [mukul47.github.io/NaraScreen/tutorial](https://mukul47.github.io/NaraScreen/tutorial/) · [project site](https://mukul47.github.io/NaraScreen/)
 
 ---
 
@@ -19,7 +19,7 @@ Free. Local. Open source. No cloud, no accounts, no watermarks.
 | **You** | record your screen by hand | describe the demo in a JSON file, or let an AI agent write it |
 | **Then** | place effects on a timeline, press **Produce** | `validate` → `check` → `make` |
 | **Best for** | one-off videos, quick edits | repeatable demos, many languages, CI, agents |
-| **Start here** | [Desktop tutorial](docs/tutorial/index.html) | [Scripts and the HTTP API](#scripts-and-the-http-api) · [LLM guide](#for-ai-agents-llm-guide) |
+| **Start here** | [Desktop tutorial](https://mukul47.github.io/NaraScreen/tutorial/) | [Scripts and the HTTP API](#scripts-and-the-http-api) · [LLM guide](#for-ai-agents-llm-guide) |
 
 Both use the same renderer, effects and voices. A job made by a script is also a desktop session: open it in the app to fine-tune by hand.
 
@@ -219,7 +219,7 @@ The browser (Playwright/Chromium), the voices ([Kokoro](https://github.com/remsk
 ui-demo-pipeline/
 ├── docker-compose.yml        # Kokoro voice engine (port 8880)
 ├── ARCHITECTURE.md           # how the pieces fit, pass by pass
-├── docs/                     # GitHub Pages site: landing page, desktop tutorial, media
+├── docs/                     # GitHub Pages site (mukul47.github.io/NaraScreen): landing page, tutorial, media
 └── editor/
     ├── electron/             # desktop main process + the shared renderer (produce.ts, ffmpeg passes)
     ├── src/                  # desktop UI (React): timeline, player, action editors

@@ -43,6 +43,20 @@ export function probeResolution(filePath: string): { width: number; height: numb
   return { width: isNaN(w) ? 1920 : w, height: isNaN(h) ? 1080 : h };
 }
 
+/** Frame rate of the first video stream (frames per second), 30 when unknown. */
+export function probeFrameRate(filePath: string): number {
+  const result = ffprobeSync([
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-show_entries", "stream=r_frame_rate",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    filePath,
+  ]);
+  const [num, den] = result.stdout.toString().trim().split("/").map(Number);
+  const fps = den ? num / den : num;
+  return Number.isFinite(fps) && fps >= 1 && fps <= 240 ? fps : 30;
+}
+
 /** Get video/audio duration via ffprobe */
 export function probeDuration(filePath: string): number {
   const result = ffprobeSync([
@@ -93,10 +107,22 @@ export function generateFilmstrip(sessionDir: string): number {
   return fs.readdirSync(thumbnailsDir).filter((f) => f.endsWith(".jpg")).length;
 }
 
-/** Extract a single frame from a video at the given timestamp */
+/**
+ * A time for ffmpeg's -ss / -to / -t. `-ss t` starts at the first frame whose
+ * time is >= t and `-to` stops before the first one >= the end, so a time that
+ * sits exactly on a frame (k / fps — a cut snapped to the frame grid) must mean
+ * THAT frame. Written with 3 decimals it could round up past it (3.06667 →
+ * "3.067" skipped the frame, and a clip ending there kept it): a 0.2 ms bias
+ * and 4 decimals make grid times exact and change nothing else.
+ */
+export function ffTime(t: number): string {
+  return Math.max(0, t - 0.0002).toFixed(4);
+}
+
+/** Extract a single frame from a video at the given timestamp (the first frame at or after it) */
 export function extractFrame(videoPath: string, timestamp: number, outputPath: string): void {
   ffmpegSync([
-    "-y", "-ss", timestamp.toFixed(3),
+    "-y", "-ss", ffTime(timestamp),
     "-i", videoPath,
     "-frames:v", "1",
     outputPath,
@@ -113,9 +139,9 @@ export function cutClip(
   const hasAudio = hasAudioStream(inputPath);
   const args = [
     "-y",
-    "-ss", startTime.toFixed(3),   // before -i for fast seek
+    "-ss", ffTime(startTime),   // before -i for fast seek
     "-i", inputPath,
-    "-to", (endTime - startTime).toFixed(3),  // relative to seek point
+    "-to", (endTime - startTime).toFixed(4),  // relative to seek point
     ...INTERMEDIATE_VIDEO,
   ];
   if (hasAudio) {
@@ -136,22 +162,48 @@ export function cutClipMuted(
 ): void {
   ffmpegSync([
     "-y",
-    "-ss", startTime.toFixed(3),
+    "-ss", ffTime(startTime),
     "-i", inputPath,
-    "-to", (endTime - startTime).toFixed(3),
+    "-to", (endTime - startTime).toFixed(4),
     ...INTERMEDIATE_VIDEO,
     "-an",
     outputPath,
   ]);
 }
 
-/** Normalize a segment's audio to 44100Hz stereo AAC (or add silent audio if none) */
+/**
+ * Seconds of VIDEO in a clip (its format duration when there is no video
+ * stream). The joined timeline follows the video: a segment's audio can run a
+ * few ms longer (AAC frames), and the format duration would then count those.
+ */
+export function segmentDuration(filePath: string): number {
+  const result = ffprobeSync([
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-show_entries", "stream=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    filePath,
+  ]);
+  const d = parseFloat(result.stdout.toString().trim());
+  return d > 0 ? d : probeDuration(filePath);
+}
+
+/**
+ * Normalize a segment's audio to 44100Hz stereo AAC (or add silent audio if
+ * none), exactly as long as its video. The concat demuxer starts each segment
+ * where the previous one's LONGEST stream ended, and re-encoding AAC added
+ * ~20 ms per segment: the joined video drifted a frame late every few segments,
+ * away from the timestamps every later pass computes.
+ */
 export function normalizeSegmentAudio(inputPath: string, outputPath: string): string {
+  const dur = segmentDuration(inputPath).toFixed(4);
   if (hasAudioStream(inputPath)) {
     const result = ffmpegSync([
       "-y",
       "-i", inputPath,
+      "-map", "0:v:0", "-map", "0:a:0",
       "-c:v", "copy",
+      "-af", "apad", "-t", dur,
       "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
       outputPath,
     ]);
@@ -162,11 +214,10 @@ export function normalizeSegmentAudio(inputPath: string, outputPath: string): st
   }
 
   // No audio — add silent track using explicit duration (avoid -shortest hang with anullsrc)
-  const dur = probeDuration(inputPath);
   const result = ffmpegSync([
     "-y",
     "-i", inputPath,
-    "-f", "lavfi", "-t", dur.toFixed(3), "-i", "anullsrc=r=44100:cl=stereo",
+    "-f", "lavfi", "-t", dur, "-i", "anullsrc=r=44100:cl=stereo",
     "-c:v", "copy",
     "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k",
     "-map", "0:v:0", "-map", "1:a:0",
@@ -186,8 +237,13 @@ export function concatSegments(
 ): boolean {
   fs.writeFileSync(
     concatListPath,
-    // concat-list quoting: a ' inside '…' is written as '\''
-    segments.map((s) => `file '${s.replace(/'/g, "'\\''")}'`).join("\n"),
+    // concat-list quoting: a ' inside '…' is written as '\''.
+    // `inpoint 0`: each segment's AAC track starts with a priming packet at
+    // −23 ms, so without it the demuxer shifted the whole joined VIDEO 23 ms
+    // late (frame k sat at k/30 + 0.023). A freeze or cut placed right after a
+    // skip then picked the frame from before the cut. With it, every frame keeps
+    // its exact k/fps time and the passes' timestamp remaps hold to the frame.
+    segments.map((s) => `file '${s.replace(/'/g, "'\\''")}'\ninpoint 0`).join("\n"),
     "utf-8",
   );
 

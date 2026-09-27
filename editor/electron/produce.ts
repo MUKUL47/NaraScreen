@@ -12,6 +12,9 @@ import {
   normalizeSegmentAudio,
   concatSegments,
   hasAudioStream,
+  segmentDuration,
+  probeFrameRate,
+  ffTime,
   INTERMEDIATE_VIDEO,
   FILTER_THREADS,
 } from "./ffmpeg";
@@ -128,6 +131,55 @@ function batchNonOverlapping(actions: Action[]): Action[][] {
   return batches;
 }
 
+/**
+ * How one blur region is cut out, blurred and put back (yuv420p, video px).
+ *
+ *  - The pasted patch is the rect grown to even edges: crop and overlay round x/y
+ *    (and crop w/h) DOWN to even on subsampled video, which used to leave the
+ *    rect's last row or column unblurred.
+ *  - The blur works on that patch plus up to `radius` px of surroundings
+ *    (`crop`), then cuts the patch back out (`inner`), so a short element (a
+ *    20 px e-mail line) still gets the full radius instead of a clamped one.
+ *  - boxblur reads one pixel past the plane when 2·r + 1 > its length (it only
+ *    rejects 2·r > length): a radius of exactly half an even side painted the
+ *    region solid magenta. Each plane's radius is clamped to (side − 1) / 2 of
+ *    what it really gets: luma = the even crop, chroma = half of it.
+ * Exported for tests.
+ */
+export function blurGeometry(
+  rect: [number, number, number, number],
+  radius: number,
+  res: { width: number; height: number },
+): { crop: [number, number, number, number]; inner: [number, number, number, number]; at: [number, number]; lumaR: number; chromaR: number; power: number } | null {
+  const W = res.width - (res.width % 2);
+  const H = res.height - (res.height % 2);
+  const down = (v: number) => Math.floor(v / 2) * 2;
+  const up = (v: number) => Math.ceil(v / 2) * 2;
+  const [bx, by, bw, bh] = rect.map((v) => Math.round(v));
+  const x0 = Math.max(0, down(bx));
+  const y0 = Math.max(0, down(by));
+  const x1 = Math.min(W, up(bx + bw));
+  const y1 = Math.min(H, up(by + bh));
+  if (x1 - x0 < 2 || y1 - y0 < 2) return null;
+  const r = Math.max(0, Math.round(radius));
+  const pad = up(r);
+  const cx0 = Math.max(0, x0 - pad);
+  const cy0 = Math.max(0, y0 - pad);
+  const cx1 = Math.min(W, x1 + pad);
+  const cy1 = Math.min(H, y1 + pad);
+  const cw = cx1 - cx0;
+  const ch = cy1 - cy0;
+  const maxR = (side: number) => Math.max(0, Math.floor((side - 1) / 2));
+  return {
+    crop: [cw, ch, cx0, cy0],
+    inner: [x1 - x0, y1 - y0, x0 - cx0, y0 - cy0],
+    at: [x0, y0],
+    lumaR: Math.min(r, maxR(Math.min(cw, ch))),
+    chromaR: Math.min(r, maxR(Math.min(cw, ch) / 2)),
+    power: Math.max(2, Math.min(r, 20)),
+  };
+}
+
 function applyBlurBatch(
   inputPath: string,
   actions: Action[],
@@ -151,24 +203,16 @@ function applyBlurBatch(
 
     emit(`    Blur at ${start.toFixed(1)}s-${end.toFixed(1)}s (${rects.length} region${rects.length > 1 ? "s" : ""})`);
 
-    for (const [bx, by, bw, bh] of rects) {
-      const x = Math.max(0, Math.min(bx, res.width - 1));
-      const y = Math.max(0, Math.min(by, res.height - 1));
-      const w = Math.min(bw, res.width - x);
-      const h = Math.min(bh, res.height - y);
-      if (w <= 0 || h <= 0) continue;
-
+    for (const rect of rects) {
+      const g = blurGeometry(rect, radius, res);
+      if (!g) continue;
       const sep = filterChain ? ";" : "";
       filterChain += `${sep}[${lastLabel}]split[base${idx}][src${idx}]`;
-      // boxblur rejects radii larger than half the region (luma) / a quarter of it
-      // (chroma — yuv420p halves it), so small regions like one input field would
-      // fail and silently stay unblurred. Clamp per plane; keep the pass count.
-      const side = Math.min(w, h);
-      const lumaR = Math.max(1, Math.min(radius, Math.floor(side / 2)));
-      const chromaR = Math.max(0, Math.min(radius, Math.floor(side / 4)));
-      const power = Math.max(2, Math.min(radius, 20));
-      filterChain += `;[src${idx}]crop=${w}:${h}:${x}:${y},boxblur=luma_radius=${lumaR}:luma_power=${power}:chroma_radius=${chromaR}:chroma_power=${power}[blur${idx}]`;
-      filterChain += `;[base${idx}][blur${idx}]overlay=${x}:${y}:enable='${enableExpr}'[out${idx}]`;
+      filterChain +=
+        `;[src${idx}]crop=${g.crop.join(":")},` +
+        `boxblur=luma_radius=${g.lumaR}:luma_power=${g.power}:chroma_radius=${g.chromaR}:chroma_power=${g.power},` +
+        `crop=${g.inner.join(":")}[blur${idx}]`;
+      filterChain += `;[base${idx}][blur${idx}]overlay=${g.at[0]}:${g.at[1]}:enable='${enableExpr}'[out${idx}]`;
       lastLabel = `out${idx}`;
       idx++;
     }
@@ -1055,6 +1099,20 @@ function subtitleDialogues(text: string, duration: number, offset: number, style
   return dialogues;
 }
 
+/**
+ * The subtitle look, in the recording's pixels (PlayRes = the video size, so it
+ * scales with the output from 480p to 4K): white text (words fill from yellow as
+ * they are spoken) on a soft 65 % black box with a little letter spacing.
+ * (A 2 px black outline + shadow used to close the gaps between letters and
+ * words, most at 480p.) BorderStyle 4 = one box per line in BackColour, padded
+ * by Outline; the outline itself is fully transparent.
+ */
+function subtitleStyle(name: string, size: number, marginV: number): string {
+  const pad = Math.round(size * 0.3);
+  const spacing = (size * 0.02).toFixed(1);
+  return `Style: ${name},Noto Sans,${size},&H00FFFFFF,&H0000FFFF,&HFF000000,&H59000000,0,0,0,0,100,100,${spacing},0,4,${pad},0,2,20,20,${marginV + pad},1`;
+}
+
 /** One ASS file for every narration of the video (one style per font size). */
 function writeSubtitleFile(
   cues: SubtitleCue[],
@@ -1063,9 +1121,7 @@ function writeSubtitleFile(
   callouts: string[] = [],
 ): void {
   const styleOf = (c: SubtitleCue) => `S${c.size}_${c.marginV ?? SUBTITLE_MARGIN_V}`;
-  const styles = [...new Map(cues.map((c) => [styleOf(c), c])).values()].map(
-    (c) => `Style: ${styleOf(c)},Noto Sans,${c.size},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,${c.marginV ?? SUBTITLE_MARGIN_V},1`,
-  );
+  const styles = [...new Map(cues.map((c) => [styleOf(c), c])).values()].map((c) => subtitleStyle(styleOf(c), c.size, c.marginV ?? SUBTITLE_MARGIN_V));
   // Subtitles on layer 1: drawn above any callout box they meet.
   const dialogues = cues.flatMap((c) => subtitleDialogues(c.text, c.duration, c.start, styleOf(c))).map((d) => d.replace(/^Dialogue: 0,/, "Dialogue: 1,"));
   if (callouts.length) styles.push(...CALLOUT_STYLES);
@@ -1323,45 +1379,54 @@ function buildNarrateInsert(
     return buildPauseInsert(action, videoPath, tempDir, segIdx, res, narration, emit, frameTs);
   }
 
-  // Otherwise, play video with narration overlay
-  let duration = narration ? narration.audioDuration + 0.5 : 3;
-  if (typeof action.resumeAfter === "number") duration = action.resumeAfter;
-  const clipEnd = Math.min(frameTs + duration, totalDuration);
+  // Otherwise the video keeps playing under the voice: `duration` (speech +
+  // 0.5 s) of source, and the insert pass resumes exactly there, so no source
+  // time is lost and everything after it stays where the trace put it. (It used
+  // to mux with -shortest, which cut the clip to the speech: the 0.5 s tail of
+  // source video vanished and every later callout ran 0.5 s late.) Only where
+  // the video ends first is its last frame held for the rest of the speech.
+  const duration = narrateInsertSeconds(action, narration);
+  const avail = Math.max(0, Math.min(duration, totalDuration - frameTs));
+  const hold = duration - avail;
 
-  emit(`  Narrate at ${frameTs.toFixed(1)}s (${duration.toFixed(1)}s)`);
+  emit(`  Narrate at ${frameTs.toFixed(1)}s (${duration.toFixed(1)}s over the video${hold > 0.01 ? `, last frame held ${hold.toFixed(1)}s` : ""})`);
 
   const playPath = path.join(tempDir, `play_${String(segIdx).padStart(3, "0")}.mp4`);
-  cutClip(videoPath, frameTs, clipEnd, playPath);
-
+  const clipHasAudio = hasAudioStream(videoPath);
+  const args = ["-y", "-ss", ffTime(frameTs), "-t", avail.toFixed(4), "-i", videoPath];
+  const graph = [`[0:v]tpad=stop_mode=clone:stop_duration=${(hold + 1).toFixed(3)}[v]`];
+  let audio = false;
   if (narration) {
-    const withAudioPath = path.join(tempDir, `playaudio_${String(segIdx).padStart(3, "0")}.mp4`);
-    const clipHasAudio = hasAudioStream(playPath);
-
+    args.push("-i", narration.audioPath);
     if (clipHasAudio) {
       emit(`    Mixing narration with original audio (ducking original to 20%)`);
-      ffmpegSync([
-        "-y", "-i", playPath, "-i", narration.audioPath,
-        // normalize=0: amix otherwise halves both, so this narration came out ~6 dB
-        // quieter than the frozen ones (a clip after a skip/speed pass always has a track).
-        "-filter_complex", "[0:a]volume=0.2[bg];[1:a]volume=1.0[narr];[bg][narr]amix=inputs=2:duration=shortest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0[aout]",
-        "-map", "0:v", "-map", "[aout]",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
-        withAudioPath,
-      ]);
+      // normalize=0: amix otherwise halves both, so this narration came out ~6 dB
+      // quieter than the frozen ones (a clip after a skip/speed pass always has a track).
+      graph.push("[0:a]volume=0.2,apad[bg];[1:a]apad[narr];[bg][narr]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0[aout]");
     } else {
-      ffmpegSync([
-        "-y", "-i", playPath, "-i", narration.audioPath,
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
-        withAudioPath,
-      ]);
+      graph.push("[1:a]apad[aout]");
     }
-
-    if (fs.existsSync(withAudioPath) && fs.statSync(withAudioPath).size > 0) {
-      return [withAudioPath];
-    }
+    audio = true;
+  } else if (clipHasAudio) {
+    graph.push("[0:a]apad[aout]");
+    audio = true;
   }
-
+  // Every stream is padded past the end; -t cuts the clip at exactly `duration`.
+  args.push("-filter_complex", graph.join(";"), "-map", "[v]");
+  if (audio) args.push("-map", "[aout]", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "192k");
+  args.push("-t", duration.toFixed(3), ...INTERMEDIATE_VIDEO, playPath);
+  ffmpegSync(args);
+  if (!fs.existsSync(playPath) || fs.statSync(playPath).size === 0) {
+    emit(`  Warning: narration clip at ${frameTs.toFixed(1)}s produced no output, skipping`);
+    return [];
+  }
   return [playPath];
+}
+
+/** Seconds a narrate/pause insert lasts: resumeAfter, else the speech + 0.5 s, else 3 s. */
+function narrateInsertSeconds(action: Action, narration: NarrationResult | undefined): number {
+  if (typeof action.resumeAfter === "number") return action.resumeAfter;
+  return narration && narration.audioDuration > 0 ? narration.audioDuration + 0.5 : 3;
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -1411,13 +1476,18 @@ function executeInsertPass(
   let segIdx = 0;
   let runningDuration = 0;
 
-  for (const { action, mappedTs } of sorted) {
+  for (const { action, mappedTs: stamped } of sorted) {
+    // An insert inside the stretch a talk-over narration already played starts
+    // when that narration ends (else those frames would play twice); one a few
+    // ms after the cursor starts right at it (else those frames would be lost).
+    const mappedTs = stamped < cursor + 0.05 ? cursor : stamped;
+    if (stamped < cursor - 0.05) emit(`  ${action.type} at ${stamped.toFixed(1)}s waits for the narration playing until ${cursor.toFixed(1)}s`);
     // Clip before this insert
-    if (mappedTs > cursor + 0.05) {
+    if (mappedTs > cursor) {
       const clipPath = path.join(tempDir, `ins_clip_${String(segIdx).padStart(3, "0")}.mp4`);
       cutClip(inputPath, cursor, mappedTs, clipPath);
       if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
-        runningDuration += probeDuration(clipPath);
+        runningDuration += segmentDuration(clipPath);
         segments.push(clipPath);
         segIdx++;
       }
@@ -1440,7 +1510,7 @@ function executeInsertPass(
       cueOf.set(insertPaths[insertPaths.length - 1], { text: narration.text, duration: narration.audioDuration, size: action.subtitleSize ?? 28 });
     }
 
-    const totalEffectDur = insertPaths.reduce((s, p) => s + probeDuration(p), 0);
+    const totalEffectDur = insertPaths.reduce((s, p) => s + segmentDuration(p), 0);
 
     // Track narration timestamps for music ducking
     if (narration) {
@@ -1448,7 +1518,7 @@ function executeInsertPass(
     }
 
     for (const p of insertPaths) {
-      runningDuration += probeDuration(p);
+      runningDuration += segmentDuration(p);
       segments.push(p);
       segIdx++;
     }
@@ -1456,18 +1526,18 @@ function executeInsertPass(
     // Advance cursor — freeze inserts resume from same point, narrate-without-freeze advances.
     // Record the net time ADDED at this input position for overlay remapping:
     //  - freeze: consumes 0 source, adds the full effect duration.
-    //  - narrate-no-freeze: consumes `dur` source while playing `totalEffectDur`,
-    //    so it adds (totalEffectDur - dur) (≈0 when audio == played section).
+    //  - narrate-no-freeze: plays `consumed` s of source in `totalEffectDur`, so it
+    //    adds their difference: 0, or the last frame held where the video ends.
     if (action.type === "zoom" || action.type === "pause" || action.freeze === true) {
       insertExpansions.push({ at: mappedTs, added: totalEffectDur });
       cursor = mappedTs;
-    } else {
+    } else if (insertPaths.length) {
       // Narrate without freeze — video played during narration, so skip past that section
-      const narrDur = narration ? narration.audioDuration + 0.5 : 3;
-      const dur = typeof action.resumeAfter === "number" ? action.resumeAfter : narrDur;
-      const consumed = Math.min(dur, totalDuration - mappedTs);
-      insertExpansions.push({ at: mappedTs, added: Math.max(0, totalEffectDur - consumed) });
-      cursor = Math.min(mappedTs + dur, totalDuration);
+      const consumed = Math.max(0, Math.min(narrateInsertSeconds(action, narration), totalDuration - mappedTs));
+      insertExpansions.push({ at: mappedTs, added: totalEffectDur - consumed });
+      cursor = mappedTs + consumed;
+    } else {
+      cursor = mappedTs; // the clip failed (reported above): keep the source instead
     }
   }
 
@@ -1503,7 +1573,7 @@ function executeInsertPass(
   segments.forEach((seg, i) => {
     const cue = cueOf.get(seg);
     if (cue) subtitleCues.push({ ...cue, start: at });
-    at += probeDuration(normalized[i]);
+    at += segmentDuration(normalized[i]);
   });
 
   return { narrationTimestamps, insertExpansions, subtitleCues };
@@ -1661,7 +1731,16 @@ export async function produceTimelineVideo(
   // Pass 2: Skip/Cut — remove skipped sections
   // ═══════════════════════════════════════════════════════════
 
-  const skipRanges = getSkipRanges(skipActions);
+  // Cut on frame boundaries: a skip keeps the frames before its start and
+  // resumes at the first frame after its end — exactly what the cut does — and
+  // the remap uses the same boundaries. So anything placed at (or just after)
+  // the end of a skip lands on the first frame after the cut; a freeze there
+  // used to show the last frame before it.
+  const fps = probeFrameRate(effectiveRecording);
+  const onFrame = (t: number) => Math.ceil(t * fps - 1e-6) / fps;
+  const skipRanges = getSkipRanges(skipActions)
+    .map((r) => ({ start: onFrame(r.start), end: onFrame(r.end) }))
+    .filter((r) => r.end > r.start);
   const skipRemap = buildSkipRemap(skipRanges);
 
   if (skipRanges.length > 0) {
@@ -1797,7 +1876,14 @@ export async function produceTimelineVideo(
   if (musicAction) {
     emit(`\n[Pass: Music] Mixing background music...`);
     const out = nextOutput();
-    timed("music", () => mixBackgroundMusic(currentInput, musicAction, narrationTimestamps, out, emit));
+    // The action's timestamp → musicEndTimestamp, on the final timeline (after
+    // skips, speed ramps and inserts), like every other effect.
+    const finalAt = (ts: number) => insertRemap(remapTs(ts));
+    const window = {
+      start: Math.max(0, finalAt(musicAction.timestamp ?? 0)),
+      end: musicAction.musicEndTimestamp != null ? finalAt(musicAction.musicEndTimestamp) : undefined,
+    };
+    timed("music", () => mixBackgroundMusic(currentInput, musicAction, narrationTimestamps, out, emit, window));
     if (fs.existsSync(out) && fs.statSync(out).size > 0) currentInput = out;
     else emit("  Warning: music pass produced no output, skipping");
   }

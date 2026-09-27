@@ -20,7 +20,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page } from "@playwright/test";
 import { AgentError, type ErrorCode, type ErrorWhere } from "./errors";
 import { log as defaultLog, stage, step, warn, type Log } from "./output";
 import {
@@ -39,6 +39,7 @@ import {
 import { pluginsFor, type NaraPlugin, type PluginActApi, type PluginPageApi } from "./plugins";
 import { startScreencast, type Screencast } from "./screencast";
 import { RANGE_FX } from "./schema";
+import type { TimedTraceEntry } from "./compiler";
 import {
   BUILTIN_DEFAULTS,
   isAct,
@@ -110,6 +111,17 @@ interface Env {
   openingInternal?: boolean;
   /** Headless check: scroll instantly instead of gliding (nothing is filmed). */
   fast?: boolean;
+  /** The recording clock in seconds (0 until the steps start). */
+  now: () => number;
+  /**
+   * When the page last began to change on camera: an act's interaction, a
+   * navigation committing, a reveal that scrolled. 0 = nothing has changed
+   * since the recording started. A blur on an element that is already in place
+   * starts here, so the secret is covered from its first frame.
+   */
+  lastChange: number;
+  /** Set by reveal(): when the reveal it just did started scrolling the page (unset = it didn't). */
+  movedAt?: number;
 }
 
 // ─── entry point ─────────────────────────────────────────────────────
@@ -169,6 +181,8 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
       currentPath: "",
       internalPages: new Set(),
       fast: fastCheck,
+      now: () => 0,
+      lastChange: 0,
     };
     watchPageEvents(env, context);
     for (const p of plugins) await p.attach?.(context, page, (m) => addWarning(env!, m));
@@ -219,7 +233,9 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
     }
     const t0 = Date.now();
     const now = () => (screencast ? screencast.now() : (Date.now() - t0) / 1000);
-    const trace: TraceEntry[] = [];
+    env.now = now;
+    env.lastChange = 0;
+    const trace: TimedTraceEntry[] = [];
 
     for (let si = 0; si < steps.length; si++) {
       const beat = steps[si];
@@ -250,7 +266,12 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
         });
       }
       // Keep every effect inside the real video so none lands after the last frame.
-      for (const e of trace) e.t = round3(Math.max(0, Math.min(e.t, durationSec - 0.05)));
+      const inside = (x: number) => round3(Math.max(0, Math.min(x, durationSec - 0.05)));
+      for (const e of trace) {
+        e.t = inside(e.t);
+        if (e.start != null) e.start = inside(e.start);
+        if (e.end != null) e.end = inside(e.end);
+      }
     }
 
     if (opts.onPage) {
@@ -313,7 +334,7 @@ async function runStep(
   d: DemoDefaults,
   fastCheck: boolean,
   now: () => number,
-  trace: TraceEntry[],
+  trace: TimedTraceEntry[],
 ): Promise<void> {
   step(`step ${si + 1}/${total} · ${beat.id}${beat.label ? ` — ${beat.label}` : ""}`, {
     index: si + 1,
@@ -323,21 +344,28 @@ async function runStep(
   });
   const dwell = fastCheck ? 0 : beat.dwellMs ?? d.dwellMs;
   let lastRect: Rect | undefined; // fx without an anchor reuse the latest box in the step
-  let prevT: number | undefined; // trace t of the previous slot in this step
 
   for (let i = 0; i < beat.beat.length; i++) {
     const entry = beat.beat[i];
     const where: ErrorWhere = { step: beat.id, entry: i, path: `steps[${si}].beat[${i}]` };
     env.currentPath = where.path!;
+    const begun = now();
     // (acts get this in runAct; an fx may be the first entry after a reload)
     if (env.plugins.length && !isAct(entry)) for (const p of env.plugins) await p.ready?.(pageApi(env, d.timeoutMs, where));
     let rect: Rect | undefined;
     let rects: Rect[] | undefined;
     let blurStart: number | undefined;
+    let at: number | undefined; // an act's interaction (the click itself)
+    let end: number | undefined; // when that act had finished
     if (isAct(entry)) {
       const res = await runAct(env, entry, where, d);
       rect = res.rect;
       if (res.focus !== undefined) lastRect = res.focus ?? undefined;
+      if (res.changedAt != null) env.lastChange = Math.max(env.lastChange, res.changedAt);
+      if (res.at != null) {
+        at = res.at;
+        end = now();
+      }
     } else {
       // A `disabled` fx is still revealed and dwelled on: toggling it must not
       // change the recording (it is not part of the job's structure hash).
@@ -345,22 +373,28 @@ async function runStep(
       rect = RANGE_FX.includes(entry.fx) ? undefined : lastRect;
       // A blur hides a secret: where was it BEFORE the reveal? (see below)
       const blurSels = entry.fx === "blur" ? (entry.anchors?.length ? entry.anchors : entry.anchor ? [entry.anchor] : []) : [];
-      const blurT = blurSels.length ? now() : undefined;
       const blurBefore = blurSels.length
         ? await Promise.all(blurSels.map((a) => measureVisible(locate(env.page, a), 500).catch(() => null)))
         : [];
+      // A blur target that is already wholly on screen is left where it is: gliding it
+      // to the middle would carry the secret across the screen before the blur covers it.
+      const inPlace = blurSels.length > 0 && blurBefore.every((b) => !!b?.whole);
+      const rd: DemoDefaults = inPlace ? { ...d, center: false } : d;
+      env.movedAt = undefined;
       if (entry.targets?.length) {
-        rects = await targetRects(env, entry.targets, where, d);
+        rects = await targetRects(env, entry.targets, where, rd);
         rect = rects[0];
       } else if (entry.anchors?.length) {
         const items = entry.anchors.map((sel, k) => ({ sel, where: { ...where, path: `${where.path}.anchors[${k}]` } }));
-        rects = await revealGroup(env, items, d);
+        rects = await revealGroup(env, items, rd);
         rect = rects[0];
       } else if (entry.anchor) {
-        const at: ErrorWhere = { ...where, path: `${where.path}.anchor` };
-        const loc = await resolveTarget(env, entry.anchor, at, d.timeoutMs);
-        rect = await reveal(env, loc, entry.anchor, at, d, d.timeoutMs);
+        const atAnchor: ErrorWhere = { ...where, path: `${where.path}.anchor` };
+        const loc = await resolveTarget(env, entry.anchor, atAnchor, d.timeoutMs);
+        rect = await reveal(env, loc, entry.anchor, atAnchor, rd, d.timeoutMs);
       }
+      // Scrolling to this effect's element changed the page too.
+      if (env.movedAt != null) env.lastChange = Math.max(env.lastChange, env.movedAt);
       if (rect) lastRect = rect;
       if (blurSels.length) {
         const after = rects ?? (rect ? [rect] : []);
@@ -368,10 +402,11 @@ async function runStep(
           after.length === blurBefore.length &&
           blurBefore.every((b, k) => !!b?.whole && !!b.visible && b.visible.every((v, n) => Math.abs(v - after[k][n]) <= 2));
         if (unmoved) {
-          // Already on screen where it gets blurred: start the blur as early as
-          // it was known to be there (end of the previous slot, else just now),
-          // not after the reveal/settle — otherwise the secret is readable meanwhile.
-          blurStart = prevT ?? blurT;
+          // Already on screen where it gets blurred: cover it from the moment the
+          // page last changed — the act that brought it up (a click, a navigation
+          // committing, typing), or the very start of the recording — not from
+          // now, after the dwell and the reveal, while the secret was readable.
+          blurStart = env.lastChange;
         } else if (blurBefore.some((b) => b?.visible)) {
           addWarning(
             env,
@@ -381,16 +416,22 @@ async function runStep(
         }
       }
     }
-    // Stamp AFTER the act/reveal: t marks the on-screen result, which the dwell
-    // then holds and any following fx aligns to. (Exception: an unmoved blur.)
-    const t = round3(blurStart ?? now());
-    prevT = t;
+    // Stamp: an act at its interaction (a click at the click, not after checking
+    // where the clicked element went); otherwise after the act/reveal: t marks the
+    // on-screen result, which the dwell then holds and any following fx aligns to.
+    // Exceptions: a blur on an element already in place (above), and the first fx
+    // of the recording while nothing has changed yet, which starts at 0 — the
+    // 0.5 s lead-in before it shows the same screen.
+    let t = round3(blurStart ?? at ?? now());
+    if (!isAct(entry) && trace.length === 0 && env.lastChange === 0) t = 0;
     trace.push({
       beat: beat.id,
       i,
       kind: isAct(entry) ? "act" : "fx",
       ...(isAct(entry) ? { act: entry.act } : { fx: entry.fx }),
       t,
+      start: round3(begun),
+      ...(end != null && end > t + 0.001 ? { end: round3(end) } : {}),
       ...(rect ? { rect: env.plugins.length ? videoRect(env, rect) : rect } : {}),
       ...(rects ? { rects: env.plugins.length ? rects.map((x) => videoRect(env, x)) : rects } : {}),
     });
@@ -516,11 +557,20 @@ function navTimeout(d: DemoDefaults): number {
 interface ActResult {
   rect?: Rect;
   focus?: Rect | null;
+  /** When the interaction itself happened (the click, the key press, the last
+   *  typed key) — the act's trace time. Unset: stamped when the act returns. */
+  at?: number;
+  /** When the act began changing the page (its reveal's scroll, else the
+   *  interaction; a navigation: when it committed). Unset: it changes nothing. */
+  changedAt?: number;
 }
 
 /** Visible box of an element right now, without scrolling (null if not visible). */
 async function currentRect(loc: Locator): Promise<Rect | null> {
-  return (await measureVisible(loc, 500))?.visible ?? null;
+  // Gone (a button that renamed itself "Exporting…", a closed menu): answer at
+  // once. measureVisible would wait for it to come back, holding up the next entry.
+  if (!(await loc.count().catch(() => 0))) return null;
+  return (await measureVisible(loc, 150))?.visible ?? null;
 }
 
 /** Execute one act. */
@@ -529,23 +579,39 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   const timeout = e.timeoutMs ?? d.timeoutMs;
   const sel = pickSelector(e);
   for (const p of env.plugins) await p.ready?.(pageApi(env, timeout, where));
+  env.movedAt = undefined;
   if (env.plugins.length) {
+    const t0 = env.now();
     const res = await pluginAct(env, e, where, timeout);
-    if (res) return res;
+    if (res) return { ...res, changedAt: t0 };
   }
 
   switch (e.act) {
-    case "goto":
-      await gotoChecked(env, (e.url ?? e.path)!, where, navTimeout(d));
-      return {};
+    case "goto": {
+      // The new page can only be on screen once the navigation commits.
+      const t0 = env.now();
+      let committed: number | undefined;
+      const onNav = (f: Frame) => {
+        if (f === page.mainFrame() && committed == null) committed = env.now();
+      };
+      page.on("framenavigated", onNav);
+      try {
+        await gotoChecked(env, (e.url ?? e.path)!, where, navTimeout(d));
+      } finally {
+        page.off("framenavigated", onNav);
+      }
+      return { changedAt: committed ?? t0 };
+    }
 
     case "wait":
       await sleep(e.ms ?? 0);
       return {};
 
-    case "useSession":
+    case "useSession": {
+      const t0 = env.now();
       await useSession(env, e, where, navTimeout(d));
-      return {};
+      return { changedAt: t0 };
+    }
 
     case "waitFor": {
       // A gate: nothing is revealed, but the element it waited for is what an
@@ -559,17 +625,21 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       const key = e.key!;
       if (sel) {
         const loc = await resolveTarget(env, sel, where, timeout);
+        const t0 = env.now();
         await attempt(env, where, sel, `press "${key}" on`, () => loc.press(key, { timeout }));
-        return { focus: await currentRect(loc) };
+        const at = env.now();
+        return { focus: await currentRect(loc), at, changedAt: t0 };
       }
+      const t0 = env.now();
       await attempt(env, where, undefined, `press "${key}"`, () => page.keyboard.press(key));
-      return {};
+      return { at: env.now(), changedAt: t0 };
     }
 
     case "scroll":
       if (!sel) {
+        const t0 = env.now();
         await scrollToY(env, e.y ?? 0, d, where);
-        return {};
+        return { changedAt: t0 };
       }
       break; // element scroll: the reveal below IS the action
   }
@@ -580,9 +650,14 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       hint: "Add one of role(+name) | label | text | placeholder | testId | css. Run `narascreen validate` first.",
     });
   }
-  if (e.act === "upload") return uploadFiles(env, e, sel, where, d, timeout);
+  if (e.act === "upload") {
+    const t0 = env.now();
+    return { ...(await uploadFiles(env, e, sel, where, d, timeout)), changedAt: t0 };
+  }
   const loc = await resolveTarget(env, sel, where, timeout);
   const rect = await reveal(env, loc, sel, where, d, timeout);
+  // The page changes from the reveal's scroll (if it scrolled), else from the interaction.
+  const t0 = env.movedAt ?? env.now();
 
   switch (e.act) {
     case "click":
@@ -606,11 +681,15 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       await selectOption(env, loc, sel, e.option!, where, timeout);
       break;
     case "scroll":
-      return { rect, focus: rect };
+      return { rect, focus: rect, changedAt: t0 };
   }
+  // Stamped HERE, at the interaction: re-measuring the element below must not
+  // make a click look later than it was (it once waited 0.5 s for a button
+  // that had renamed itself, and a skip after it started 0.5 s late).
+  const at = env.now();
   // The act may have moved the element (layout change, textarea growing, an
   // auto-scroll): fx that inherit it use where it is NOW; if it is gone, where it was.
-  return { rect, focus: (await currentRect(loc)) ?? rect };
+  return { rect, focus: (await currentRect(loc)) ?? rect, at, changedAt: t0 };
 }
 
 function pageApi(env: Env, timeoutMs: number, where?: ErrorWhere): PluginPageApi {
@@ -1125,6 +1204,7 @@ async function reveal(env: Env, loc: Locator, sel: Selector, where: ErrorWhere, 
   // viewport NOR by a scrolling / overflow-hidden ancestor (a row in a list).
   const before = await measureVisible(loc, timeout);
   const started = Date.now();
+  const startedT = env.now();
   try {
     await loc.evaluate(
       (el, o) => {
@@ -1167,6 +1247,9 @@ async function reveal(env: Env, loc: Locator, sel: Selector, where: ErrorWhere, 
   await waitForScroll(env.page, started, d.revealMs);
   const box = await settledBox(loc);
   const m = box ? await measureVisible(loc, timeout) : null;
+  if (m?.visible && !(before?.visible && before.visible.every((v, n) => Math.abs(v - m.visible![n]) <= 2))) {
+    env.movedAt ??= startedT; // it scrolled into place: the page changed on camera
+  }
   if (!m?.visible) {
     throw await failure(
       env,
@@ -1207,6 +1290,7 @@ async function revealGroup(env: Env, items: { sel: Selector; where: ErrorWhere }
     if (bottom - top <= vp.height && right - left <= vp.width) {
       const dy = (top + bottom) / 2 - vp.height / 2;
       const started = Date.now();
+      env.movedAt ??= env.now();
       await env.page.evaluate(
         ({ by, key, smooth }) => {
           const se = document.scrollingElement || document.documentElement;
@@ -1405,6 +1489,8 @@ export async function gotoPage(
     log: () => {},
     currentPath: "url",
     internalPages: new Set(),
+    now: () => 0,
+    lastChange: 0,
   };
   await gotoChecked(env, target, { path: "url" }, opts.timeoutMs ?? MIN_NAV_TIMEOUT_MS);
 }
