@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "scope": "effect-spotlight",
+  "baseUrl": "http://127.0.0.1:4780",
+  "viewport": {
+    "width": 1600,
+    "height": 900
+  },
+  "setup": [
+    {
+      "act": "goto",
+      "path": "/#/login"
+    },
+    {
+      "act": "fill",
+      "label": "Email",
+      "value": "alex.morgan@example.com"
+    },
+    {
+      "act": "fill",
+      "label": "Password",
+      "value": "${env:ACME_PASSWORD}"
+    },
+    {
+      "act": "click",
+      "role": "button",
+      "name": "Sign in"
+    },
+    {
+      "act": "waitFor",
+      "role": "heading",
+      "name": "Dashboard"
+    }
+  ],
+  "defaults": {
+    "dwellMs": 500,
+    "typeDelayMs": 40
+  },
+  "languages": [
+    "en"
+  ],
+  "tts": {
+    "voices": {
+      "en": "af_heart"
+    }
+  },
+  "output": {
+    "resolution": "1080p",
+    "quality": "high"
+  },
+  "plan": {
+    "audience": "People making demo videos with NaraScreen",
+    "takeaway": "A spotlight dims everything but one element; padding, feather, converge and anchors change how it looks",
+    "hook": "Open on the dashboard cards, one of them lit",
+    "tone": "plain, quick",
+    "targetSec": 30
+  },
+  "intro": {
+    "template": "clean",
+    "title": "Spotlight",
+    "subtitle": "NaraScreen effect",
+    "accent": "#7C3AED",
+    "narrate": "Spotlight dims the page, so eyes go to one element."
+  },
+  "outro": {
+    "template": "clean",
+    "title": "One line of JSON.",
+    "subtitle": "Dim the page, light what matters.",
+    "cta": "narascreen.mukuldutt.com/effects",
+    "accent": "#7C3AED"
+  },
+  "steps": [
+    {
+      "id": "plain",
+      "label": "Plain spotlight",
+      "beat": [
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Dashboard"
+        },
+        {
+          "fx": "spotlight",
+          "anchor": {
+            "role": "article",
+            "name": "Open tasks"
+          }
+        },
+        {
+          "fx": "callout",
+          "style": "lower-third",
+          "text": "\"fx\": \"spotlight\", \"anchor\": { \"role\": \"article\", \"name\": \"Open tasks\" }"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Anchor it on a card, and everything else dims."
+        }
+      ]
+    },
+    {
+      "id": "soft",
+      "label": "Padding and feather",
+      "beat": [
+        {
+          "fx": "spotlight",
+          "anchor": {
+            "role": "article",
+            "name": "Completed this week"
+          },
+          "padding": 12,
+          "feather": 24
+        },
+        {
+          "fx": "callout",
+          "style": "lower-third",
+          "text": "\"fx\": \"spotlight\", \"padding\": 12, \"feather\": 24"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Padding adds room around it. Feather softens the edge."
+        }
+      ]
+    },
+    {
+      "id": "converge",
+      "label": "Converge",
+      "beat": [
+        {
+          "fx": "spotlight",
+          "anchor": {
+            "role": "article",
+            "name": "Overdue"
+          },
+          "padding": 12,
+          "feather": 24,
+          "converge": 0.6
+        },
+        {
+          "fx": "callout",
+          "style": "lower-third",
+          "text": "\"fx\": \"spotlight\", \"feather\": 24, \"converge\": 0.6"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Converge animates it, closing in from the whole screen."
+        }
+      ]
+    },
+    {
+      "id": "anchors",
+      "label": "Two cards at once",
+      "beat": [
+        {
+          "fx": "spotlight",
+          "anchors": [
+            {
+              "role": "article",
+              "name": "Open tasks"
+            },
+            {
+              "role": "article",
+              "name": "Overdue"
+            }
+          ],
+          "padding": 12,
+          "feather": 24
+        },
+        {
+          "fx": "callout",
+          "style": "lower-third",
+          "text": "\"fx\": \"spotlight\", \"anchors\": [ {…}, {…} ]"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "And anchors light several cards at once, to compare them."
+        }
+      ]
+    }
+  ]
+}

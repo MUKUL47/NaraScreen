@@ -18,7 +18,7 @@ import type {
   TtsPreviewRequest,
   VideoImportRequest,
 } from "../src/types/narascreen-ipc";
-import { audioPeaks, importVideo, legacyGenerateTts, probeVideo, ttsPreview } from "./bridge/media";
+import { audioPeaks, importVideo, legacyGenerateTts, probeVideo, publicProbe, ttsPreview } from "./bridge/media";
 import { callRun, cancelRun, hasActiveRuns, listRuns, startRun, stopAllRuns } from "./bridge/runs";
 import { probeSession, readScript, validateInline, writeScript } from "./bridge/scripts";
 import { startWatch, stopWatch } from "./bridge/watch";
@@ -49,10 +49,7 @@ export function registerCliBridge(): void {
       legacyGenerateTts(sessionDir, actionId, text, lang, voice, langCode),
   );
   ipcMain.handle("audio:peaks", (_e, p: string, bucketsPerSec?: number) => audioPeaks(p, bucketsPerSec));
-  ipcMain.handle("video:probe", async (_e, p: string) => {
-    const { formatName: _f, pixFmt: _p, ...probe } = await probeVideo(p);
-    return probe;
-  });
+  ipcMain.handle("video:probe", async (_e, p: string) => publicProbe(await probeVideo(p)));
   ipcMain.handle("video:importFile", (_e, req: VideoImportRequest) => importVideo(req));
 
   // ── window + dialogs + watching ──

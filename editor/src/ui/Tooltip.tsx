@@ -22,8 +22,14 @@ export interface TooltipProps {
 }
 
 // Shared warm-up: after a tooltip closes, the next one opens without delay for a moment.
-const warm = { closedAt: 0 };
 const WARM_MS = 400;
+let lastClosedAt = 0;
+function markClosed() {
+  lastClosedAt = performance.now();
+}
+function isWarm() {
+  return performance.now() - lastClosedAt < WARM_MS;
+}
 
 type Handler<E> = ((e: E) => void) | undefined;
 function chain<E>(a: Handler<E>, b: (e: E) => void) {
@@ -51,12 +57,12 @@ export function Tooltip({ content, shortcut, side = "top", align = "center", del
   const show = (immediate: boolean) => {
     clearTimeout(timer.current);
     if (!enabled) return;
-    if (immediate || Date.now() - warm.closedAt < WARM_MS) setOpen(true);
+    if (immediate || isWarm()) setOpen(true);
     else timer.current = setTimeout(() => setOpen(true), delay);
   };
   const hide = () => {
     clearTimeout(timer.current);
-    if (open) warm.closedAt = Date.now();
+    if (open) markClosed();
     setOpen(false);
   };
 

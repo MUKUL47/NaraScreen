@@ -1,0 +1,31 @@
+{
+  "jobVersion": 1,
+  "createdAt": "2026-09-27T07:25:24.146Z",
+  "updatedAt": "2026-09-27T07:26:16.795Z",
+  "scriptPath": "__JOB__/../spotlight.demo-script.json",
+  "scope": "effect-spotlight",
+  "structureHash": "08cb4bf924401d866ba338babcbf45c77b1a25ed6d2f9e37dbed8d3c9e8110cd",
+  "stepHashes": {
+    "plain": "7e6a36fca0c2",
+    "soft": "b8051beccc16",
+    "converge": "1b4748ac30c1",
+    "anchors": "7ff594b65404"
+  },
+  "produce": {
+    "en": {
+      "status": "done",
+      "at": "2026-09-27T07:26:16.795Z",
+      "videoPath": "__JOB__/video/final_en.mp4",
+      "durationSec": 31.866667,
+      "previewDir": "__JOB__/preview/en"
+    }
+  },
+  "record": {
+    "status": "done",
+    "at": "2026-09-27T07:25:39.610Z",
+    "recordingPath": "__JOB__/recordings/recording.mp4",
+    "tracePath": "__JOB__/trace.jsonl",
+    "durationSec": 10.833,
+    "slots": 13
+  }
+}

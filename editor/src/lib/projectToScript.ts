@@ -6,7 +6,7 @@
  *  unticked effects become `disabled`. What the schema cannot express is clamped (with a
  *  warning) or left out (listed in `skipped`), never silently changed. */
 import type { Card, DemoScript, FxEntry, Quality, ResolutionName } from "../../api/schema";
-import type { CalloutPanel, DemoProject, Rect, TimelineAction } from "../types";
+import type { CalloutPanel, DemoProject, Rect, TimelineAction, ZoomTarget } from "../types";
 import { getActionRects } from "./actions";
 import {
   API_DEFAULTS, ARROW_FROM_OPTIONS, AUTO_FALLBACK_SEC, HEX_COLOR, LIMITS, clampToMeta, durationMeta, isLanguage, numberMeta,
@@ -177,7 +177,7 @@ export function projectToScript(project: DemoProject, sessionDir: string, opts: 
         const rects = rectsOf(a);
         if (!rects.length) { skip("zoom has no region"); break; }
         if (rects.length > LIMITS.zoomTargetsMax) warnings.push(`${a.id}: only the first ${LIMITS.zoomTargetsMax} zoom targets are kept.`);
-        const src = a.zoomTargets?.length ? a.zoomTargets : rects.map((rect) => ({ rect }));
+        const src: ZoomTarget[] = a.zoomTargets?.length ? a.zoomTargets : rects.map((rect) => ({ rect }));
         const targets = rects.slice(0, LIMITS.zoomTargetsMax).map((rect, k) => {
           const t = src[k] ?? { rect };
           return strip({ rect, narrate: narration(t, a.id), audio: audio(t, a.id), ...voiceLang(t.voice ?? a.voice, t.lang ?? a.lang, a.id) });

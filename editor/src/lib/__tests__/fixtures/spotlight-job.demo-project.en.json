@@ -1,0 +1,218 @@
+{
+  "title": "effect-spotlight",
+  "baseUrl": "http://127.0.0.1:4780",
+  "recordingPath": "__JOB__/recordings/recording.mp4",
+  "recordingDuration": 10.833333,
+  "viewport": {
+    "width": 1600,
+    "height": 900
+  },
+  "output": {
+    "width": 1600,
+    "height": 900,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "tts": {
+    "provider": "kokoro",
+    "kokoroEndpoint": "http://localhost:8880/v1/audio/speech",
+    "voiceEn": "af_heart",
+    "voiceHi": "hf_alpha",
+    "speed": 1,
+    "voices": {
+      "en": [
+        "af_heart",
+        "af_bella",
+        "af_alloy",
+        "af_aoede",
+        "af_jessica",
+        "af_kore",
+        "af_nicole",
+        "af_nova",
+        "af_river",
+        "af_sarah",
+        "af_sky",
+        "am_adam",
+        "am_echo",
+        "am_eric",
+        "am_fenrir",
+        "am_liam",
+        "am_michael",
+        "am_onyx",
+        "am_puck",
+        "am_santa"
+      ]
+    },
+    "languages": [
+      "en"
+    ]
+  },
+  "actions": [
+    {
+      "id": "action-1",
+      "type": "spotlight",
+      "timestamp": 1.759,
+      "spotlightRects": [
+        [
+          280,
+          174,
+          365,
+          157
+        ]
+      ],
+      "dimOpacity": 0.7,
+      "spotlightDuration": 4.339,
+      "name": "plain #1 spotlight"
+    },
+    {
+      "id": "action-2",
+      "type": "callout",
+      "timestamp": 2.26,
+      "calloutText": "\"fx\": \"spotlight\", \"anchor\": { \"role\": \"article\", \"name\": \"Open tasks\" }",
+      "calloutStyle": "lower-third",
+      "calloutDuration": 3.838,
+      "name": "plain #2 callout"
+    },
+    {
+      "id": "action-3",
+      "type": "narrate",
+      "timestamp": 2.761,
+      "narrations": {
+        "en": "Anchor it on a card, and everything else dims."
+      },
+      "audioPath": {
+        "en": "__JOB__/audio/tts_6e8cfeddb9fcf3f5.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "plain #3 narrate"
+    },
+    {
+      "id": "action-4",
+      "type": "spotlight",
+      "timestamp": 3.951,
+      "spotlightRects": [
+        [
+          653,
+          162,
+          389,
+          181
+        ]
+      ],
+      "dimOpacity": 0.7,
+      "spotlightFeather": 24,
+      "spotlightDuration": 4.92,
+      "name": "soft #0 spotlight"
+    },
+    {
+      "id": "action-5",
+      "type": "callout",
+      "timestamp": 4.451,
+      "calloutText": "\"fx\": \"spotlight\", \"padding\": 12, \"feather\": 24",
+      "calloutStyle": "lower-third",
+      "calloutDuration": 4.42,
+      "name": "soft #1 callout"
+    },
+    {
+      "id": "action-6",
+      "type": "narrate",
+      "timestamp": 4.952,
+      "narrations": {
+        "en": "Padding adds room around it. Feather softens the edge."
+      },
+      "audioPath": {
+        "en": "__JOB__/audio/tts_23172c366a3013bb.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "soft #2 narrate"
+    },
+    {
+      "id": "action-7",
+      "type": "spotlight",
+      "timestamp": 6.131,
+      "spotlightRects": [
+        [
+          1039,
+          162,
+          389,
+          181
+        ]
+      ],
+      "dimOpacity": 0.7,
+      "spotlightFeather": 24,
+      "spotlightConverge": 0.6,
+      "spotlightDuration": 4.905,
+      "name": "converge #0 spotlight"
+    },
+    {
+      "id": "action-8",
+      "type": "callout",
+      "timestamp": 6.631,
+      "calloutText": "\"fx\": \"spotlight\", \"feather\": 24, \"converge\": 0.6",
+      "calloutStyle": "lower-third",
+      "calloutDuration": 4.405,
+      "name": "converge #1 callout"
+    },
+    {
+      "id": "action-9",
+      "type": "narrate",
+      "timestamp": 7.132,
+      "narrations": {
+        "en": "Converge animates it, closing in from the whole screen."
+      },
+      "audioPath": {
+        "en": "__JOB__/audio/tts_2201c9f1652d14f0.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "converge #2 narrate"
+    },
+    {
+      "id": "action-10",
+      "type": "spotlight",
+      "timestamp": 8.333,
+      "spotlightRects": [
+        [
+          268,
+          162,
+          389,
+          181
+        ],
+        [
+          1039,
+          162,
+          389,
+          181
+        ]
+      ],
+      "dimOpacity": 0.7,
+      "spotlightFeather": 24,
+      "spotlightDuration": 4.816,
+      "name": "anchors #0 spotlight"
+    },
+    {
+      "id": "action-11",
+      "type": "callout",
+      "timestamp": 8.834,
+      "calloutText": "\"fx\": \"spotlight\", \"anchors\": [ {…}, {…} ]",
+      "calloutStyle": "lower-third",
+      "calloutDuration": 4.315,
+      "name": "anchors #1 callout"
+    },
+    {
+      "id": "action-12",
+      "type": "narrate",
+      "timestamp": 9.334,
+      "narrations": {
+        "en": "And anchors light several cards at once, to compare them."
+      },
+      "audioPath": {
+        "en": "__JOB__/audio/tts_a2b8c56137fc8984.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "anchors #2 narrate"
+    }
+  ]
+}

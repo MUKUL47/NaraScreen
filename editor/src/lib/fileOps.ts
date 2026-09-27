@@ -1,4 +1,5 @@
 import type { DemoProject } from "../types";
+import { migrateProject, newProject } from "./migrateProject";
 
 const api = window.electronAPI;
 
@@ -7,17 +8,18 @@ export async function pickSessionDir(): Promise<string | null> {
   return api.openDirectory();
 }
 
-/** Load demo-project.json from a session directory */
+/** Load demo-project.json from a session directory (migrated to v2; the store's openSession
+ *  also probes the recording's real size). */
 export async function loadProject(dir: string): Promise<DemoProject> {
   const projectPath = `${dir}/demo-project.json`;
   const raw = await api.readTextFile(projectPath);
-  return JSON.parse(raw) as DemoProject;
+  return migrateProject(JSON.parse(raw));
 }
 
-/** Save demo-project.json back to the session directory */
+/** Save demo-project.json back to the session directory (always as projectVersion 2). */
 export async function saveProject(dir: string, project: DemoProject): Promise<void> {
   const projectPath = `${dir}/demo-project.json`;
-  await api.writeTextFile(projectPath, JSON.stringify(project, null, 2));
+  await api.writeTextFile(projectPath, JSON.stringify({ ...project, projectVersion: 2 }, null, 2));
 }
 
 /** Convert a local file path to a URL usable by <img>/<video> */
@@ -52,8 +54,10 @@ export async function defaultRecordingParentDir(): Promise<string> {
   return defaultDir;
 }
 
+/** Characters no OS allows in a folder name (plus control characters). */
 function sanitizeFolderName(name: string): string {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim() || defaultRecordingName();
+  const safe = Array.from(name, (ch) => (ch.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(ch) ? "_" : ch)).join("");
+  return safe.trim() || defaultRecordingName();
 }
 
 /**
@@ -80,27 +84,9 @@ export async function createSession(
   await api.mkdir(`${sessionDir}/recordings`, { recursive: true });
   await api.mkdir(`${sessionDir}/thumbnails`, { recursive: true });
 
-  // Write initial demo-project.json
-  const initialProject: DemoProject = {
-    title: "Demo",
-    baseUrl,
-    recordingPath: `${sessionDir}/recordings/recording.mp4`,
-    recordingDuration: 0,
-    viewport: { width: 1920, height: 1080 },
-    output: { width: 1920, height: 1080, fps: 30, format: "mp4" },
-    tts: {
-      provider: "kokoro-direct",
-      kokoroEndpoint: "http://localhost:8880/v1/audio/speech",
-      voiceEn: "af_heart",
-      voiceHi: "hf_alpha",
-      speed: 1,
-    },
-    actions: [],
-  };
-  await api.writeTextFile(
-    `${sessionDir}/demo-project.json`,
-    JSON.stringify(initialProject, null, 2),
-  );
+  // Initial demo-project.json (the real size is probed when the recording stops).
+  const initialProject = newProject({ title: options?.name?.trim() || "Demo", baseUrl, recordingPath: `${sessionDir}/recordings/recording.mp4` });
+  await api.writeTextFile(`${sessionDir}/demo-project.json`, JSON.stringify(initialProject, null, 2));
 
   return sessionDir;
 }

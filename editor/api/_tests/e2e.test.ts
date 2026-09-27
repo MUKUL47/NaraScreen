@@ -60,6 +60,8 @@ const SCRIPT = {
   highlight: path.join(RUN, "highlight.demo-script.json"),
   flutter: path.join(RUN, "flutter.demo-script.json"),
   cards: path.join(RUN, "cards.demo-script.json"),
+  engine: path.join(RUN, "engine.demo-script.json"),
+  timing: path.join(RUN, "timing.demo-script.json"),
 };
 const JOB = path.join(RUN, "job");
 const VIDEO_JOB = path.join(RUN, "job-video");
@@ -291,23 +293,58 @@ function pixelAt(video: string, t: number, x: number, y: number): [number, numbe
   assert.ok(res.status === 0 && res.stdout.length >= 3, `could not read pixel (${x}, ${y}) at ${t}s of ${video}`);
   return [res.stdout[0], res.stdout[1], res.stdout[2]];
 }
+/** Mean colour, largest luma deviation from it and largest tint (|R−G|+|B−G|) inside a small box of one frame. */
+function regionColour(video: string, t: number, rect: number[], scale?: string) {
+  const [x, y, w, h] = rect.map((n) => Math.round(n));
+  const vf = `${scale ? `scale=${scale},` : ""}crop=${w}:${h}:${x}:${y},format=rgb24`;
+  const res = ffmpegSync(["-v", "error", "-ss", String(t), "-i", video, "-frames:v", "1", "-vf", vf, "-f", "rawvideo", "-"]);
+  assert.ok(res.status === 0 && res.stdout.length >= w * h * 3, `could not read ${JSON.stringify(rect)} at ${t}s of ${video}`);
+  const px = res.stdout;
+  const n = w * h;
+  const mean = [0, 1, 2].map((c) => { let s = 0; for (let i = 0; i < n; i++) s += px[i * 3 + c]; return s / n; });
+  let spread = 0;
+  let tint = 0;
+  for (let i = 0; i < n; i++) {
+    spread = Math.max(spread, Math.abs(px[i * 3 + 1] - mean[1]));
+    tint = Math.max(tint, Math.abs(px[i * 3] - px[i * 3 + 1]) + Math.abs(px[i * 3 + 2] - px[i * 3 + 1]));
+  }
+  return { mean, spread, tint };
+}
+
+/** 640x360 grey video whose frame N shows N in binary (9 black/white blocks along the top). */
+function numberedVideo(file: string, seconds: number) {
+  const bit = (k: number) => `if(between(X,${k * 64 + 8},${k * 64 + 56})*between(Y,8,52),if(mod(floor(N/${2 ** k}),2),235,16),`;
+  const lum = Array.from({ length: 9 }, (_, k) => bit(k)).join("") + "128" + ")".repeat(9);
+  const res = ffmpegSync(["-y", "-f", "lavfi", "-i", `color=c=gray:s=640x360:r=30:d=${seconds}`, "-vf", `geq=lum='${lum}':cb=128:cr=128`, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "10", "-pix_fmt", "yuv420p", file]);
+  assert.ok(res.status === 0 && fs.existsSync(file), `ffmpeg could not generate ${file}`);
+}
+/** Which source frame a numberedVideo-based video shows at t (the first frame at or after t). */
+function frameNumberAt(video: string, t: number): number {
+  const res = ffmpegSync(["-v", "error", "-ss", String(t), "-i", video, "-frames:v", "1", "-vf", "scale=640:360,format=gray", "-f", "rawvideo", "-"]);
+  assert.ok(res.status === 0 && res.stdout.length >= 640 * 360, `could not read a frame at ${t}s of ${video}`);
+  let n = 0;
+  for (let k = 0; k < 9; k++) if (res.stdout[30 * 640 + k * 64 + 32] > 128) n += 2 ** k;
+  return n;
+}
+
 /** The default arrow colour (#F97316, orange) after H.264, on a grey background. */
 const isArrow = ([r, g, b]: number[]) => r > 200 && g > 70 && g < 170 && b < 100;
 
-/** Mean absolute luma difference between the same box in two video frames (0–255). */
+/** Mean absolute luma difference between the same box in two video frames (0–255).
+ *  (Each crop is grabbed on its own: a two-input `blend` emitted its first frame
+ *  before the second input had one, and so measured frame A against nothing.) */
 function regionDiff(videoA: string, tA: number, videoB: string, tB: number, rect: number[]): number {
   const [x, y, w, h] = rect.map((n) => Math.round(n));
-  const crop = `crop=${w}:${h}:${x}:${y}`;
-  const res = ffmpegSync([
-    "-v", "error",
-    "-ss", String(Math.max(0, tA)), "-i", videoA,
-    "-ss", String(Math.max(0, tB)), "-i", videoB,
-    "-filter_complex", `[0:v]${crop}[a];[1:v]${crop}[b];[a][b]blend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-`,
-    "-frames:v", "1", "-f", "null", "-",
-  ]);
-  const m = /YAVG=([\d.]+)/.exec(res.stdout.toString());
-  assert.ok(m, `could not compare frames with ffmpeg (status ${res.status})`);
-  return Number(m[1]);
+  const grab = (video: string, t: number) => {
+    const res = ffmpegSync(["-v", "error", "-ss", String(Math.max(0, t)), "-i", video, "-frames:v", "1", "-vf", `crop=${w}:${h}:${x}:${y},format=gray`, "-f", "rawvideo", "-"]);
+    assert.ok(res.status === 0 && res.stdout.length === w * h, `could not read ${JSON.stringify(rect)} at ${t}s of ${video} (status ${res.status})`);
+    return res.stdout;
+  };
+  const a = grab(videoA, tA);
+  const b = grab(videoB, tB);
+  let sum = 0;
+  for (let i = 0; i < w * h; i++) sum += Math.abs(a[i] - b[i]);
+  return sum / (w * h);
 }
 
 // ─── the tests ───────────────────────────────────────────────────────
@@ -1031,6 +1068,97 @@ describe("narascreen CLI, end to end", () => {
     // No converge: the plain spotlight is on the target from its first frame.
     assert.ok(dim(pixelAt(video, 4.54, ...near)) && dim(pixelAt(video, 4.54, ...far)), "no converge → no animation");
     assert.ok(lit(pixelAt(video, 4.54, ...inside)), "no converge → target lit at once");
+  });
+
+  test("engine: a first-beat blur hides a 20 px element from frame 0 (blurred, not magenta); a click is stamped at the click; a freeze after a skip shows the result", { timeout: 10 * MIN }, async (tc) => {
+    writeJson(SCRIPT.engine, {
+      version: 1,
+      scope: "Engine regressions",
+      baseUrl: server.url,
+      viewport: { width: 1440, height: 900 },
+      setup: [
+        ...acmeRaw.setup,
+        { act: "click", role: "link", name: "Tasks", within: { role: "navigation", name: "Main" } },
+        { act: "waitFor", role: "heading", name: "Tasks", exact: true },
+      ],
+      defaults: { dwellMs: 600 },
+      steps: [
+        { id: "secret", beat: [
+          // the sidebar e-mail: ~20 px tall — the old blur clamp painted it as a solid magenta bar
+          { fx: "blur", anchor: { text: "alex.morgan@example.com" }, duration: "end" },
+          { fx: "callout", style: "lower-third", text: "Hidden from the first frame" },
+        ] },
+        { id: "export", dwellMs: 0, beat: [
+          { act: "click", role: "button", name: "Export CSV" }, // renames itself "Exporting…"
+          { fx: "skip" },
+          { act: "waitFor", text: "Export ready" },
+          { fx: "narrate", audio: path.basename(VOICE), narrate: "Exported." },
+        ] },
+      ],
+    });
+    const r = await cli(["make", SCRIPT.engine, "--out", path.join(RUN, "job-engine")], { timeoutMs: 8 * MIN });
+    const res = expectOk(r, "make");
+    const video = res.videos[0].path as string;
+    const recording = path.join(RUN, "job-engine", "recordings", "recording.mp4");
+    const trace = readTrace(path.join(RUN, "job-engine"));
+    const slot = (beat: string, i: number) => trace.find((e) => e.beat === beat && e.i === i)!;
+
+    // 1. the blur, first entry of the video, starts at 0 — the 0.5 s lead-in is covered too
+    const blur = slot("secret", 0);
+    assert.equal(blur.t, 0, `the first-beat blur starts at 0: ${JSON.stringify(blur)}`);
+    for (const t of [0.02, 0.3, 1]) {
+      const got = regionColour(video, t, blur.rect);
+      const raw = regionColour(recording, t, blur.rect);
+      assert.ok(raw.spread > 60, `the e-mail is readable in the raw recording at ${t}s (spread ${raw.spread})`);
+      assert.ok(got.spread < 30, `…and blurred in the video at ${t}s (spread ${got.spread.toFixed(0)}, raw ${raw.spread.toFixed(0)})`);
+      assert.ok(got.tint < 50, `…a grey blur, not a coloured bar, at ${t}s (tint ${got.tint}, mean ${got.mean.map(Math.round)})`);
+    }
+
+    // 2. the click is stamped at the click, and re-measuring the renamed button doesn't hold up the skip
+    const click = slot("export", 0);
+    const skip = slot("export", 1);
+    assert.ok(skip.t - click.t < 0.15, `the skip starts right at the click (dwell 0): click ${click.t}, skip ${skip.t}`);
+    assert.ok(click.end == null || click.end - click.t < 0.3, `re-measuring the vanished button took ${(click.end ?? click.t) - click.t}s`);
+
+    // 3. the narration right after the skip freezes on the first frame after the cut (the toast), not the spinner
+    const waitFor = slot("export", 2);
+    const cut = Math.ceil(skip.t * 30 - 1e-6) / 30; // where the freeze starts: no inserts before it
+    const right = [1000, 0, 440, 900]; // the Export button (top) and the toast (bottom right)
+    const after = regionDiff(video, cut + 0.5, recording, waitFor.t + 0.2, right);
+    const before = regionDiff(video, cut + 0.5, recording, skip.t - 0.05, right);
+    tc.diagnostic(`frozen frame vs the result ${after.toFixed(2)}, vs before the cut ${before.toFixed(2)}`);
+    assert.ok(after < 2 && after < before, `the freeze shows the frame after the cut (diff ${after.toFixed(2)} vs ${before.toFixed(2)} before it)`);
+  });
+
+  test("engine: talk-over narration keeps every source frame; a callout after it lands on its own frame; a skip's end freezes on the first frame after the cut", { timeout: 10 * MIN }, async () => {
+    const numbered = path.join(RUN, "numbered.mp4");
+    numberedVideo(numbered, 10);
+    writeJson(SCRIPT.timing, {
+      version: 1,
+      scope: "Timing",
+      source: { video: path.basename(numbered) },
+      steps: [{ id: "a", beat: [
+        { fx: "narrate", at: 1, audio: path.basename(VOICE), narrate: "Talking over the video.", freeze: false }, // 2 s voice → 2.5 s of video
+        { fx: "callout", at: 4.5, rect: [200, 150, 160, 40], text: "Frame 135", duration: 1 },
+        { fx: "skip", at: 6.013, seconds: 1.008 }, // frames 181–210 go
+        { fx: "narrate", at: 7.021, audio: path.basename(VOICE), narrate: "Frozen after the cut." }, // freezes 2 s
+      ] }],
+    });
+    const r = await cli(["make", SCRIPT.timing, "--out", path.join(RUN, "job-timing")], { timeoutMs: 8 * MIN });
+    const video = (expectOk(r, "make").videos as Rec[])[0].path as string;
+    const near = (a: number, b: number, tol: number, what: string) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} (expected ${b} ± ${tol})`);
+    near(probeDuration(video), 10 - 1 + 2, 0.1, "duration = source − the skipped second + the 2 s freeze");
+    // the talk-over narration used to drop 0.5 s of video: every later frame came 15 frames early
+    for (const t of [2, 3.4, 3.6, 4]) near(frameNumberAt(video, t), Math.round(t * 30), 1, `source frame at ${t}s`);
+    // the callout's box (above its rect) appears exactly on source 4.5 s (frame 135)
+    const box = [200, 100, 120, 40];
+    const drawn = (t: number) => regionColour(video, t, box).mean[1] < 90;
+    assert.ok(!drawn(4.4) && drawn(4.55) && drawn(5.4) && !drawn(5.6), "the callout shows from 4.5 s for 1 s");
+    near(frameNumberAt(video, 4.5), 135, 1, "…and 4.5 s is source frame 135");
+    // the freeze after the skip: frames 181–210 are cut; it shows frame 211 (7.033 s), not 180
+    assert.equal(frameNumberAt(video, 5.99), 180, "last frame before the cut (6.000 s)");
+    for (const t of [6.1, 7, 7.9]) assert.equal(frameNumberAt(video, t), 211, `frozen on the first frame after the cut at ${t}s`);
+    near(frameNumberAt(video, 9), 240, 1, "then it plays on");
   });
 
   test("video-source script: a rect outside the frame → SCRIPT_INVALID pointing at the entry", async (t) => {

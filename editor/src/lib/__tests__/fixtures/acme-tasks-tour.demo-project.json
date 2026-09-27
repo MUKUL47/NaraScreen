@@ -1,0 +1,289 @@
+{
+  "title": "Acme Tasks tour",
+  "baseUrl": "http://127.0.0.1:4780",
+  "recordingPath": "__SESSION__/recordings/recording.mp4",
+  "recordingDuration": 25.766667,
+  "viewport": {
+    "width": 1600,
+    "height": 900
+  },
+  "output": {
+    "width": 1600,
+    "height": 900,
+    "fps": 30,
+    "format": "mp4"
+  },
+  "tts": {
+    "provider": "kokoro",
+    "kokoroEndpoint": "http://localhost:8880/v1/audio/speech",
+    "voiceEn": "af_heart",
+    "voiceHi": "hf_alpha",
+    "speed": 1,
+    "voices": {
+      "en": [
+        "af_heart",
+        "af_bella",
+        "af_alloy",
+        "af_aoede",
+        "af_jessica",
+        "af_kore",
+        "af_nicole",
+        "af_nova",
+        "af_river",
+        "af_sarah",
+        "af_sky",
+        "am_adam",
+        "am_echo",
+        "am_eric",
+        "am_fenrir",
+        "am_liam",
+        "am_michael",
+        "am_onyx",
+        "am_puck",
+        "am_santa"
+      ]
+    },
+    "languages": [
+      "en"
+    ]
+  },
+  "actions": [
+    {
+      "id": "action-15",
+      "type": "music",
+      "timestamp": 0,
+      "name": "music",
+      "musicPath": "__MUSIC__",
+      "musicVolume": 0.1,
+      "musicDuckTo": 0.04
+    },
+    {
+      "id": "action-1",
+      "type": "callout",
+      "timestamp": 1.078,
+      "calloutText": "Every effect you see is one line of JSON",
+      "calloutStyle": "lower-third",
+      "calloutDuration": 4,
+      "name": "spotlight #1 callout"
+    },
+    {
+      "id": "action-2",
+      "type": "spotlight",
+      "timestamp": 2.256,
+      "spotlightRects": [
+        [
+          1039,
+          162,
+          389,
+          181
+        ]
+      ],
+      "dimOpacity": 0.7,
+      "spotlightFeather": 24,
+      "spotlightConverge": 0.6,
+      "spotlightDuration": 3.605,
+      "name": "spotlight #2 spotlight"
+    },
+    {
+      "id": "action-3",
+      "type": "narrate",
+      "timestamp": 2.757,
+      "narrations": {
+        "en": "Spotlights glide in, with a soft glow."
+      },
+      "audioPath": {
+        "en": "__SESSION__/audio/tts_6e2f96556e74db53.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "spotlight #3 narrate"
+    },
+    {
+      "id": "action-4",
+      "type": "zoom",
+      "timestamp": 3.937,
+      "zoomDuration": 0.8,
+      "zoomHold": 2,
+      "zoomTargets": [
+        {
+          "rect": [
+            280,
+            351,
+            695,
+            372
+          ],
+          "narrations": {
+            "en": "Zoom in on the detail."
+          },
+          "audioPath": {
+            "en": "__SESSION__/audio/tts_7869c59b8112dbe4.wav"
+          }
+        }
+      ],
+      "name": "zoom #0 zoom"
+    },
+    {
+      "id": "action-5",
+      "type": "callout",
+      "timestamp": 6.89,
+      "calloutStyle": "arrow",
+      "calloutText": "Arrows",
+      "calloutPanels": [
+        {
+          "text": "Arrows",
+          "rect": [
+            1291,
+            110,
+            125,
+            40
+          ],
+          "fontSize": 24
+        }
+      ],
+      "calloutDuration": 3.916,
+      "arrowHighlight": true,
+      "name": "arrow #2 arrow"
+    },
+    {
+      "id": "action-6",
+      "type": "narrate",
+      "timestamp": 7.39,
+      "narrations": {
+        "en": "Arrows draw themselves, and circle what matters."
+      },
+      "audioPath": {
+        "en": "__SESSION__/audio/tts_8b7dc8127fc34d72.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "arrow #3 narrate"
+    },
+    {
+      "id": "action-7",
+      "type": "narrate",
+      "timestamp": 9.663,
+      "narrations": {
+        "en": "Real clicks and typing, sped up where it drags."
+      },
+      "audioPath": {
+        "en": "__SESSION__/audio/tts_8d3b6db14a13ebd1.wav"
+      },
+      "freeze": false,
+      "showSubtitles": true,
+      "name": "typing #2 narrate"
+    },
+    {
+      "id": "action-8",
+      "type": "callout",
+      "timestamp": 12.224,
+      "calloutText": "Name the task",
+      "calloutStyle": "step-counter",
+      "calloutDuration": 2,
+      "calloutStep": 1,
+      "calloutPanels": [
+        {
+          "text": "Name the task",
+          "rect": [
+            564,
+            272,
+            353,
+            28
+          ],
+          "fontSize": 28
+        }
+      ],
+      "name": "typing #4 callout"
+    },
+    {
+      "id": "action-9",
+      "type": "speed",
+      "timestamp": 12.724,
+      "speedFactor": 3,
+      "name": "typing #5 speed",
+      "speedEndTimestamp": 16.183
+    },
+    {
+      "id": "action-10",
+      "type": "callout",
+      "timestamp": 19.161,
+      "calloutText": "Your new task",
+      "calloutStyle": "label",
+      "calloutDuration": 2.342,
+      "calloutPanels": [
+        {
+          "text": "Your new task",
+          "rect": [
+            353,
+            330,
+            203,
+            26
+          ],
+          "fontSize": 26
+        }
+      ],
+      "name": "typing #9 callout"
+    },
+    {
+      "id": "action-11",
+      "type": "narrate",
+      "timestamp": 19.663,
+      "narrations": {
+        "en": "Labels go right where you point."
+      },
+      "audioPath": {
+        "en": "__SESSION__/audio/tts_6d2bcf5cf5398f3a.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "typing #10 narrate"
+    },
+    {
+      "id": "action-12",
+      "type": "blur",
+      "timestamp": 21.423,
+      "blurRects": [
+        [
+          305,
+          573,
+          508,
+          42
+        ]
+      ],
+      "blurRadius": 4,
+      "blurDuration": 4.444,
+      "name": "blur #2 blur"
+    },
+    {
+      "id": "action-13",
+      "type": "spotlight",
+      "timestamp": 23.779,
+      "spotlightRects": [
+        [
+          297,
+          565,
+          524,
+          58
+        ]
+      ],
+      "dimOpacity": 0.7,
+      "spotlightFeather": 16,
+      "spotlightConverge": 0.5,
+      "spotlightDuration": 2.194,
+      "name": "blur #3 spotlight"
+    },
+    {
+      "id": "action-14",
+      "type": "narrate",
+      "timestamp": 24.28,
+      "narrations": {
+        "en": "And secrets stay blurred."
+      },
+      "audioPath": {
+        "en": "__SESSION__/audio/tts_b1eff6dc67ffd885.wav"
+      },
+      "freeze": true,
+      "showSubtitles": true,
+      "name": "blur #4 narrate"
+    }
+  ]
+}

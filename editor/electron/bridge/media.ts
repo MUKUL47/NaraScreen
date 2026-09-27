@@ -188,7 +188,17 @@ const fraction = (s?: string) => {
   return Number.isFinite(v) && v > 0 && v <= 240 ? v : 0;
 };
 
-export async function probeVideo(file: string): Promise<VideoProbe & { formatName: string; pixFmt?: string }> {
+interface ProbeDetails extends VideoProbe {
+  formatName: string;
+  pixFmt?: string;
+}
+
+/** The public part of a probe (what crosses IPC). */
+export function publicProbe(p: ProbeDetails): VideoProbe {
+  return { durationSec: p.durationSec, width: p.width, height: p.height, fps: p.fps, hasAudio: p.hasAudio, ...(p.codec ? { codec: p.codec } : {}) };
+}
+
+export async function probeVideo(file: string): Promise<ProbeDetails> {
   if (!fs.existsSync(file)) throw bridgeError("VIDEO_NOT_FOUND", `No such file: ${file}`);
   const j = await ffprobeJson(file);
   const v = j.streams?.find((s) => s.codec_type === "video");
@@ -210,8 +220,7 @@ export async function importVideo(req: VideoImportRequest): Promise<VideoImportR
   const src = path.resolve(req.src);
   const dest = path.join(path.resolve(req.sessionDir), "recordings", "recording.mp4");
   const info = await probeVideo(src);
-  const strip = ({ formatName: _f, pixFmt: _p, ...rest }: typeof info): VideoProbe => rest;
-  if (src === dest) return { ...strip(info), recordingPath: dest, normalized: false };
+  if (src === dest) return { ...publicProbe(info), recordingPath: dest, normalized: false };
 
   const copyable =
     /mp4|mov/.test(info.formatName) && info.codec === "h264" && info.pixFmt === "yuv420p" && info.width % 2 === 0 && info.height % 2 === 0;
@@ -233,7 +242,7 @@ export async function importVideo(req: VideoImportRequest): Promise<VideoImportR
   }
   progress(1);
   const out = await probeVideo(dest);
-  return { ...strip(out), recordingPath: dest, normalized: normalize };
+  return { ...publicProbe(out), recordingPath: dest, normalized: normalize };
 }
 
 /** The CLI's import encode (api/video-source.ts): H.264, 30 fps, even dimensions, AAC stereo. */

@@ -156,8 +156,11 @@ function migrateAction(a: TimelineAction, wasV2: boolean, changes: string[]): Ti
     else delete a.resumeAfter;
     note("resumeAfter → seconds");
   }
-  if ("playFor" in a) (delete a.playFor, note("dropped playFor"));
-  if ("musicEndTimestamp" in a) (delete a.musicEndTimestamp, note("dropped musicEndTimestamp"));
+  for (const k of ["playFor", "musicEndTimestamp"] as const) {
+    if (!(k in a)) continue;
+    delete a[k];
+    note(`dropped ${k}`);
+  }
   if (a.durationMode != null && !(DURATION_KEYWORDS as readonly string[]).includes(a.durationMode)) delete a.durationMode;
 
   // legacy narration fields → narrations (the renderer preferred narrations[lang] already)
@@ -179,7 +182,8 @@ function migrateAction(a: TimelineAction, wasV2: boolean, changes: string[]): Ti
         note("zoomRect(s) → zoomTargets");
       }
     }
-    if (a.zoomRect || a.zoomRects) (delete a.zoomRect, delete a.zoomRects);
+    delete a.zoomRect;
+    delete a.zoomRects;
     // The renderer spoke a zoom's own narration during its first target (when that had none).
     const own = nonEmpty(a.narrations) || nonEmpty(a.audioPath) || !!a.customAudioPath;
     if (own && a.zoomTargets?.length) {
