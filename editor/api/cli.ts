@@ -849,11 +849,14 @@ async function produceJob(ctx: Ctx, dir: string, script: DemoScript, langs: stri
         });
 
   const parallel = Math.min(parallelLanguages(), langs.length);
-  if (parallel > 1) {
+  // NARASCREEN_RENDER_CHILD=1 (set by the desktop app) renders even a single
+  // language in a child process: this process then stays free to act on a
+  // cancel (SIGTERM) at once, instead of after the renderer's current ffmpeg call.
+  if (parallel > 1 || process.env.NARASCREEN_RENDER_CHILD === "1") {
     // Each language in its own process (the renderer's ffmpeg calls block), up to
     // `parallel` at once. All of them run to the end; the first failure (in the
     // order asked) is reported with the languages that did finish.
-    log(`Rendering ${langs.join(", ")} in parallel (${parallel} at a time)`);
+    if (parallel > 1) log(`Rendering ${langs.join(", ")} in parallel (${parallel} at a time)`);
     const { produceLanguageInChild, runLimited } = await import("./produce-parallel");
     const settled = await runLimited(langs, parallel, async (lang) => done(lang, await produceLanguageInChild(p.root, script, trace, lang, { ...output, sessionProject: false })));
     const failures: { lang: string; err: AgentError }[] = [];

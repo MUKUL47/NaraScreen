@@ -7,7 +7,7 @@ import { loadFilmstrip } from "../../lib/fileOps";
 import { migrateProjectWithReport, newProject } from "../../lib/migrateProject";
 import { noteOpened, noteSaved, recentFromProject } from "../../lib/recentProjects";
 import { api, errMsg, hasBridge, probeSession, probeVideo, readJson, setWindowTitle, watchFiles } from "./bridge";
-import { mergeCompiledLanguages, scriptExtras, voiceList } from "./detach";
+import { applyScriptEntries, mergeCompiledLanguages, scriptExtras, voiceList } from "./detach";
 import { maxActionNumber } from "./effects";
 import { historyState, selectionState } from "./edit";
 import { EMPTY_SELECTION, pruneSelection } from "./selection";
@@ -171,7 +171,7 @@ export const createSessionSlice: StateCreator<ProjectState, [], [], SessionSlice
           } catch { /* the compiled projects are enough */ }
         }
         const { voices, ...extras } = scriptExtras(script as never, scriptPath ?? "");
-        project = { ...project, ...extras };
+        project = { ...applyScriptEntries(project, script as never), ...extras };
         if (voices) project.tts = { ...project.tts, voices: Object.fromEntries(Object.entries(voices).map(([l, v]) => [l, voiceList(l, v)])) };
 
         let dir = `${jobDir}-edit`;

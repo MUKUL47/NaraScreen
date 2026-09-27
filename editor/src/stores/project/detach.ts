@@ -1,6 +1,6 @@
 /** "Detach as video edit" helpers (pure): fold the per-language compiled projects of a job into
  *  one multi-language timeline project, and pick up what only the script knows. */
-import type { Card, DemoPlan, DemoScript } from "../../../api/schema";
+import type { Card, DemoPlan, DemoScript, FxEntry } from "../../../api/schema";
 import type { CalloutPanel, DemoProject, LangMap, TimelineAction, ZoomTarget } from "../../types";
 import { DEFAULT_VOICES } from "../../lib/voices";
 
@@ -72,4 +72,44 @@ export function scriptExtras(script: Partial<DemoScript> | null | undefined, scr
 /** voices[lang] with `voice` first and the rest of the catalog after it. */
 export function voiceList(lang: string, voice: string): string[] {
   return [voice, ...(DEFAULT_VOICES[lang] ?? []).filter((v) => v !== voice)];
+}
+
+/**
+ * Put back what compiling dropped, from each action's script entry (`action.source`): per-line
+ * voice / lang, notes, and "auto" / "end" overlay durations (baked into one language's seconds
+ * in demo-project.<lang>.json). "step-end" stays in seconds: a detached project has one step.
+ */
+export function applyScriptEntries(project: DemoProject, script: Partial<DemoScript> | null | undefined): DemoProject {
+  const steps = script?.steps;
+  if (!Array.isArray(steps)) return project;
+  const entryOf = (a: TimelineAction): FxEntry | undefined => {
+    if (!a.source) return undefined;
+    const e = steps.find((st) => st.id === a.source!.step)?.beat?.[a.source.entry] as FxEntry | undefined;
+    return e && typeof e === "object" && "fx" in e ? e : undefined;
+  };
+  const actions = project.actions.map((a) => {
+    const e = entryOf(a);
+    if (!e) return a;
+    const next: TimelineAction = { ...a };
+    if (e.note && !next.note) next.note = e.note;
+    if (a.type === "narrate") {
+      if (e.voice && !next.voice) next.voice = e.voice;
+      if (e.lang && !next.lang) next.lang = e.lang;
+    }
+    if (a.type === "zoom" && a.zoomTargets?.length) {
+      next.zoomTargets = a.zoomTargets.map((t, k) => {
+        const et = e.targets?.[k];
+        const voice = t.voice ?? et?.voice ?? e.voice;
+        const lang = t.lang ?? et?.lang ?? e.lang;
+        return { ...t, ...(voice ? { voice } : {}), ...(lang ? { lang } : {}) };
+      });
+    }
+    const overlay = a.type === "spotlight" || a.type === "callout";
+    if ((overlay || a.type === "blur") && !a.durationMode) {
+      if (e.duration === "end") next.durationMode = "end";
+      else if (e.duration === "auto" || (overlay && e.duration == null)) next.durationMode = "auto";
+    }
+    return next;
+  });
+  return { ...project, actions };
 }

@@ -34,8 +34,8 @@ export interface PopoverProps {
   "aria-label"?: string;
   /** aria-haspopup on the trigger (default "dialog"). */
   hasPopup?: "dialog" | "menu" | "listbox";
-  /** Focus on open: first focusable (default), the surface itself, or leave focus alone. */
-  initialFocus?: "first" | "container" | "none";
+  /** Focus on open: first focusable (default), the surface itself, nothing, or a CSS selector inside it. */
+  initialFocus?: "first" | "container" | "none" | (string & {});
   className?: string;
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
   children: ReactNode | ((api: { close: () => void }) => ReactNode);
@@ -73,7 +73,6 @@ export function Popover({
   const popId = `pop${name.slice(5)}`;
   const [uncontrolled, setUncontrolled] = useState(defaultOpen);
   const open = openProp ?? uncontrolled;
-  const openAtPointerDown = useRef(false);
   const root = useLayerRoot();
 
   const setOpen = (v: boolean) => {
@@ -109,14 +108,15 @@ export function Popover({
       "data-popover-anchor": popId,
       onPointerDown: (e: PointerEvent<HTMLElement>) => {
         p.onPointerDown?.(e);
-        openAtPointerDown.current = open;
+        e.currentTarget.dataset.popOpenAtDown = open ? "1" : "";
       },
       onClick: (e: MouseEvent<HTMLElement>) => {
         p.onClick?.(e);
         if (e.defaultPrevented) return;
         // A click on the trigger of an open popover: light dismiss already closed it on pointerup.
-        const wasOpen = e.detail > 0 ? openAtPointerDown.current : open;
-        openAtPointerDown.current = false;
+        const el = e.currentTarget;
+        const wasOpen = e.detail > 0 ? el.dataset.popOpenAtDown === "1" : open;
+        el.dataset.popOpenAtDown = "";
         setOpen(!wasOpen);
       },
       onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
@@ -186,7 +186,7 @@ interface SurfaceProps {
   "aria-label"?: string;
   className?: string;
   style: CSSProperties;
-  initialFocus: "first" | "container" | "none";
+  initialFocus: string;
   onClosed: () => void;
   returnFocusTo: () => HTMLElement | null;
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
@@ -219,6 +219,7 @@ function PopoverSurface({ id, role, className, style, initialFocus, onClosed, re
     }
     if (initialFocus === "container") el.focus({ preventScroll: true });
     else if (initialFocus === "first") (el.querySelector<HTMLElement>(FOCUSABLE) ?? el).focus({ preventScroll: true });
+    else if (initialFocus !== "none") el.querySelector<HTMLElement>(initialFocus)?.focus({ preventScroll: true });
 
     return () => {
       unmounting = true;

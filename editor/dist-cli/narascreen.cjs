@@ -2423,8 +2423,8 @@ async function produceJob(ctx, dir, script, langs, output) {
     }
   });
   const parallel = Math.min(parallelLanguages(), langs.length);
-  if (parallel > 1) {
-    index.log(`Rendering ${langs.join(", ")} in parallel (${parallel} at a time)`);
+  if (parallel > 1 || process.env.NARASCREEN_RENDER_CHILD === "1") {
+    if (parallel > 1) index.log(`Rendering ${langs.join(", ")} in parallel (${parallel} at a time)`);
     const { produceLanguageInChild: produceLanguageInChild2, runLimited: runLimited2 } = await Promise.resolve().then(() => produceParallel);
     const settled = await runLimited2(langs, parallel, async (lang2) => done(lang2, await produceLanguageInChild2(p.root, script, trace, lang2, { ...output, sessionProject: false })));
     const failures = [];

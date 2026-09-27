@@ -61,7 +61,9 @@ export function useScrub(opts: ScrubOptions): ScrubHandle {
       optsRef.current.onScrub?.(v);
     };
     const onMove = (ev: PointerEvent) => {
-      const dx = locked ? ev.movementX : ev.clientX - lastX;
+      // Locked: movementX (clientX is frozen). Synthetic/remote input may report movementX 0 while
+      // clientX moves, so fall back to the clientX delta.
+      const dx = locked ? ev.movementX || ev.clientX - lastX : ev.clientX - lastX;
       lastX = ev.clientX;
       if (!started) {
         if (Math.abs(ev.clientX - startX) < 3) return;

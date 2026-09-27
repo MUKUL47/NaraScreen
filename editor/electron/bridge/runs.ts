@@ -293,6 +293,8 @@ function childEnv(extra: Record<string, string> | undefined): NodeJS.ProcessEnv 
   }
   env.ELECTRON_RUN_AS_NODE = "1";
   env.NO_COLOR = "1";
+  // Render in a child process so the CLI answers a cancel at once (api/cli.ts produceJob).
+  env.NARASCREEN_RENDER_CHILD = "1";
   return env;
 }
 

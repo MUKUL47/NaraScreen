@@ -80,8 +80,9 @@ export function makeAudio(file: string, seconds = 2): string {
 export interface Validate {
   validateScript(raw: unknown, ctx: { dir: string; env?: Record<string, string | undefined> }): { script: DemoScript; warnings: string[] };
 }
+export interface FakeClip { key: string; step: string; entry: number; lang: string; voice: string; speed: number; text: string; audioPath: string; durationSec: number; cached: boolean }
 export interface Compiler {
-  compile(script: DemoScript, trace: TraceEntry[], lang?: string, clips?: undefined, warnings?: string[], opts?: { durationSec?: number }): NaraAction[];
+  compile(script: DemoScript, trace: TraceEntry[], lang?: string, clips?: Map<string, FakeClip>, warnings?: string[], opts?: { durationSec?: number }): NaraAction[];
 }
 export interface VideoSource {
   timelineTrace(script: DemoScript, durationSec: number): TraceEntry[];
@@ -93,11 +94,24 @@ export const api = {
 };
 
 /** validate → trace from `at`/`rect` → compile: the actions `narascreen make` would render. */
-export function compileScript(raw: DemoScript, dir: string, durationSec: number, lang = "en"): { actions: NaraAction[]; warnings: string[]; validateWarnings: string[] } {
+export function compileScript(
+  raw: DemoScript,
+  dir: string,
+  durationSec: number,
+  lang = "en",
+  /** clip seconds per `${step}:${entry}` key (fake narration clips; only their length matters) */
+  clipSec?: Record<string, number>,
+): { actions: NaraAction[]; warnings: string[]; validateWarnings: string[] } {
   const { script, warnings: validateWarnings } = api.validate().validateScript(structuredClone(raw), { dir, env: process.env });
   const warnings: string[] = [];
   const trace = api.videoSource().timelineTrace(script, durationSec);
-  const actions = api.compiler().compile(script, trace, lang, undefined, warnings, { durationSec });
+  const clips = clipSec
+    ? new Map(Object.entries(clipSec).map(([key, durationSec]) => {
+        const [step, entry] = key.split(":");
+        return [key, { key, step, entry: Number(entry), lang, voice: "af_heart", speed: 1, text: "x", audioPath: `/clip/${key}.wav`, durationSec, cached: true }];
+      }))
+    : undefined;
+  const actions = api.compiler().compile(script, trace, lang, clips, warnings, { durationSec });
   return { actions, warnings, validateWarnings };
 }
 

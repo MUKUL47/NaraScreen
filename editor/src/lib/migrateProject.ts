@@ -9,6 +9,8 @@
  *  - `spotlightRect` → `spotlightRects`; `narration`/`narration_hi` → `narrations`;
  *  - files without `projectVersion` keep `freeze ?? false` on their narrates (the old renderer
  *    froze only on `freeze === true`); new narrates then default to the API's `true`;
+ *  - a line whose only text is in a language the project does not produce gets that `lang`
+ *    (compiled jobs lose the script's per-line `lang`; that is the only way they render);
  *  - `viewport`/`output` size from the real recording size when it is known.
  *  The result has `projectVersion: 2`; migrating it again changes nothing. */
 import type { DemoProject, ProjectMusic, Rect, TimelineAction, ZoomTarget } from "../types";
@@ -105,6 +107,7 @@ export function migrateProjectWithReport(raw: unknown, opts: MigrateOptions = {}
   if (typeof p.tts.kokoroEndpoint !== "string" || !p.tts.kokoroEndpoint) p.tts.kokoroEndpoint = DEFAULT_ENDPOINT;
 
   // actions
+  const langs = p.tts.languages?.length ? p.tts.languages : ["en"];
   const seen = new Set<string>();
   const actions: TimelineAction[] = [];
   const music: TimelineAction[] = [];
@@ -123,7 +126,7 @@ export function migrateProjectWithReport(raw: unknown, opts: MigrateOptions = {}
     }
     seen.add(a.id);
     if (a.type === "music") music.push(a);
-    else actions.push(migrateAction(a, wasV2, changes));
+    else actions.push(migrateAction(a, wasV2, langs, changes));
   }
   if (music.length) {
     const first = music[0];
@@ -149,7 +152,13 @@ export function migrateProject(raw: unknown, opts: MigrateOptions = {}): DemoPro
   return migrateProjectWithReport(raw, opts).project;
 }
 
-function migrateAction(a: TimelineAction, wasV2: boolean, changes: string[]): TimelineAction {
+/** The one language a line is written in, when the project does not produce it (else undefined). */
+function foreignLang(narrations: Record<string, string> | undefined, langs: string[]): string | undefined {
+  const keys = Object.entries(narrations ?? {}).filter(([, t]) => typeof t === "string" && t.trim()).map(([k]) => k);
+  return keys.length === 1 && !langs.includes(keys[0]) ? keys[0] : undefined;
+}
+
+function migrateAction(a: TimelineAction, wasV2: boolean, langs: string[], changes: string[]): TimelineAction {
   const note = (what: string) => changes.push(`${a.id}: ${what}`);
   if (typeof a.resumeAfter === "string") {
     if (a.type === "pause") a.resumeAfter = API_DEFAULTS.pause.seconds;
@@ -213,6 +222,21 @@ function migrateAction(a: TimelineAction, wasV2: boolean, changes: string[]): Ti
     note("spotlightRect → spotlightRects");
   }
 
+  if (a.type === "narrate" && !a.lang) {
+    const forced = foreignLang(a.narrations, langs);
+    if (forced) {
+      a.lang = forced;
+      note(`lang → ${forced}`);
+    }
+  }
+  if (a.type === "zoom" && !a.lang && a.zoomTargets?.length) {
+    a.zoomTargets = a.zoomTargets.map((t, k) => {
+      const forced = t.lang ? undefined : foreignLang(t.narrations, langs);
+      if (!forced) return t;
+      note(`target ${k + 1} lang → ${forced}`);
+      return { ...t, lang: forced };
+    });
+  }
   if (a.type === "narrate" && !wasV2 && a.freeze === undefined) {
     a.freeze = false; // the old renderer froze only on freeze === true
     note("freeze → false (as rendered before)");

@@ -31,14 +31,6 @@ function isWarm() {
   return performance.now() - lastClosedAt < WARM_MS;
 }
 
-type Handler<E> = ((e: E) => void) | undefined;
-function chain<E>(a: Handler<E>, b: (e: E) => void) {
-  return (e: E) => {
-    a?.(e);
-    b(e);
-  };
-}
-
 /**
  * Hover (500 ms) / keyboard-focus tooltip. Native `popover="manual"` in the top layer, positioned
  * with CSS anchor positioning; flips when it would leave the window.
@@ -47,23 +39,24 @@ export function Tooltip({ content, shortcut, side = "top", align = "center", del
   const rid = useId();
   const name = anchorName(rid, "tt");
   const tipId = `tip${name.slice(4)}`;
-  const [open, setOpen] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [phase, setPhase] = useState<"closed" | "pending" | "open">("closed");
+  const open = phase === "open";
   const root = useLayerRoot();
-
-  useEffect(() => () => clearTimeout(timer.current), []);
-
   const enabled = !disabled && content !== undefined && content !== null && content !== "";
+
+  useEffect(() => {
+    if (phase !== "pending") return;
+    const t = setTimeout(() => setPhase("open"), delay);
+    return () => clearTimeout(t);
+  }, [phase, delay]);
+
   const show = (immediate: boolean) => {
-    clearTimeout(timer.current);
     if (!enabled) return;
-    if (immediate || isWarm()) setOpen(true);
-    else timer.current = setTimeout(() => setOpen(true), delay);
+    setPhase(immediate || isWarm() ? "open" : "pending");
   };
   const hide = () => {
-    clearTimeout(timer.current);
-    if (open) markClosed();
-    setOpen(false);
+    if (phase === "open") markClosed();
+    setPhase("closed");
   };
 
   const child = Children.only(children);
@@ -73,18 +66,30 @@ export function Tooltip({ content, shortcut, side = "top", align = "center", del
   const trigger = cloneElement(child, {
     style: { ...style, anchorName: existing && existing !== "none" ? `${existing}, ${name}` : name },
     "aria-describedby": open && enabled ? tipId : p["aria-describedby"],
-    onPointerEnter: chain(p.onPointerEnter, (e: PointerEvent<HTMLElement>) => {
+    onPointerEnter: (e: PointerEvent<HTMLElement>) => {
+      p.onPointerEnter?.(e);
       if (e.pointerType !== "touch") show(false);
-    }),
-    onPointerLeave: chain(p.onPointerLeave, hide),
-    onPointerDown: chain(p.onPointerDown, hide),
-    onFocus: chain(p.onFocus, (e: FocusEvent<HTMLElement>) => {
+    },
+    onPointerLeave: (e: PointerEvent<HTMLElement>) => {
+      p.onPointerLeave?.(e);
+      hide();
+    },
+    onPointerDown: (e: PointerEvent<HTMLElement>) => {
+      p.onPointerDown?.(e);
+      hide();
+    },
+    onFocus: (e: FocusEvent<HTMLElement>) => {
+      p.onFocus?.(e);
       if (e.currentTarget.matches(":focus-visible")) show(true);
-    }),
-    onBlur: chain(p.onBlur, hide),
-    onKeyDown: chain(p.onKeyDown, (e: KeyboardEvent<HTMLElement>) => {
+    },
+    onBlur: (e: FocusEvent<HTMLElement>) => {
+      p.onBlur?.(e);
+      hide();
+    },
+    onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
+      p.onKeyDown?.(e);
       if (e.key === "Escape" && open) hide();
-    }),
+    },
   } as HTMLAttributes<HTMLElement>);
 
   return (

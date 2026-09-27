@@ -19,7 +19,7 @@ export function Kbd({ keys, className, tone = "muted" }: KbdProps) {
         <kbd
           key={i}
           className={cx(
-            "inline-flex h-4 min-w-4 items-center justify-center rounded-sm px-1 text-2xs font-medium",
+            "inline-flex h-4 min-w-4 items-center justify-center rounded-sm px-1 font-sans text-2xs font-medium",
             tone === "inverse" ? "bg-fg-inverse/10 text-fg-inverse/70" : "bg-selected text-fg-muted",
           )}
         >

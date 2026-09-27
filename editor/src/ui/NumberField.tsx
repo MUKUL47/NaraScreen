@@ -145,7 +145,7 @@ export function NumberField({
           fieldBox,
           controlHeight[size],
           scrubLabel ? "pl-0" : PAD_L[size],
-          unit ? "pr-1.5" : PAD_R[size],
+          unit && !(mixed && shown == null) ? "pr-1.5" : PAD_R[size],
           error && fieldBoxError,
           disabled && fieldBoxDisabled,
         )}
@@ -201,7 +201,7 @@ export function NumberField({
           }}
           onKeyDown={onKeyDown}
         />
-        {unit && <span className="pointer-events-none shrink-0 pl-1 text-sm text-fg-subtle">{unit}</span>}
+        {unit && !(mixed && shown == null) && <span className="pointer-events-none shrink-0 pl-1 text-sm text-fg-subtle">{unit}</span>}
       </div>
       {errorMsg && (
         <p id={msgId} className={cx(fieldMessage, "text-danger")}>

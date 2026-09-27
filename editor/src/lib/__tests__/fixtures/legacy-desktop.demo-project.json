@@ -1,0 +1,33 @@
+{
+  "title": "Screen Recording",
+  "baseUrl": "screen://",
+  "recordingPath": "__SESSION__/recordings/recording.mp4",
+  "recordingDuration": 30,
+  "viewport": { "width": 1920, "height": 1080 },
+  "output": { "width": 1920, "height": 1080, "fps": 30, "format": "mp4" },
+  "tts": {
+    "provider": "kokoro-direct",
+    "kokoroEndpoint": "http://localhost:8880/v1/audio/speech",
+    "voiceEn": "af_heart",
+    "voiceHi": "hf_alpha",
+    "speed": 1,
+    "voices": { "en": ["af_bella", "af_heart"], "hi": ["hf_beta", "hf_alpha"] },
+    "languages": ["en", "hi"]
+  },
+  "actions": [
+    { "id": "action-013", "type": "music", "timestamp": 0.06, "musicPath": "__MUSIC__", "musicVolume": 0.5, "musicDuckTo": 0.12, "musicEndTimestamp": 29.8 },
+    { "id": "action-001", "type": "narrate", "timestamp": 1.2, "narration": "Welcome to the demo.", "narration_hi": "डेमो में आपका स्वागत है।", "audioPath": { "en": "__SESSION__/audio/action-001_en.wav" }, "subtitleSize": 50, "playFor": 2 },
+    { "id": "action-002", "type": "zoom", "timestamp": 4.7, "zoomRect": [3, 48, 746, 114], "zoomDuration": 1, "zoomHold": 2, "narration": "Up top is the toolbar.", "narrations": { "en": "Up top is the toolbar." }, "audioPath": { "en": "__SESSION__/audio/action-002_en.wav" } },
+    { "id": "action-003", "type": "pause", "timestamp": 7.5, "resumeAfter": "narration" },
+    { "id": "action-004", "type": "spotlight", "timestamp": 8.1, "spotlightRect": [1281, 114, 268, 85], "dimOpacity": 0.7, "spotlightDuration": 3, "freeze": true, "narration": "Never spoken.", "narrations": {} },
+    { "id": "action-005", "type": "callout", "timestamp": 11.4, "calloutText": "Old label", "calloutStyle": "label", "calloutDuration": 3, "calloutPosition": [534, 131] },
+    { "id": "action-006", "type": "callout", "timestamp": 12.0, "calloutText": "fallback", "calloutStyle": "label", "calloutDuration": 2.5, "calloutPanels": [{ "text": "Panel one", "rect": [927, 200, 394, 60], "fontSize": 66 }, { "text": "Panel two", "rect": [100, 700, 300, 40], "fontSize": 30 }] },
+    { "id": "action-007", "type": "speed", "timestamp": 14.0, "speedFactor": 2, "speedEndTimestamp": 18.5 },
+    { "id": "action-008", "type": "skip", "timestamp": 19.0, "skipEndTimestamp": 20.5 },
+    { "id": "action-009", "type": "mute", "timestamp": 0.3, "muteEndTimestamp": 10.7 },
+    { "id": "action-010", "type": "blur", "timestamp": 16.3, "blurRects": [[349, 195, 1091, 124], [435, 492, 347, 187]], "blurRadius": 20, "blurDuration": 5, "freeze": false },
+    { "id": "action-011", "type": "narrate", "timestamp": 21.0, "narrations": { "en": "Talk over the video." }, "freeze": true, "showSubtitles": false },
+    { "id": "action-012", "type": "music", "timestamp": 25, "musicPath": "/nowhere/second.mp3", "musicVolume": 0.3, "musicDuckTo": 0.1 },
+    { "id": "action-014", "type": "zoom", "timestamp": 22.5, "zoomRects": [[616, 461, 753, 250], [1307, 820, 314, 150]], "zoomDuration": 1, "zoomHold": 1.5 }
+  ]
+}

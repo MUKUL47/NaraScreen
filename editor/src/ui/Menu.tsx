@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactElement } from "react";
+import { useRef, useState, type HTMLAttributes, type KeyboardEvent, type ReactElement } from "react";
 import { Check, ChevronRight } from "lucide-react";
 import type { Align, Side } from "./anchor";
 import { cx } from "./cx";
@@ -54,7 +54,7 @@ export function Menu({ trigger, anchor, open, onOpenChange, items, side = "botto
       align={align}
       role="presentation"
       hasPopup="menu"
-      initialFocus="none"
+      initialFocus={ITEM_SELECTOR}
       className="py-1"
     >
       {({ close }) => (
@@ -63,7 +63,6 @@ export function Menu({ trigger, anchor, open, onOpenChange, items, side = "botto
           onCloseAll={close}
           minWidth={minWidth}
           label={aria["aria-label"]}
-          autoFocus
         />
       )}
     </Popover>
@@ -77,19 +76,14 @@ interface MenuListProps {
   onCloseSelf?: () => void;
   minWidth: number;
   label?: string;
-  autoFocus: boolean;
 }
 
 const ITEM_SELECTOR = '[role^="menuitem"]:not([aria-disabled="true"])';
 
-function MenuList({ items, onCloseAll, onCloseSelf, minWidth, label, autoFocus }: MenuListProps) {
+function MenuList({ items, onCloseAll, onCloseSelf, minWidth, label }: MenuListProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [sub, setSub] = useState<{ index: number; focus: boolean } | null>(null);
   const typeahead = useRef({ buf: "", at: 0 });
-
-  useEffect(() => {
-    if (autoFocus) ref.current?.querySelector<HTMLElement>(ITEM_SELECTOR)?.focus({ preventScroll: true });
-  }, [autoFocus]);
 
   const itemEls = () => [...(ref.current?.querySelectorAll<HTMLElement>(ITEM_SELECTOR) ?? [])];
   const focusAt = (i: number) => {
@@ -184,7 +178,7 @@ function MenuList({ items, onCloseAll, onCloseSelf, minWidth, label, autoFocus }
         if (it.type === "separator") return <div key={key} role="separator" className="my-1 h-px bg-line-subtle" />;
         if (it.type === "label")
           return (
-            <div key={key} role="presentation" className="overline px-3 pb-1 pt-2">
+            <div key={key} role="presentation" className="label-caps px-3 pb-1 pt-2">
               {it.label}
             </div>
           );
@@ -237,7 +231,7 @@ function MenuList({ items, onCloseAll, onCloseSelf, minWidth, label, autoFocus }
                 align="start"
                 offset={2}
                 role="presentation"
-                initialFocus="none"
+                initialFocus={sub.focus ? ITEM_SELECTOR : "none"}
                 className="py-1"
               >
                 <MenuList
@@ -246,7 +240,6 @@ function MenuList({ items, onCloseAll, onCloseSelf, minWidth, label, autoFocus }
                   onCloseSelf={() => setSub(null)}
                   minWidth={Math.max(160, minWidth - 40)}
                   label={it.label}
-                  autoFocus={sub.focus}
                 />
               </Popover>
             )}
