@@ -1341,7 +1341,9 @@ function buildNarrateInsert(
       emit(`    Mixing narration with original audio (ducking original to 20%)`);
       ffmpegSync([
         "-y", "-i", playPath, "-i", narration.audioPath,
-        "-filter_complex", "[0:a]volume=0.2[bg];[1:a]volume=1.0[narr];[bg][narr]amix=inputs=2:duration=shortest:dropout_transition=0[aout]",
+        // normalize=0: amix otherwise halves both, so this narration came out ~6 dB
+        // quieter than the frozen ones (a clip after a skip/speed pass always has a track).
+        "-filter_complex", "[0:a]volume=0.2[bg];[1:a]volume=1.0[narr];[bg][narr]amix=inputs=2:duration=shortest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0[aout]",
         "-map", "0:v", "-map", "[aout]",
         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
         withAudioPath,

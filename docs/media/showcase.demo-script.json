@@ -1,0 +1,363 @@
+{
+  "version": 1,
+  "scope": "NaraScreen showcase",
+  "baseUrl": "http://127.0.0.1:4780",
+  "viewport": {
+    "width": 1600,
+    "height": 900
+  },
+  "setup": [
+    {
+      "act": "goto",
+      "path": "/#/login"
+    },
+    {
+      "act": "fill",
+      "label": "Email",
+      "value": "alex.morgan@example.com"
+    },
+    {
+      "act": "fill",
+      "label": "Password",
+      "value": "${env:ACME_PASSWORD}"
+    },
+    {
+      "act": "click",
+      "role": "button",
+      "name": "Sign in"
+    },
+    {
+      "act": "waitFor",
+      "role": "heading",
+      "name": "Dashboard"
+    }
+  ],
+  "defaults": {
+    "dwellMs": 500,
+    "typeDelayMs": 40
+  },
+  "languages": [
+    "en"
+  ],
+  "tts": {
+    "voices": {
+      "en": "af_heart"
+    }
+  },
+  "music": {
+    "path": "music/happy-beats.mp3",
+    "volume": 0.1,
+    "duckTo": 0.04
+  },
+  "output": {
+    "resolution": "1080p",
+    "quality": "high"
+  },
+  "plan": {
+    "audience": "Developers and agents who need product demo videos",
+    "takeaway": "Tell your AI what you want: it writes one JSON script, NaraScreen turns it into a narrated video, locally — and you can edit the script anytime",
+    "hook": "This whole video came from one JSON script",
+    "tone": "confident, quick",
+    "targetSec": 70
+  },
+  "intro": {
+    "template": "bold",
+    "title": "NaraScreen",
+    "subtitle": "Demo videos from one JSON script",
+    "accent": "#7C3AED",
+    "narrate": "This whole video came from one JSON script."
+  },
+  "outro": {
+    "template": "clean",
+    "title": "Write the script.",
+    "subtitle": "Runs on your machine. Nothing leaves it.",
+    "cta": "narascreen make demo.json",
+    "accent": "#7C3AED",
+    "narrate": "Write the script. It all runs on your machine, and nothing leaves it."
+  },
+  "steps": [
+    {
+      "id": "spotlight",
+      "label": "Spotlight",
+      "beat": [
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Dashboard"
+        },
+        {
+          "fx": "callout",
+          "style": "lower-third",
+          "text": "Every effect you see is one line of JSON",
+          "duration": 4
+        },
+        {
+          "fx": "spotlight",
+          "anchor": {
+            "role": "article",
+            "name": "Overdue"
+          },
+          "padding": 12,
+          "feather": 24,
+          "converge": 0.6
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Spotlights glide in, with a soft glow."
+        }
+      ]
+    },
+    {
+      "id": "zoom",
+      "label": "Zoom",
+      "beat": [
+        {
+          "fx": "zoom",
+          "anchor": {
+            "role": "region",
+            "name": "Weekly progress"
+          },
+          "narrate": "Zoom in on the detail."
+        }
+      ]
+    },
+    {
+      "id": "arrow",
+      "label": "Arrow",
+      "beat": [
+        {
+          "act": "click",
+          "role": "link",
+          "name": "Tasks",
+          "within": {
+            "role": "navigation",
+            "name": "Main"
+          }
+        },
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Tasks",
+          "exact": true
+        },
+        {
+          "fx": "arrow",
+          "anchor": {
+            "role": "button",
+            "name": "New task"
+          },
+          "text": "Arrows",
+          "highlight": true
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Arrows draw themselves, and circle what matters."
+        }
+      ]
+    },
+    {
+      "id": "typing",
+      "label": "Real typing, sped up",
+      "beat": [
+        {
+          "act": "click",
+          "role": "button",
+          "name": "New task"
+        },
+        {
+          "act": "waitFor",
+          "role": "dialog",
+          "name": "New task"
+        },
+        {
+          "fx": "narrate",
+          "freeze": false,
+          "narrate": "Real clicks and typing, sped up where it drags."
+        },
+        {
+          "act": "fill",
+          "label": "Title",
+          "value": "Ship the launch video"
+        },
+        {
+          "fx": "callout",
+          "style": "step-counter",
+          "step": 1,
+          "text": "Name the task",
+          "duration": 2
+        },
+        {
+          "fx": "speed",
+          "factor": 3,
+          "until": "next-act"
+        },
+        {
+          "act": "fill",
+          "label": "Description",
+          "value": "Record, narrate and render it straight from the script."
+        },
+        {
+          "act": "click",
+          "role": "button",
+          "name": "Create task"
+        },
+        {
+          "act": "waitFor",
+          "text": "Task created"
+        },
+        {
+          "fx": "callout",
+          "anchor": {
+            "text": "Ship the launch video",
+            "within": {
+              "role": "row",
+              "name": "Ship the launch video"
+            }
+          },
+          "text": "Your new task",
+          "placement": "below",
+          "fontSize": 26
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Labels go right where you point."
+        }
+      ]
+    },
+    {
+      "id": "blur",
+      "label": "Blur",
+      "beat": [
+        {
+          "act": "click",
+          "role": "link",
+          "name": "Settings",
+          "within": {
+            "role": "navigation",
+            "name": "Main"
+          }
+        },
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Settings",
+          "exact": true
+        },
+        {
+          "fx": "blur",
+          "anchor": {
+            "label": "API key"
+          },
+          "duration": "step-end",
+          "radius": 4
+        },
+        {
+          "fx": "spotlight",
+          "anchor": {
+            "label": "API key"
+          },
+          "padding": 8,
+          "feather": 16,
+          "converge": 0.5
+        },
+        {
+          "fx": "narrate",
+          "narrate": "And secrets stay blurred."
+        }
+      ]
+    },
+    {
+      "id": "languages",
+      "label": "Any language",
+      "beat": [
+        {
+          "act": "click",
+          "role": "link",
+          "name": "Dashboard",
+          "within": {
+            "role": "navigation",
+            "name": "Main"
+          }
+        },
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Dashboard"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "It speaks your language, too.",
+          "subtitleSize": 44
+        },
+        {
+          "fx": "narrate",
+          "lang": "hi",
+          "voice": "hf_alpha",
+          "narrate": "नमस्ते! यही वीडियो हिंदी में भी बनता है।",
+          "subtitleSize": 44
+        },
+        {
+          "fx": "narrate",
+          "lang": "ja",
+          "voice": "jf_alpha",
+          "narrate": "日本語のナレーションも作れます。",
+          "subtitleSize": 44
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "label": "Your AI writes the script",
+      "beat": [
+        {
+          "act": "goto",
+          "url": "http://127.0.0.1:4790/docs"
+        },
+        {
+          "fx": "callout",
+          "style": "lower-third",
+          "text": "127.0.0.1 · browser, voice and rendering all run locally",
+          "duration": "step-end"
+        },
+        {
+          "fx": "spotlight",
+          "anchors": [
+            {
+              "css": "h1 + p"
+            },
+            {
+              "css": "h1 ~ ol",
+              "nth": 0
+            }
+          ],
+          "padding": 10,
+          "feather": 20,
+          "converge": 0.6
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Just tell your AI what you want. It reads these docs and writes the script for you."
+        },
+        {
+          "act": "click",
+          "role": "link",
+          "name": "Quick start (HTTP)"
+        },
+        {
+          "fx": "spotlight",
+          "anchor": {
+            "css": "#quick-start-http ~ .code",
+            "nth": 0
+          },
+          "padding": 10,
+          "feather": 20,
+          "converge": 0.6
+        },
+        {
+          "fx": "narrate",
+          "narrate": "It sends the script over HTTP, and you can edit it anytime."
+        }
+      ]
+    }
+  ]
+}

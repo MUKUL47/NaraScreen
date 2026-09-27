@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desktop Tutorial · NaraScreen</title>
+<meta name="description" content="Record your screen with the NaraScreen desktop app, add narration and effects on the timeline, and produce an MP4.">
+<link rel="canonical" href="https://narascreen.mukuldutt.com/desktop">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="NaraScreen">
+<meta property="og:url" content="https://narascreen.mukuldutt.com/desktop">
+<meta property="og:title" content="Desktop Tutorial · NaraScreen">
+<meta property="og:description" content="Record your screen with the NaraScreen desktop app, add narration and effects on the timeline, and produce an MP4.">
+<meta property="og:image" content="https://narascreen.mukuldutt.com/media/showcase-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://narascreen.mukuldutt.com/media/showcase-poster.jpg">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <a class="brand" href="../"><span class="mark"></span>NaraScreen</a>
+  <nav>
+    <a href="./" aria-current="page">Desktop tutorial</a>
+    <a href="../#agents">For AI agents</a>
+    <a href="https://github.com/MUKUL47/NaraScreen">GitHub</a>
+  </nav>
+</div></header>
+
+<div class="wrap">
+  <div class="hero" style="padding-bottom:0">
+    <div class="eyebrow">Desktop app · manual recording</div>
+    <h1>Record, edit, produce.</h1>
+    <p class="lede">This tutorial walks through the NaraScreen desktop app from a blank screen to a finished MP4: record your screen, place effects on the timeline, add narration, and produce the video. Every screenshot is the real app.</p>
+  </div>
+
+  <div class="doc">
+    <nav class="toc" aria-label="Tutorial steps">
+      <ol>
+        <li><a href="#setup">Install and start</a></li>
+        <li><a href="#record">Record your screen</a></li>
+        <li><a href="#editor">Find your way around</a></li>
+        <li><a href="#add">Add an action</a></li>
+        <li><a href="#regions">Draw regions on the video</a></li>
+        <li><a href="#narrate">Narration and voices</a></li>
+        <li><a href="#effects">Every effect, one by one</a></li>
+        <li><a href="#produce">Produce the video</a></li>
+        <li><a href="#shortcuts">Keyboard shortcuts</a></li>
+        <li><a href="#files">Where your files live</a></li>
+        <li><a href="#next">Going further</a></li>
+      </ol>
+    </nav>
+
+    <article>
+      <!-- 1 -->
+      <div class="step" id="setup">
+        <h2><span class="n">01</span>Install and start</h2>
+        <p>You need <b>Node.js 20</b>, <b>FFmpeg</b> and <b>Docker</b> (for the voice engine). Screen recording works on <b>Linux with X11</b>, <b>macOS</b> and <b>Windows</b>; on Linux, Wayland sessions can't be recorded, so log in with an X11 session.</p>
+        <h4>1. Start the voice engine</h4>
+<pre><code># in the repository root
+docker compose up -d        # Kokoro on http://localhost:8880 (first run downloads ~500 MB)</code></pre>
+        <h4>2. Start the app</h4>
+<pre><code>cd editor
+npm install
+npm run dev</code></pre>
+        <p>Prefer an installer? <code>npm run dist</code> builds a Linux AppImage, a macOS <code>.dmg</code> or a Windows portable <code>.exe</code> into <code>editor/release/</code>, with FFmpeg bundled.</p>
+        <figure>
+          <img src="img/01-welcome.jpg" alt="NaraScreen welcome screen with the toolbar: Record Screen, Open, Import Video, Save, Produce, Versions" loading="lazy">
+          <figcaption>The welcome screen. <b>Voice</b> in green at the top right means the voice engine is running. If it says <b>No Voice</b>, a banner shows the <code>docker run</code> command to start it.</figcaption>
+        </figure>
+      </div>
+
+      <!-- 2 -->
+      <div class="step" id="record">
+        <h2><span class="n">02</span>Record your screen</h2>
+        <ol class="steps">
+          <li>Click <b>Record Screen</b>. With more than one monitor, pick one under <b>Pick a display</b>.</li>
+          <li>In <b>Name your recording</b>, type a <b>Recording name</b> (the default is a timestamp) and check <b>Save in</b>: sessions go to <code>~/NaraScreen</code> unless you press <b>Change…</b>.</li>
+          <li>Click <b>Start Recording</b> (or press <kbd>Enter</kbd>) and do your demo.</li>
+          <li>Click <b>Stop &amp; Edit</b> when you're done. <b>Discard</b> throws the recording away.</li>
+        </ol>
+        <div class="grid g2">
+          <figure><img src="img/02-name-recording.jpg" alt="Name your recording dialog" loading="lazy"><figcaption>Name the session folder, then start.</figcaption></figure>
+          <figure><img src="img/03-recording.jpg" alt="Recording in progress with Discard and Stop & Edit" loading="lazy"><figcaption>While recording: a timer, <b>Discard</b> and <b>Stop &amp; Edit</b>.</figcaption></figure>
+        </div>
+        <div class="note"><b>Good to know.</b> The whole display is recorded, as video only (no sound). Narration is added afterwards. If the NaraScreen window is on the display you record, it will be in the video, so record a different monitor or move it aside.</div>
+        <p>Already have a video? Use <b>Import Video</b> (mp4, mkv, webm, avi, mov). To continue earlier work, use <b>Open</b> and pick a session folder.</p>
+      </div>
+
+      <!-- 3 -->
+      <div class="step" id="editor">
+        <h2><span class="n">03</span>Find your way around</h2>
+        <figure>
+          <img src="img/04-editor.jpg" alt="The editor: video player, timeline with lanes, action panel on the right" loading="lazy">
+          <figcaption>The editor: the video on top, the timeline below it, and the action panel on the right.</figcaption>
+        </figure>
+        <div class="fields">
+          <div class="card"><h4>Timeline</h4><p class="muted">A filmstrip of your recording, then one lane per effect type in use. Click to seek; drag a clip to move it; drag a clip's edge to change how long it lasts. Clips snap to the playhead and to each other (yellow guide).</p></div>
+          <div class="card"><h4>Action panel</h4><p class="muted">Select a clip to edit it here: its <b>Name</b>, its <b>Timestamp (s)</b>, and the settings for that effect. <b>Delete</b> removes it.</p></div>
+          <div class="card"><h4>Toolbar</h4><p class="muted"><b>Save</b> turns amber (<b>Save •</b>) when there are unsaved changes; the app also autosaves 3 seconds after each change. Undo and redo keep 50 steps.</p></div>
+        </div>
+        <p style="margin-top:14px">The timeline toolbar has <b>+ Add Action</b>, play/pause, and a speed button that cycles 0.5×, 1×, 1.5× and 2×. The player itself shows region outlines only; zooms, blur and dimming appear when you produce.</p>
+      </div>
+
+      <!-- 4 -->
+      <div class="step" id="add">
+        <h2><span class="n">04</span>Add an action</h2>
+        <p>Move the playhead to where the effect should start, then use one of three ways:</p>
+        <div class="grid g2">
+          <figure><img src="img/11-add-action.jpg" alt="Add Action menu" loading="lazy"><figcaption><b>+ Add Action</b> lists every effect, with its number key.</figcaption></figure>
+          <figure><img src="img/12-range-menu.jpg" alt="Menu after dragging a range on the timeline" loading="lazy"><figcaption><b>Drag across the timeline</b> to pick a time range, then choose the effect for that range.</figcaption></figure>
+        </div>
+        <p>Or press a number key: <kbd>1</kbd> Zoom, <kbd>2</kbd> Narrate, <kbd>3</kbd> Spotlight, <kbd>4</kbd> Blur, <kbd>5</kbd> Mute, <kbd>6</kbd> Speed, <kbd>7</kbd> Callout, <kbd>8</kbd> Music, <kbd>9</kbd> Skip.</p>
+        <p class="muted">Handy while editing: <kbd>D</kbd> duplicates the selected action one second later, <kbd>B</kbd> splits a ranged action at the playhead.</p>
+      </div>
+
+      <!-- 5 -->
+      <div class="step" id="regions">
+        <h2><span class="n">05</span>Draw regions on the video</h2>
+        <p>Zoom, Spotlight, Blur and Text Callout work on a <b>region</b> of the screen. In their panel, click <b>Draw … Region</b>; the cursor becomes a crosshair, and you drag a box on the video.</p>
+        <figure>
+          <img src="img/13-draw-region.jpg" alt="Drawing a second spotlight region on the video" loading="lazy">
+          <figcaption>Drawing a second spotlight region. The yellow box shows its size as you drag; the purple one is the region you already have.</figcaption>
+        </figure>
+        <ul>
+          <li>Drawing stays on, so you can add several regions in a row (<b>Add Another Region</b>). Selecting another action ends it.</li>
+          <li>Drag a region to move it; the selected one has handles to resize it. <kbd>Alt</kbd>+arrows nudge it by 1 px, <kbd>Alt</kbd>+<kbd>Shift</kbd>+arrows by 10 px.</li>
+          <li><kbd>Esc</kbd> cancels a drag in progress.</li>
+        </ul>
+      </div>
+
+      <!-- 6 -->
+      <div class="step" id="narrate">
+        <h2><span class="n">06</span>Narration and voices</h2>
+        <figure>
+          <img src="img/06-narrate.jpg" alt="Narrate panel with Text to Speech, language, voice, speed and Generate Audio" loading="lazy">
+          <figcaption>A Narrate action: type the words, pick a voice, press <b>Generate Audio</b>, then <b>Play</b> to hear it.</figcaption>
+        </figure>
+        <ul>
+          <li><b>Text to Speech</b> or <b>Record Voice</b>: record your own voice with the microphone instead. A recording takes priority over generated speech.</li>
+          <li><b>Language</b>: English, British English, Hindi, Spanish, French, Japanese, Chinese, Brazilian Portuguese and Italian, with 54 voices between them. Add a language from the same dropdown.</li>
+          <li><b>Speed</b> (0.75× to 2×) applies to the whole project the next time you generate.</li>
+          <li><b>Freeze video during narration</b>: on, the frame holds while you talk; off, the video keeps playing under your voice.</li>
+          <li><b>Show subtitles</b> and <b>Subtitle Size</b>: subtitles are burned in with each word highlighted as it's spoken.</li>
+        </ul>
+        <p>Zoom targets can carry their own narration too; the zoom holds for as long as you talk.</p>
+      </div>
+
+      <!-- 7 -->
+      <div class="step" id="effects">
+        <h2><span class="n">07</span>Every effect, one by one</h2>
+
+        <h3>Spotlight</h3>
+        <figure><img src="img/05-spotlight.jpg" alt="Spotlight panel and region" loading="lazy"><figcaption>Everything except the regions is dimmed. Draw several regions to light several things at once.</figcaption></figure>
+        <p><b>Dim Opacity</b> sets how dark the rest gets (70% by default); <b>Duration (seconds)</b> sets how long it stays. Two spotlights can't overlap in time: draw another region on the same spotlight instead.</p>
+
+        <h3>Zoom</h3>
+        <figure><img src="img/07-zoom.jpg" alt="Zoom panel with targets" loading="lazy"><figcaption>Zoom Targets play in sequence: zoom in, hold, zoom out.</figcaption></figure>
+        <p><b>Animation Duration</b> is the zoom-in/out time; <b>Hold Duration per zoom</b> is how long it stays (narration extends it). Click a target to give it its own narration.</p>
+
+        <h3>Text Callout, including arrows</h3>
+        <div class="grid g2">
+          <figure><img src="img/08-callout-1.jpg" alt="Callout with Arrow style" loading="lazy"><figcaption><b>Arrow</b> style: an animated arrow points at the first region, with its text as a label.</figcaption></figure>
+          <figure><img src="img/08-callout-2.jpg" alt="Callout with Step Counter style" loading="lazy"><figcaption><b>Step Counter</b>: a numbered badge, e.g. "Step 1: Name the task".</figcaption></figure>
+        </div>
+        <p>Pick the <b>Style</b>: <b>Label</b> (boxed text at the region), <b>Step Counter</b>, <b>Lower Third</b> (a banner along the bottom) or <b>Arrow</b>, with <b>Arrow comes from</b> to choose its direction. Each text panel has its own <b>Font Size</b>. Without a region, use <b>Quick Text</b>.</p>
+
+        <h3>Blur</h3>
+        <figure><img src="img/09-blur.jpg" alt="Blur panel" loading="lazy"><figcaption>Hide API keys, emails or anything private.</figcaption></figure>
+        <p><b>Blur Radius</b> goes from <i>Subtle</i> to <i>Heavy</i>. A low radius still reads as "something was here", which is often what you want.</p>
+
+        <h3>Speed Ramp, Skip / Cut, Mute</h3>
+        <figure><img src="img/10-speed.jpg" alt="Speed Ramp panel" loading="lazy"><figcaption>Speed up a stretch where you're typing or waiting.</figcaption></figure>
+        <ul>
+          <li><b>Speed Ramp</b>: a <b>Speed Factor</b> from 0.25× (slow motion) to 4×, until an <b>End Timestamp</b>.</li>
+          <li><b>Skip / Cut</b>: removes a stretch completely (key <kbd>9</kbd>), e.g. a slow page load.</li>
+          <li><b>Mute</b>: silences the recording's own audio for a range (only matters for imported videos with sound).</li>
+        </ul>
+
+        <h3>Music</h3>
+        <p><b>Select Audio File…</b> (mp3, wav, ogg, m4a, aac), then set <b>Volume</b> and <b>Duck to … during narration</b>: the music drops automatically whenever someone is speaking. It loops under the whole video.</p>
+      </div>
+
+      <!-- 8 -->
+      <div class="step" id="produce">
+        <h2><span class="n">08</span>Produce the video</h2>
+        <figure><img src="img/14-produce.jpg" alt="Produce Video dialog" loading="lazy"><figcaption>Produce Video: trim, resolution, quality, and which effects to include.</figcaption></figure>
+        <ol class="steps">
+          <li>Click <b>Produce</b>.</li>
+          <li>Optional: turn on <b>Trim Video</b> and set <b>In</b> and <b>Out</b>.</li>
+          <li>Pick a <b>Resolution</b> (480p to 4K; 1080p by default) and a <b>Quality</b>: <b>High</b> (best, larger file), <b>Medium</b> (balanced) or <b>Low</b> (smallest).</li>
+          <li>Under <b>Effects to Include</b>, untick anything you want to leave out this time.</li>
+          <li>Click <b>Produce (N)</b>. A live log shows each pass; <b>Cancel Production</b> stops it.</li>
+        </ol>
+        <figure><img src="img/15-versions.jpg" alt="Produced Versions panel" loading="lazy"><figcaption><b>Versions</b> lists every video you've produced, newest first, with <b>Open</b> and <b>Show in Folder</b>.</figcaption></figure>
+        <p>Each run saves a new file, <code>final_v1.mp4</code>, <code>final_v2.mp4</code> and so on, so earlier versions are never overwritten.</p>
+      </div>
+
+      <!-- 9 -->
+      <div class="step" id="shortcuts">
+        <h2><span class="n">09</span>Keyboard shortcuts</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Keys</th><th>Does</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>Space</kbd></td><td>Play / pause</td></tr>
+            <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Seek 1 second (<kbd>Shift</kbd>: 5 seconds)</td></tr>
+            <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>Add Zoom, Narrate, Spotlight, Blur, Mute, Speed, Callout, Music, Skip at the playhead</td></tr>
+            <tr><td><kbd>D</kbd></td><td>Duplicate the selected action (1 s later)</td></tr>
+            <tr><td><kbd>B</kbd></td><td>Split the selected ranged action at the playhead</td></tr>
+            <tr><td><kbd>Alt</kbd>+arrows</td><td>Nudge the selected action's regions 1 px (<kbd>Shift</kbd>: 10 px)</td></tr>
+            <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>Delete the selected action</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Undo · redo (<kbd>Ctrl</kbd>+<kbd>Y</kbd> also redoes)</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Save</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Cancel a drag or draw, close a dialog, deselect</td></tr>
+          </tbody>
+        </table></div>
+        <figure><img src="img/16-help.jpg" alt="In-app Help panel" loading="lazy"><figcaption>The <b>?</b> at the top right opens the in-app help with the same reference.</figcaption></figure>
+      </div>
+
+      <!-- 10 -->
+      <div class="step" id="files">
+        <h2><span class="n">10</span>Where your files live</h2>
+        <p>Each recording is a plain folder you can copy, back up or share:</p>
+<pre><code>~/NaraScreen/my-demo/
+├── demo-project.json        # everything you placed on the timeline
+├── recordings/recording.mp4 # the raw screen recording
+├── thumbnails/              # the timeline filmstrip
+├── audio/                   # generated and recorded narration
+└── video/final_v1.mp4       # what you produced</code></pre>
+      </div>
+
+      <!-- 11 -->
+      <div class="step" id="next">
+        <h2><span class="n">11</span>Going further</h2>
+        <p>Some effects are richer when written as a script: soft-edged and animated spotlights, arrow colours and the pencil-loop highlight, title and end cards, and every language rendered in one run. A script can also drive the browser for you, so a re-take is one command. The folder that command produces is a normal desktop session, so you can open it here to fine-tune by hand.</p>
+        <p><a href="https://github.com/MUKUL47/NaraScreen#scripts-and-the-http-api">Scripts and the HTTP API →</a> · <a href="https://github.com/MUKUL47/NaraScreen#for-ai-agents-llm-guide">LLM guide →</a></p>
+      </div>
+    </article>
+  </div>
+</div>
+
+<footer><div class="wrap">NaraScreen · MIT licensed · <a href="https://github.com/MUKUL47/NaraScreen">github.com/MUKUL47/NaraScreen</a></div></footer>
+</body>
+</html>

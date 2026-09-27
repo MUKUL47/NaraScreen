@@ -55,3 +55,6 @@ logs/
 *.sw?
 .DS_Store
 Thumbs.db
+
+# ─── GitHub Pages site: its own media is committed ──────────────
+!docs/media/*.mp4

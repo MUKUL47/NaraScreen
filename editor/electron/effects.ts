@@ -828,7 +828,9 @@ export function mixBackgroundMusic(
   // A video without an audio track (e.g. a screen recording with no
   // narration inserts) gets the music as its only audio, cut to its length.
   const mix = hasAudioStream(videoPath)
-    ? `[1:a]${volumeFilter},aloop=-1:2e9[music];[0:a][music]amix=inputs=2:duration=shortest:dropout_transition=2[aout]`
+    // normalize=0: amix otherwise halves both inputs, which left the narration ~6 dB
+    // quieter than the title/end cards. A limiter catches the rare voice+music peak.
+    ? `[1:a]${volumeFilter},aloop=-1:2e9[music];[0:a][music]amix=inputs=2:duration=shortest:dropout_transition=2:normalize=0,alimiter=limit=0.95:level=0[aout]`
     : `[1:a]${volumeFilter},aloop=-1:2e9,atrim=0:${probeDuration(videoPath).toFixed(3)}[aout]`;
   ffmpegSync([
     "-y",

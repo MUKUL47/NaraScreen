@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NaraScreen</title>
+<meta name="description" content="Narrated product demo videos, recorded by you or scripted by an AI agent. Free, local, open source.">
+<link rel="canonical" href="https://narascreen.mukuldutt.com/">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="NaraScreen">
+<meta property="og:url" content="https://narascreen.mukuldutt.com/">
+<meta property="og:title" content="NaraScreen">
+<meta property="og:description" content="Narrated product demo videos, recorded by you or scripted by an AI agent. Free, local, open source.">
+<meta property="og:image" content="https://narascreen.mukuldutt.com/media/showcase-poster.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://narascreen.mukuldutt.com/media/showcase-poster.jpg">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<header class="top"><div class="top-in">
+  <a class="brand" href="./"><span class="mark"></span>NaraScreen</a>
+  <nav>
+    <a href="tutorial/">Desktop tutorial</a>
+    <a href="#two-ways">How it works</a>
+    <a href="#agents">For AI agents</a>
+    <a href="https://github.com/MUKUL47/NaraScreen">GitHub</a>
+  </nav>
+</div></header>
+
+<main>
+  <div class="wrap">
+    <div class="hero">
+      <div class="eyebrow">Free · local · open source</div>
+      <h1>Narrated demo videos.<br><span class="soft">Recorded by you, or scripted by your AI.</span></h1>
+      <p class="lede">Record your screen and polish it on a timeline, or describe the walkthrough in one JSON file and let NaraScreen drive a real browser. Either way you get a finished MP4 with voiceover, subtitles, zooms, spotlights and arrows, made entirely on your machine.</p>
+      <div class="cta">
+        <a class="btn primary" href="tutorial/">Start the desktop tutorial →</a>
+        <a class="btn" href="https://github.com/MUKUL47/NaraScreen#for-ai-agents-llm-guide">LLM guide</a>
+        <a class="btn" href="media/showcase.demo-script.json">See the showcase script</a>
+      </div>
+    </div>
+
+    <div class="video">
+      <video src="media/narascreen-showcase.mp4" poster="media/showcase-poster.jpg" controls preload="metadata" playsinline></video>
+    </div>
+    <p class="caption">Every second of this video came from <a href="media/showcase.demo-script.json">one JSON script</a>: a real browser recording, Kokoro voices in English, Hindi and Japanese, and every effect drawn by NaraScreen.</p>
+  </div>
+
+  <section id="two-ways">
+    <div class="wrap">
+      <h2>Two ways to make a video</h2>
+      <p class="muted">Same renderer, same effects, same voices. Pick the one that fits the job.</p>
+      <div class="grid g2">
+        <div class="card">
+          <span class="tag">DESKTOP APP</span>
+          <h3>Record it yourself</h3>
+          <p>Click <b>Record Screen</b>, do your demo, then place zooms, spotlights, blurs, callouts and narration on a timeline. Hit <b>Produce</b>.</p>
+          <ul>
+            <li>Draw regions right on the video</li>
+            <li>Type narration, or record your own voice</li>
+            <li>Trim, pick a resolution, export</li>
+          </ul>
+          <p style="margin-top:14px"><a href="tutorial/">Read the step-by-step tutorial →</a></p>
+        </div>
+        <div class="card">
+          <span class="tag">SCRIPTS &amp; API</span>
+          <h3>Describe it, or let your AI write it</h3>
+          <p>One JSON file says what to click and what to say. NaraScreen records a real browser, generates the voice and renders every effect. It takes timestamps and coordinates off your hands.</p>
+<pre><code>narascreen validate demo.json   # instant
+narascreen check    demo.json   # dry run, no recording
+narascreen make     demo.json   # the video</code></pre>
+          <p>Or run <code>narascreen serve</code> and drive it over HTTP.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>What's in the box</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Effect</th><th>What the viewer sees</th><th>Desktop</th><th>Scripts</th></tr></thead>
+        <tbody>
+          <tr><td>Narrate</td><td>Voiceover with word-highlighted subtitles; the frame freezes or keeps playing</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Zoom</td><td>Smooth zoom into a region, hold while you talk, zoom out</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Spotlight</td><td>Everything but the element dims</td><td class="yes">✓</td><td class="yes">✓ + padding, soft edge, animated close-in</td></tr>
+          <tr><td>Arrow</td><td>A curved arrow draws itself to the element, with an optional label</td><td class="yes">✓</td><td class="yes">✓ + colour, pencil-loop highlight</td></tr>
+          <tr><td>Callout</td><td>Label, step counter, or lower-third banner</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Blur</td><td>Hide secrets (API keys, emails)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Speed / Skip / Mute</td><td>Fast-forward slow parts, cut waits, silence audio</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Music</td><td>Background music, automatically lowered under the voice</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Title &amp; end cards</td><td>Animated intro and outro with logo and call to action</td><td class="no">–</td><td class="yes">✓</td></tr>
+          <tr><td>Languages</td><td>9 languages, 54 voices (Kokoro); one video per language</td><td class="yes">✓</td><td class="yes">✓ all languages in one run</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="agents">
+    <div class="wrap narrow">
+      <h2>For AI agents</h2>
+      <p>Tell your assistant what video you want and point it at NaraScreen. The server publishes everything an agent needs:</p>
+<pre><code>editor/bin/narascreen serve          # http://127.0.0.1:4790
+curl http://127.0.0.1:4790/llms.txt  # start here: short, for LLMs
+curl http://127.0.0.1:4790/docs.md   # the full manual
+curl http://127.0.0.1:4790/v1/schema # JSON Schema of the demo script</code></pre>
+      <p>The agent writes the script, validates it, dry-runs it and makes the video. Every answer is one JSON envelope with <code>ok</code>, <code>error.code</code> and a <code>hint</code>. You can edit the script yourself at any time: text changes re-render without re-recording.</p>
+      <p><a href="https://github.com/MUKUL47/NaraScreen#for-ai-agents-llm-guide">Read the LLM guide in the README →</a></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap narrow">
+      <h2>Everything stays on your machine</h2>
+      <p>The browser, the voices (<a href="https://github.com/remsky/Kokoro-FastAPI">Kokoro</a>, in Docker) and the rendering (<a href="https://ffmpeg.org">FFmpeg</a>) all run locally. The HTTP server binds to <code>127.0.0.1</code> by default. No accounts, no uploads, no watermarks.</p>
+    </div>
+  </section>
+</main>
+
+<footer><div class="wrap">NaraScreen · MIT licensed · <a href="https://github.com/MUKUL47/NaraScreen">github.com/MUKUL47/NaraScreen</a></div></footer>
+</body>
+</html>
