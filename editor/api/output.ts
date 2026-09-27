@@ -8,38 +8,8 @@
 
 import { AgentError, exitCodeFor, toAgentError } from "./errors";
 
-export interface Envelope {
-  ok: boolean;
-  command: string;
-  result?: unknown;
-  error?: ReturnType<AgentError["toJSON"]>;
-  /** Non-fatal problems worth fixing (the command still succeeded). */
-  warnings: string[];
-  /** Suggested next commands, ready to run. */
-  next: string[];
-}
-
-/** Pipeline phases, in the order a `make` run goes through them. */
-export type Stage =
-  | "doctor"
-  | "validate"
-  | "inspect"
-  | "setup"
-  | "record"
-  | "tts"
-  | "compile"
-  | "render"
-  | "preview";
-
-export interface NaraEvent {
-  /** ISO timestamp. */
-  ts: string;
-  /** stage = a phase started · step = a script step started · log = detail line · warning */
-  type: "stage" | "step" | "log" | "warning";
-  stage?: Stage;
-  message: string;
-  data?: Record<string, unknown>;
-}
+import type { Envelope, NaraEvent, Stage } from "./protocol";
+export type { Envelope, EnvelopeError, NaraEvent, Stage } from "./protocol";
 
 export type Log = (msg: string) => void;
 

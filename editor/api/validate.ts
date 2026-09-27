@@ -766,20 +766,48 @@ function checkPlan(script: DemoScript, warnings: string[]) {
   }
 }
 
+/** Seconds of speech for `chars` characters at speed 1 — fitted to Kokoro's clips
+ *  (≈ 0.2 s + 1 s per 16.8 characters). */
+export function speechSec(chars: number, speed = 1): number {
+  return chars > 0 ? (0.2 + chars / 16.8) / speed : 0;
+}
+/** A recorded `audio` file's length is unknown until produce. */
+const RECORDED_AUDIO_GUESS_SEC = 4;
+
+/**
+ * What the script will roughly produce. The video is the recording plus what
+ * the renderer ADDS — the same rules produce.ts follows:
+ *  - narrate (freezes by default): the frame holds for the speech;
+ *    `freeze: false` talks over the recording and adds nothing (it used to be
+ *    counted too: a 27 s video with talk-over narration was estimated at 42 s);
+ *  - pause: its seconds (3 by default);
+ *  - zoom: zoomDuration in and out per target, holding for the target's
+ *    speech (or zoomHold);
+ *  - title/end cards: their duration (narration + ~1.3 s, or 3 s);
+ *  - skip / speed with `seconds` take out what they cut or speed up; browser
+ *    ranges (until a later act/step) are unknown until recording (see `note`).
+ */
 export function scriptSummary(script: DemoScript) {
   const d = { ...BUILTIN_DEFAULTS, ...script.defaults };
+  const speed = script.tts?.speed ?? 1;
   const fxCounts: Record<string, number> = {};
   let acts = 0;
-  let recordMs = 500;
-  let narrationChars = 0;
+  // The runner's lead-in, and its hold after the last entry (dwell + 0.5 s).
+  let recordMs = 500 + d.dwellMs + 500;
   let narrations = 0;
-  let recordedAudio = 0;
-  const countNarration = (n?: NarrationText, audio?: AudioSource) => {
-    if (n == null && audio == null) return;
+  let spokenSec = 0;
+  let addedSec = 0;
+  let unknownRanges = 0;
+  /** Speech seconds of one narration (0 when it has none), counted in the totals. */
+  const speak = (n?: NarrationText, audio?: AudioSource): number => {
+    if (n == null && audio == null) return 0;
     narrations++;
-    if (audio != null) recordedAudio++;
-    else if (typeof n === "string") narrationChars += n.length;
-    else if (n) narrationChars += (n.en ?? Object.values(n)[0] ?? "").length;
+    const sec =
+      audio != null
+        ? RECORDED_AUDIO_GUESS_SEC
+        : speechSec(typeof n === "string" ? n.length : n ? (n.en ?? Object.values(n)[0] ?? "").length : 0, speed);
+    spokenSec += sec;
+    return sec;
   };
   for (const beat of script.steps) {
     const dwell = beat.dwellMs ?? d.dwellMs;
@@ -795,20 +823,34 @@ export function scriptSummary(script: DemoScript) {
       const fx = e as FxEntry;
       if (fx.disabled) continue;
       fxCounts[fx.fx] = (fxCounts[fx.fx] ?? 0) + 1;
-      if (fx.fx === "narrate" || fx.fx === "zoom") countNarration(fx.narrate, fx.audio);
-      for (const t of fx.targets ?? []) countNarration(t.narrate, t.audio);
+      if (fx.anchor || fx.anchors?.length || fx.targets?.length) recordMs += d.revealMs;
+      if (fx.fx === "narrate") {
+        const sec = speak(fx.narrate, fx.audio);
+        if (fx.freeze !== false) addedSec += sec;
+      } else if (fx.fx === "pause") {
+        addedSec += fx.seconds ?? 3;
+      } else if (fx.fx === "zoom") {
+        const zoomIn = fx.zoomDuration ?? d.zoomDuration;
+        const hold = fx.zoomHold ?? d.zoomHold;
+        const targets = fx.targets?.length ? fx.targets : [fx];
+        targets.forEach((t, k) => {
+          const sec = speak(t.narrate, t.audio) || (k === 0 && fx.targets?.length ? speak(fx.narrate, fx.audio) : 0);
+          addedSec += 2 * zoomIn + (sec || hold);
+        });
+      } else if (fx.fx === "skip" || fx.fx === "speed") {
+        if (fx.seconds != null) addedSec -= fx.fx === "skip" ? fx.seconds : fx.seconds * (1 - 1 / (fx.factor ?? 2));
+        else unknownRanges++;
+      }
     }
   }
   const recordingSec = script.source ? probeDuration(script.source.video) : recordMs / 1000;
-  // ~15 characters/second for Kokoro at speed 1, plus 0.5s padding per clip.
-  // Recorded audio files are unknown until produce; count them as 4s each.
-  const speed = script.tts?.speed ?? 1;
-  let narrationSec = narrationChars / 15 / speed + narrations * 0.5 + recordedAudio * 4;
   // Title/end cards: their duration, or narration + a pause, or 3 s.
   for (const card of [script.intro, script.outro]) {
     if (!card) continue;
     const text = typeof card.narrate === "string" ? card.narrate : card.narrate ? (card.narrate.en ?? Object.values(card.narrate)[0] ?? "") : "";
-    narrationSec += typeof card.duration === "number" ? card.duration : text ? text.length / 15 / speed + 1.2 : 3;
+    const voice = speechSec(text.length, speed);
+    spokenSec += voice;
+    addedSec += typeof card.duration === "number" ? card.duration : text ? voice + 1.3 : 3;
   }
   return {
     mode: script.source ? "video" : "browser",
@@ -818,8 +860,11 @@ export function scriptSummary(script: DemoScript) {
     narrations,
     languages: script.languages ?? ["en"],
     estimatedRecordingSec: Math.round(recordingSec),
-    estimatedNarrationSec: Math.round(narrationSec),
-    estimatedVideoSec: Math.round(recordingSec + narrationSec),
-    note: fxCounts.skip || fxCounts.speed ? "skip/speed ranges shorten the video; not included in the estimate" : undefined,
+    /** Seconds of speech, talk-over narration included. */
+    estimatedNarrationSec: Math.round(spokenSec),
+    /** Seconds the renderer adds to the recording (freezes, zooms, pauses, cards; minus known cuts). */
+    estimatedAddedSec: Math.round(addedSec),
+    estimatedVideoSec: Math.round(Math.max(0, recordingSec + addedSec)),
+    note: unknownRanges ? "skip/speed ranges that end at a later act or step shorten the video; not included in the estimate" : undefined,
   };
 }

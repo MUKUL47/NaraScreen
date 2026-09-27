@@ -91,6 +91,12 @@ const MIN_RANGE_SEC = 0.05;
 const FPS = 30; // produce.ts renders inserts at 30 fps
 const CALLOUT_FONT = 28;
 const EDGE = 8; // keep callout panels this far inside the frame
+/** Height of libass's line box per px of callout fontSize (produce.ts ASS_FONT_SCALE). */
+const LINE = 1.25;
+/** Box padding of positioned callouts, x and y (produce.ts PANEL_PAD). */
+const PANEL_PAD = { label: { x: 10, y: 6 }, step: { x: 12, y: 7 } } as const;
+/** Gap between a label's box and its element. */
+const PANEL_GAP = 6;
 
 type Speaker = ReturnType<typeof narrationSlots>[number];
 
@@ -150,13 +156,33 @@ function overlayDuration(fx: FxEntry): { value: number; mode: DurationMode } {
   return { value: AUTO_FALLBACK_SEC, mode: fx.fx === "blur" ? "step-end" : "auto" };
 }
 
-/** Where step k ends in recording time: the first slot of the next step, or
- *  the recording end for the last step (shared by ranges and overlays). */
-function stepEndTime(script: DemoScript, byKey: Map<string, TraceEntry>, k: number, endOfRecording: number): number {
+/** The next step's trace slots, in order (none for the last step). */
+function nextStepSlots(script: DemoScript, byKey: Map<string, TraceEntry>, k: number): TimedTraceEntry[] {
   const next = script.steps[k + 1];
-  if (!next) return endOfRecording;
-  const ts = next.beat.map((_, j) => byKey.get(`${next.id}:${j}`)?.t).filter((x): x is number => x != null);
-  return ts.length ? Math.min(...ts) : endOfRecording;
+  if (!next) return [];
+  return next.beat.map((_, j) => byKey.get(`${next.id}:${j}`)).filter((x): x is TimedTraceEntry => x != null);
+}
+
+/** Where step k ends in recording time: when the next step BEGINS (its first
+ *  entry started running — before that entry scrolls or clicks anything), or
+ *  the recording end for the last step (shared by ranges and overlays). Traces
+ *  from older recordings have no start times: the next step's first slot time. */
+function stepEndTime(script: DemoScript, byKey: Map<string, TraceEntry>, k: number, endOfRecording: number): number {
+  const slots = nextStepSlots(script, byKey, k);
+  if (!slots.length) return endOfRecording;
+  const starts = slots.map((e) => e.start).filter((x): x is number => x != null);
+  return Math.min(...(starts.length ? starts : slots.map((e) => e.t)));
+}
+
+/** "step-end" for a BLUR: the secret may still be on screen while the next
+ *  step's first entry runs (the click that navigates away), so the blur holds
+ *  until that entry has finished; never before the step boundary itself. */
+function blurStepEndTime(script: DemoScript, byKey: Map<string, TraceEntry>, k: number, endOfRecording: number): number {
+  const slots = nextStepSlots(script, byKey, k);
+  const boundary = stepEndTime(script, byKey, k, endOfRecording);
+  if (!slots.length) return boundary;
+  const first = slots[0];
+  return Math.min(endOfRecording, Math.max(boundary, first.end ?? first.t));
 }
 
 /** The fields that make one narration audible to the producer.
@@ -191,8 +217,13 @@ function padRect([x, y, w, h]: Rect, p: number, vp: { width: number; height: num
 
 /** A label callout as one positioned panel: above its element by default,
  *  below when there is no room, or over it; kept inside the frame (text width
- *  estimated at 0.6·fontSize per character). Lower-thirds only get a panel
- *  when they set a fontSize (else the producer centers its own banner). */
+ *  estimated at 0.6·fontSize per character). The panel's rect is where the TEXT
+ *  starts; the box libass draws around it is LINE·fontSize + 2·pad.y tall
+ *  (55 px at 28 px before, when "above" only left fontSize + 16 px for it, so the
+ *  box overhung the element and reached far into what sits above it). Now its
+ *  bottom sits PANEL_GAP px above the element (its top PANEL_GAP px below it for
+ *  "below"), and its left edge lines up with the element's. Lower-thirds only
+ *  get a panel when they set a fontSize (else the producer centers its own banner). */
 function calloutPanel(
   fx: FxEntry,
   text: string,
@@ -209,16 +240,61 @@ function calloutPanel(
   }
   if (!rect) return undefined;
   const f = fx.fontSize ?? CALLOUT_FONT;
+  const pad = fx.style === "step-counter" ? PANEL_PAD.step : PANEL_PAD.label;
   const w = Math.round(0.6 * f * shown.length);
   const [rx, ry, , rh] = rect;
-  let y: number;
+  // y = the text's top; the box spans y − pad.y … y + LINE·f + pad.y.
+  const above = ry - PANEL_GAP - pad.y - LINE * f;
+  const below = ry + rh + PANEL_GAP + pad.y;
   const placement = fx.placement ?? "above";
-  if (placement === "over") y = ry;
-  else if (placement === "below") y = ry + rh + 12;
-  else y = ry - f - 16 < EDGE ? ry + rh + 12 : ry - f - 16;
-  const x = Math.max(EDGE, Math.min(rx, vp.width - w - EDGE));
-  y = Math.max(EDGE, Math.min(y, vp.height - f - EDGE));
+  let y = placement === "over" ? ry + pad.y : placement === "below" ? below : above - pad.y < EDGE ? below : above;
+  const x = Math.max(EDGE + pad.x, Math.min(rx + pad.x, vp.width - w - EDGE - pad.x));
+  y = Math.max(EDGE + pad.y, Math.min(y, vp.height - EDGE - pad.y - LINE * f));
   return { text, rect: [Math.round(x), Math.round(y), w, f], fontSize: f };
+}
+
+/** A text callout's box on screen as produce.ts draws it (text width estimated
+ *  generously); undefined for arrows and non-callouts. */
+function calloutBox(a: NaraAction, vp: { width: number; height: number }): Rect | undefined {
+  if (a.type !== "callout" || a.calloutStyle === "arrow") return undefined;
+  const style = a.calloutStyle ?? "label";
+  const text = a.calloutText ?? a.calloutPanels?.[0]?.text ?? "";
+  const shown = style === "step-counter" && a.calloutStep ? `Step ${a.calloutStep}: ${text}` : text;
+  const width = (fs: number) => 0.6 * fs * shown.length;
+  const p = a.calloutPanels?.[0];
+  if (p) {
+    const pad = style === "step-counter" ? PANEL_PAD.step : PANEL_PAD.label;
+    return [p.rect[0] - pad.x, p.rect[1] - pad.y, width(p.fontSize) + 2 * pad.x, LINE * p.fontSize + 2 * pad.y];
+  }
+  if (style === "lower-third") {
+    const w = width(36) + 30; // the producer's banner: 36 px, padding 15, text top at h − 80
+    return [(vp.width - w) / 2, vp.height - 95, w, LINE * 36 + 30];
+  }
+  const [x, y] = (a.calloutPosition as [number, number] | undefined) ?? [100, 100];
+  return [x - 10, y - 10, width(28) + 20, LINE * 28 + 20];
+}
+
+/**
+ * Does a later overlay `b` take the screen slot of an earlier one `a` (so an
+ * "auto" `a` ends when `b` appears)? Slots:
+ *  - spotlight: one at a time (overlapping spotlights can't be rendered);
+ *  - arrow: one at a time; arrows and text callouts never end each other;
+ *  - lower-third: the one bottom banner — the next lower-third replaces it;
+ *  - step-counter: a numbered sequence — "Step 2" replaces "Step 1";
+ *  - any other pair of text callouts (label ↔ label, label ↔ step-counter,
+ *    label or step-counter ↔ lower-third): only when their boxes overlap.
+ * So a lower-third and a label next to an element, or labels on different
+ * elements, stay up together.
+ */
+function takesSlot(a: NaraAction, b: NaraAction, vp: { width: number; height: number }): boolean {
+  if (a.type === "spotlight" || b.type === "spotlight") return a.type === b.type;
+  if (a.type !== "callout" || b.type !== "callout") return false;
+  const kind = (x: NaraAction) => (x.calloutStyle === "arrow" ? "arrow" : x.calloutStyle ?? "label");
+  const [ka, kb] = [kind(a), kind(b)];
+  if (ka === "arrow" || kb === "arrow") return ka === kb;
+  if (ka === kb && (ka === "lower-third" || ka === "step-counter")) return true;
+  const [ba, bb] = [calloutBox(a, vp), calloutBox(b, vp)];
+  return !!ba && !!bb && ba[0] < bb[0] + bb[2] && bb[0] < ba[0] + ba[2] && ba[1] < bb[1] + bb[3] && bb[1] < ba[1] + ba[3];
 }
 
 /** Build one NaraScreen action from an fx entry + its trace slot.
@@ -399,7 +475,12 @@ export function compile(
       out.action.name = `${beat.id} #${i} ${entry.fx}`;
       if (isRange(entry)) setRangeEnd(out.action, rangeEnd(script, byKey, s, i, entry, tr.t, endOfRecording, opts.durationSec));
       const mode = overlayDuration(entry).mode;
-      const windowEnd = mode === "end" ? endOfRecording : mode === "step-end" ? stepEndTime(script, byKey, s, endOfRecording) : undefined;
+      const windowEnd =
+        mode === "end"
+          ? endOfRecording
+          : mode === "step-end"
+            ? (entry.fx === "blur" ? blurStepEndTime : stepEndTime)(script, byKey, s, endOfRecording)
+            : undefined;
       slots.push({ s, i, step: beat.id, path, fx: entry, t: tr.t, action: out.action, clips: out.clips, mode, windowEnd });
     });
   });
@@ -420,9 +501,9 @@ export function compile(
   }
   const clipSec = new Map<string, number>();
   for (const c of clips?.values() ?? []) clipSec.set(c.audioPath, c.durationSec);
-  const tl = modelTimeline(actions, (p) => clipSec.get(p));
+  const tl = modelTimeline(actions, (p) => clipSec.get(p), opts.durationSec);
 
-  resolveOverlays(kept, actions, tl, warnings);
+  resolveOverlays(kept, actions, tl, warnings, script.viewport);
   for (const p of plugins) p.adjustActions?.(actions);
   return actions;
 }
@@ -522,13 +603,14 @@ function tidyRanges(slots: Slot[], warnings: string[]): Slot[] {
 
 export interface InsertSpan {
   action: NaraAction;
-  /** where the insert happens, in post-skip/speed seconds (produce.ts's mappedTs) */
+  /** where the insert happens, in post-skip/speed seconds (produce.ts's mappedTs;
+   *  an insert inside a talk-over narration's stretch waits until it ends) */
   at: number;
   /** seconds of video the insert itself contributes */
   length: number;
   /** what produce.ts books as "added" for overlay remapping (buildInsertRemap) */
   added: number;
-  /** what the insert really adds to the final timeline */
+  /** what the insert really adds to the final timeline (= added) */
   delta: number;
   /** real start on the final timeline */
   start: number;
@@ -614,11 +696,19 @@ function speedRemap(ranges: (Range & { factor: number })[]): (t: number) => numb
  *  - pause: resumeAfter seconds, else 3.
  *  - narrate, freeze: a freeze of audio+0.5 s muxed with the audio under
  *    `-shortest` → really the clip length (3 s when there is no audio).
- *  - narrate, no freeze: plays audio+0.5 s of source, also `-shortest`-trimmed
- *    to the clip, then resumes after audio+0.5 s: books +0 (max(0, …)) but
- *    really shortens the timeline by 0.5 s.
+ *  - narrate, no freeze (talk-over): plays audio+0.5 s of source (resumeAfter,
+ *    else 3 s without audio) and resumes right after it: adds nothing — except
+ *    where the recording ends first, whose last frame is held for the rest
+ *    (modelled when `recordingSec` is known).
+ *  - an insert that falls inside the stretch a talk-over narration plays waits
+ *    until that narration ends (its frames would otherwise play twice); one
+ *    within 0.05 s after the previous insert's resume point starts right there.
  */
-export function modelTimeline(actions: NaraAction[], audioSec: (audioPath: string) => number | undefined): Timeline {
+export function modelTimeline(
+  actions: NaraAction[],
+  audioSec: (audioPath: string) => number | undefined,
+  recordingSec?: number,
+): Timeline {
   const skips = actions
     .filter((a) => a.type === "skip" && a.skipEndTimestamp)
     .map((a) => ({ start: a.timestamp, end: a.skipEndTimestamp!, action: a }))
@@ -644,8 +734,11 @@ export function modelTimeline(actions: NaraAction[], audioSec: (audioPath: strin
     .sort((x, y) => x.at - y.at);
 
   const inserts: InsertSpan[] = [];
+  const recordingEnd = recordingSec != null ? mapped(recordingSec) : undefined;
   let shift = 0;
-  for (const { a, at } of ordered) {
+  let cursor = 0; // post-skip/speed source consumed so far (produce.ts's insert-pass cursor)
+  for (const { a, at: stamped } of ordered) {
+    const at = stamped < cursor + 0.05 ? cursor : stamped;
     let length: number;
     let added: number;
     let delta: number;
@@ -669,17 +762,27 @@ export function modelTimeline(actions: NaraAction[], audioSec: (audioPath: strin
       const clip = narrationSec(a, audioSec);
       let planned = clip != null ? clip + NARRATION_TAIL_SEC : 3;
       if (typeof a.resumeAfter === "number") planned = a.resumeAfter;
-      length = clip != null ? Math.min(planned, clip) : planned;
       if (a.freeze === true) {
+        length = clip != null ? Math.min(planned, clip) : planned;
         added = delta = length;
       } else {
-        added = Math.max(0, length - planned);
-        delta = length - planned;
+        // Talk-over: plays `planned` s of the recording; only past its end is a frame held.
+        length = planned;
+        const consumed = recordingEnd != null ? Math.max(0, Math.min(planned, recordingEnd - at)) : planned;
+        added = delta = length - consumed;
+        cursor = at + consumed;
       }
     }
+    if (a.type !== "narrate" || a.freeze === true) cursor = at;
     inserts.push({ action: a, at, length, added, delta, start: at + shift, ...(holds ? { holds } : {}) });
     shift += delta;
   }
+  // Without the recording's length a talk-over narration running past its end
+  // isn't known until finalDuration(recordingSec) asks: its held tail counts there.
+  const heldTail = (end: number) =>
+    recordingEnd != null
+      ? 0
+      : inserts.reduce((sum, sp) => (sp.action.type === "narrate" && sp.action.freeze !== true ? sum + Math.max(0, sp.at + sp.length - Math.max(sp.at, end)) : sum), 0);
 
   const boundaries = [
     ...skips.map((r) => ({ at: mapped(r.start), action: r.action })),
@@ -697,7 +800,7 @@ export function modelTimeline(actions: NaraAction[], audioSec: (audioPath: strin
     realAt: (m) => m + sumBefore(m, "delta"),
     boundaries,
     addedSec: shift,
-    finalDuration: (recordingSec) => mapped(recordingSec) + shift,
+    finalDuration: (sec) => mapped(sec) + shift + heldTail(mapped(sec)),
   };
 }
 
@@ -726,11 +829,13 @@ function overlayDurationOf(a: NaraAction): number {
  *   Caps (each keeps a 0.05 s gap):
  *    - never into a zoom: start(z) − P for the first zoom at/after t_i (warning);
  *    - never across a skip cut or a speed-range edge: realAt(b) − P (warning);
- *    - never past the next overlay of the same fx type: placed(t_k) − P.
+ *    - never past the next overlay that takes its screen slot (takesSlot: the
+ *      next spotlight / arrow / lower-third / step-counter, or a text callout
+ *      whose box overlaps it): placed(t_k) − P.
  *   Minimum 0.5 s.
  * "step-end" / "end": target = realAt(mapped(end of step / recording)) − P, with
- * the same caps, except that only spotlights yield to the next overlay of their
- * kind. (Blur: see resolveBlur.)
+ * the same caps, except that only spotlights yield to the next spotlight.
+ * (Blur: see resolveBlur.)
  * start(j) − P = (t_j − t_i) + Σ real lengths of the inserts between them — the
  * spec's "(t_j − t_i) + inserts between + narration", with the lengths the
  * producer really renders. Lower-third callouts are not tied to an element, so
@@ -748,7 +853,7 @@ function overlayDurationOf(a: NaraAction): number {
  *   for freeze:false, its start + clip + 0.5 s; else 3 s.  Minimum 0.5 s.
  * No zoom, range or same-type caps: a blur never lifts early.
  */
-function resolveBlur(sl: Slot, slots: Slot[]) {
+function resolveBlur(sl: Slot, slots: Slot[], tl: Timeline, spanOf: Map<NaraAction, InsertSpan>) {
   if (sl.mode === "fixed") return;
   let dur: number;
   if (sl.mode === "end") {
@@ -758,13 +863,18 @@ function resolveBlur(sl: Slot, slots: Slot[]) {
   } else {
     const j = slots.find((o) => o.s === sl.s && o.i > sl.i && (o.fx.fx === "narrate" || o.fx.fx === "zoom") && o.clips.length);
     if (!j) dur = AUTO_FALLBACK_SEC;
-    else if (j.fx.fx === "narrate" && j.fx.freeze === false) dur = j.t + j.clips[0].durationSec + NARRATION_TAIL_SEC - sl.t;
-    else dur = j.t + NARRATION_TAIL_SEC - sl.t;
+    else {
+      // A narration that had to wait for an earlier talk-over one starts later than its slot.
+      const sp = spanOf.get(j.action);
+      const waited = sp ? Math.max(0, sp.at - tl.mapped(j.t)) : 0;
+      const from = j.t + waited;
+      dur = (j.fx.fx === "narrate" && j.fx.freeze === false ? from + j.clips[0].durationSec : from) + NARRATION_TAIL_SEC - sl.t;
+    }
   }
   setOverlayDuration(sl.action, Math.max(AUTO_MIN_SEC, round3(dur)));
 }
 
-function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, warnings: string[]) {
+function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, warnings: string[], vp: { width: number; height: number }) {
   const spanOf = new Map<NaraAction, InsertSpan>(tl.inserts.map((sp) => [sp.action, sp]));
   const slotOf = new Map<NaraAction, Slot>(slots.map((sl) => [sl.action, sl]));
   const orderOf = new Map<NaraAction, number>(actions.map((a, k) => [a, k]));
@@ -773,7 +883,7 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
   for (const sl of slots) {
     if (!isOverlay(sl.fx)) continue;
     if (sl.fx.fx === "blur") {
-      resolveBlur(sl, slots);
+      resolveBlur(sl, slots, tl, spanOf);
       continue;
     }
     const m = tl.mapped(sl.t);
@@ -813,12 +923,10 @@ function resolveOverlays(slots: Slot[], actions: NaraAction[], tl: Timeline, war
       const b = tl.boundaries.find((x) => x.at > m + 1e-6);
       if (b) caps.push({ at: tl.realAt(b.at) - P - CAP_GAP_SEC, why: "range", action: b.action });
     }
-    // "auto" never runs into the next overlay of its kind; the explicit end
-    // modes only yield to the next spotlight (overlapping spotlights fail).
+    // "auto" never runs into the next overlay that takes its screen slot; the
+    // explicit end modes only yield to the next spotlight (overlapping spotlights fail).
     const capSame = auto || sl.action.type === "spotlight";
-    // An arrow and a label are different kinds: an arrow isn't cut short by the label beside it.
-    const kind = (a: NaraAction) => (a.type === "callout" && a.calloutStyle === "arrow" ? "arrow" : a.type);
-    const nextSame = capSame ? actions.slice(orderOf.get(sl.action)! + 1).find((a) => kind(a) === kind(sl.action)) : undefined;
+    const nextSame = capSame ? actions.slice(orderOf.get(sl.action)! + 1).find((a) => takesSlot(sl.action, a, vp)) : undefined;
     if (nextSame) caps.push({ at: tl.placed(nextSame.timestamp) - P - CAP_GAP_SEC, why: "same", action: nextSame });
     const binding = caps.filter((c) => c.at < target).sort((x, y) => x.at - y.at)[0];
     const dur = Math.max(AUTO_MIN_SEC, round3(binding ? binding.at : target));

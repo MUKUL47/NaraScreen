@@ -179,8 +179,10 @@ test("callout label: anchored rect → one panel above the element", () => {
   ];
   const [a] = compile(script, trace);
   assert.equal(a.calloutPosition, undefined);
-  // y = 320 − 28 − 16; width ≈ 0.6 · 28 · 6 chars
-  assert.deepEqual(a.calloutPanels, [{ text: "Toggle", rect: [500, 276, 101, 28], fontSize: 28 }]);
+  // The box libass draws is 1.25·28 + 2·6 = 47 px tall: its bottom sits 6 px above the
+  // element (text top y = 320 − 6 − 6 − 35) and its left edge on the element's (x = 500 + 10).
+  // Width ≈ 0.6 · 28 · 6 chars.
+  assert.deepEqual(a.calloutPanels, [{ text: "Toggle", rect: [510, 273, 101, 28], fontSize: 28 }]);
 });
 
 // Review fix: an unset blur duration means "step-end" (a secret must not be
@@ -574,11 +576,11 @@ test("modelTimeline: insert lengths/order match produce.ts", () => {
   const tl = modelTimeline(actions, (p) => ({ "/n1.wav": 2.4, "/n2.wav": 2 })[p]);
   // ties at t=5: zoom, then pause, then narrate (the producer's concat order)
   assert.deepEqual(tl.inserts.map((s) => s.action.id), ["3", "2", "1", "4", "5"]);
-  assert.deepEqual(tl.inserts.map((s) => round(s.length)), [3.6, 3, 2.4, 2, 1.5]);
-  // freeze:false narration: booked +0, really −0.5 (plays clip, skips clip + 0.5)
-  assert.deepEqual([tl.inserts[3].added, tl.inserts[3].delta], [0, -0.5]);
-  assert.deepEqual(tl.inserts.map((s) => round(s.start)), [5, 8.6, 11.6, 18, 20.5]);
-  assert.equal(round(tl.addedSec), 10); // 3.6 + 3 + 2.4 − 0.5 + 1.5
+  assert.deepEqual(tl.inserts.map((s) => round(s.length)), [3.6, 3, 2.4, 2.5, 1.5]);
+  // freeze:false narration: plays clip + 0.5 s of the recording and resumes right after it → adds nothing
+  assert.deepEqual([tl.inserts[3].added, tl.inserts[3].delta], [0, 0]);
+  assert.deepEqual(tl.inserts.map((s) => round(s.start)), [5, 8.6, 11.6, 18, 21]);
+  assert.equal(round(tl.addedSec), 10.5); // 3.6 + 3 + 2.4 + 0 + 1.5
   assert.equal(round(tl.placed(5)), 5, "an overlay AT an insert's timestamp starts before it");
   assert.equal(round(tl.placed(6)), 6 + 9);
 });
@@ -699,16 +701,20 @@ test("callout panels: placement above/below/over, room fallback, clamping, sizes
     return compile(script, [{ beat: "s", i: 0, kind: "fx", fx: "callout", t: 1, ...(rect ? { rect } : {}) }])[0];
   };
   const el: [number, number, number, number] = [300, 400, 200, 40];
-  assert.deepEqual(one({}, el).calloutPanels, [{ text: "Label", rect: [300, 356, 84, 28], fontSize: 28 }]);
-  assert.deepEqual(one({ placement: "below" }, el).calloutPanels![0].rect, [300, 452, 84, 28]);
-  assert.deepEqual(one({ placement: "over", fontSize: 48 }, el).calloutPanels, [{ text: "Label", rect: [300, 400, 144, 48], fontSize: 48 }]);
+  // rect = where the text starts; its box (label padding 10 × 6) is 1.25·f + 12 tall,
+  // its left edge on the element's, 6 px clear of it: above → box bottom at 394
+  assert.deepEqual(one({}, el).calloutPanels, [{ text: "Label", rect: [310, 353, 84, 28], fontSize: 28 }]);
+  // below → box top at 446 (element bottom 440 + 6)
+  assert.deepEqual(one({ placement: "below" }, el).calloutPanels![0].rect, [310, 452, 84, 28]);
+  // over → box top-left on the element's
+  assert.deepEqual(one({ placement: "over", fontSize: 48 }, el).calloutPanels, [{ text: "Label", rect: [310, 406, 144, 48], fontSize: 48 }]);
   // no room above → below
-  assert.deepEqual(one({}, [100, 20, 50, 20]).calloutPanels![0].rect, [100, 52, 84, 28]);
-  // kept inside the frame: x ≤ 1440 − width − 8
-  assert.deepEqual(one({ text: "A much longer label" }, [1400, 400, 30, 30]).calloutPanels![0].rect, [1113, 356, 319, 28]);
-  // the producer prefixes "Step N: " — the width estimate includes it
+  assert.deepEqual(one({}, [100, 20, 50, 20]).calloutPanels![0].rect, [110, 52, 84, 28]);
+  // kept inside the frame: box right edge ≤ 1440 − 8
+  assert.deepEqual(one({ text: "A much longer label" }, [1400, 400, 30, 30]).calloutPanels![0].rect, [1103, 353, 319, 28]);
+  // the producer prefixes "Step N: " — the width estimate includes it; step-counter padding 12 × 7
   const sc = one({ style: "step-counter", step: 3, text: "Save" }, el);
-  assert.deepEqual(sc.calloutPanels, [{ text: "Save", rect: [300, 356, 202, 28], fontSize: 28 }]);
+  assert.deepEqual(sc.calloutPanels, [{ text: "Save", rect: [312, 352, 202, 28], fontSize: 28 }]);
   assert.equal(sc.calloutStep, 3);
   // lower-third: the producer's banner, unless a fontSize asks for a panel
   assert.equal(one({ style: "lower-third" }).calloutPanels, undefined);

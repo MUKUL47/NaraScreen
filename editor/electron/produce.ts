@@ -362,6 +362,14 @@ function assColor(rgb: number, opacity: number): string {
   return `&H${hex(a)}${hex(rgb & 0xff)}${hex((rgb >> 8) & 0xff)}${hex((rgb >> 16) & 0xff)}`;
 }
 
+/**
+ * Box padding (x, y) of callouts positioned at an element (calloutPanels): a
+ * compact box — the text's line is already 1.25 × its size — so a label above
+ * an element covers as little as possible of what sits above it. The compiler
+ * (api/compiler.ts PANEL_PAD) places labels with the same numbers.
+ */
+export const PANEL_PAD = { label: { x: 10, y: 6 }, step: { x: 12, y: 7 } } as const;
+
 /** Callout styles: white text on a box (BorderStyle 4 = one box per event,
  *  BackColour, Outline = padding), same colours/paddings as the old drawtext:
  *  label black@0.8/10, step-counter blue@0.9/12, lower-third black@0.7/15,
@@ -795,10 +803,10 @@ function calloutEvents(actions: Action[], res: { width: number; height: number }
     }
     const step = action.calloutStep;
     const prefix = (t: string) => (style === "step-counter" && step ? `Step ${step}: ${t}` : t);
-    const line = (st: string, x: number, y: number, text: string, fs?: number) =>
+    const line = (st: string, x: number, y: number, text: string, fs?: number, pad?: { x: number; y: number }) =>
       out.push(
         `Dialogue: 0,${secToAssTs(start)},${secToAssTs(end)},${st},,0,0,0,,` +
-          `{\\q2\\pos(${Math.round(x)},${Math.round(y)})${fs ? `\\fs${Math.round(fs * ASS_FONT_SCALE)}` : ""}}${assEscape(text)}`,
+          `{\\q2\\pos(${Math.round(x)},${Math.round(y)})${fs ? `\\fs${Math.round(fs * ASS_FONT_SCALE)}` : ""}${pad ? `\\xbord${pad.x}\\ybord${pad.y}` : ""}}${assEscape(text)}`,
       );
 
     const panels = action.calloutPanels;
@@ -806,7 +814,10 @@ function calloutEvents(actions: Action[], res: { width: number; height: number }
       emit(`    Callout at ${start.toFixed(1)}s-${end.toFixed(1)}s (${panels.length} panel${panels.length > 1 ? "s" : ""})`);
       for (const panel of panels) {
         // a step-counter keeps its blue box when it is positioned as a panel
-        if (panel.text) line(style === "step-counter" ? "CStep" : "CPanel", panel.rect[0], panel.rect[1], prefix(panel.text), panel.fontSize || 24);
+        if (panel.text) {
+          const step = style === "step-counter";
+          line(step ? "CStep" : "CPanel", panel.rect[0], panel.rect[1], prefix(panel.text), panel.fontSize || 24, step ? PANEL_PAD.step : PANEL_PAD.label);
+        }
       }
       continue;
     }
@@ -1944,8 +1955,8 @@ export async function produceTimelineVideo(
       .filter((a) => a.calloutStyle === "lower-third")
       .map((a) => {
         const panel = a.calloutPanels?.[0];
-        // producer banner: text top at h-80, 36 px, 15 px box border; panel: its y, 10 px border
-        const boxTop = panel ? panel.rect[1] - 10 : res.height - 95;
+        // producer banner: text top at h-80, 36 px, 15 px box border; panel: its y, PANEL_PAD above
+        const boxTop = panel ? panel.rect[1] - PANEL_PAD.label.y : res.height - 95;
         return { start: a.timestamp, end: a.timestamp + (a.calloutDuration ?? 3), lift: res.height - boxTop + 12 };
       });
     for (const cue of subtitleCues) {
