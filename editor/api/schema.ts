@@ -72,7 +72,9 @@ export type FxVerb =
   | "narrate"
   | "speed"
   | "skip"
-  | "mute";
+  | "mute"
+  | "highlight"
+  | "chapter";
 
 export const ARROW_FROM = ["left", "right", "above", "below", "top-left", "top-right", "bottom-left", "bottom-right"] as const;
 export type ArrowFrom = (typeof ARROW_FROM)[number];
@@ -89,9 +91,9 @@ export const TARGETED_ACTS: ActVerb[] = ["waitFor", "click", "fill", "select", "
  *  (when they have a selector; the box is measured after the act). */
 export const RECT_ACTS: ActVerb[] = ["click", "fill", "select", "hover", "scroll", "waitFor", "press", "upload", "swipe"];
 /** fx that need an element box (anchor or inherited from the previous act). */
-export const RECT_FX: FxVerb[] = ["zoom", "spotlight", "blur", "arrow"];
+export const RECT_FX: FxVerb[] = ["zoom", "spotlight", "blur", "arrow", "highlight"];
 /** fx that draw over the video for a time window (duration may be "auto"). */
-export const OVERLAY_FX: FxVerb[] = ["spotlight", "callout", "blur", "arrow"];
+export const OVERLAY_FX: FxVerb[] = ["spotlight", "callout", "blur", "arrow", "highlight"];
 /** fx that change a stretch of the recording (range = until | seconds). */
 export const RANGE_FX: FxVerb[] = ["speed", "skip", "mute"];
 
@@ -179,8 +181,13 @@ export interface FxEntry {
   disabled?: boolean;
   /** callout: the label text, or one per language (falls back to en). */
   text?: string | Record<string, string>;
-  style?: "label" | "lower-third" | "step-counter";
+  /** callout: label | lower-third | step-counter. highlight: marker (default) | underline. */
+  style?: "label" | "lower-third" | "step-counter" | "marker" | "underline";
   step?: number;
+  /** highlight: split the element's box into this many line boxes (one stroke each). */
+  lines?: number;
+  /** chapter: the chapter's title, or one per language. */
+  title?: string | Record<string, string>;
   /** callout: font size in px (default 28) and position relative to its element. */
   fontSize?: number;
   placement?: "above" | "below" | "over";
@@ -234,7 +241,24 @@ export interface Beat {
   note?: string;
   /** Pause after every entry in this beat (overrides defaults.dwellMs). */
   dwellMs?: number;
+  /** Follow camera for this step only (overrides the script's `camera`). */
+  camera?: StepCamera;
+  /** Start a chapter where this step begins: its title (or per language), or true = the step's label. */
+  chapter?: string | Record<string, string> | boolean;
+  /** How the page change at the start of this step is shown (overrides the script's `transition`). */
+  transition?: StepTransition;
   beat: BeatEntry[];
+}
+
+/** A step transition: "fade" | "slide" | "none", or with its length in seconds. */
+export type StepTransition = "fade" | "slide" | "none" | { type: "fade" | "slide" | "none"; duration?: number };
+
+/** Chapter options (chapters themselves are set on steps / with fx "chapter"). */
+export interface ChaptersConfig {
+  /** Show a short chapter-title badge at each chapter start (default false). */
+  onScreen?: boolean;
+  /** Title of the implicit first chapter at 0:00 (title card / before the first chapter). Default "Intro". */
+  introTitle?: string | Record<string, string>;
 }
 
 export interface DemoDefaults {
@@ -293,6 +317,14 @@ export interface DemoScript {
   /** Title card before the video / end card after it. */
   intro?: Card;
   outro?: Card;
+  /** The mouse pointer drawn into browser recordings (default: shown). */
+  cursor?: CursorConfig;
+  /** Follow camera: zoom toward where the action is while the video plays. */
+  camera?: CameraConfig;
+  /** Default transition for every step after the first (a step's own `transition` wins). */
+  transition?: StepTransition;
+  /** Chapter options (on-screen badges, the lead chapter's title). */
+  chapters?: ChaptersConfig;
   steps: Beat[];
 }
 
@@ -312,6 +344,30 @@ export interface Card {
   voice?: string;
   duration?: number | "auto";
 }
+
+/** The drawn mouse pointer (browser scripts). */
+export interface CursorConfig {
+  /** default true for browser scripts (false for touch plugins such as flutter) */
+  show?: boolean;
+  /** size multiplier, 1 = default (~30 px tall on a 900 px video) */
+  size?: number;
+  /** squeeze + ripple on every click (default true) */
+  clickEffect?: boolean;
+  /** pointer fill #RRGGBB (default white) */
+  color?: string;
+}
+
+/** Follow camera (live zoom that tracks the action). */
+export interface CameraConfig {
+  follow?: boolean;
+  /** zoom while framing the action (default 1.8) */
+  scale?: number;
+  /** seconds per camera move (default 0.8) */
+  ease?: number;
+  /** seconds the camera stays after the action before easing out (default 1.2) */
+  hold?: number;
+}
+export type StepCamera = Pick<CameraConfig, "follow" | "scale">;
 
 export interface DemoPlan {
   audience?: string;
@@ -561,7 +617,32 @@ export const FxEntrySchema = z.discriminatedUnion("fx", [
   }, "Speed up (or slow down) a stretch of the recording, e.g. fast-forward through form filling."),
   fx("skip", rangeFields, "Cut a stretch out of the video, e.g. waiting for a slow page."),
   fx("mute", rangeFields, "Silence the source video's own audio for a stretch (video-source scripts; browser recordings have no audio)."),
+  fx("highlight", {
+    anchor: SelectorSchema.optional(),
+    anchors: z.array(SelectorSchema).min(1).max(10).optional().describe("Several elements, swept one after another. Use instead of anchor."),
+    rect: RectSchema.optional(),
+    rects: z.array(RectSchema).min(1).max(10).optional(),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("Marker colour #RRGGBB (default #FDE047, highlighter yellow)."),
+    style: z.enum(["marker", "underline"]).optional().describe("marker (default: a translucent stroke over the text) | underline (a hand-drawn line under it)."),
+    lines: z.number().int().min(1).max(10).optional().describe("The element's text runs over this many lines: one stroke per line (its box split evenly). Default 1."),
+    duration: DurationSchema.optional(),
+  }, "Swipe a highlighter marker across an element's text: a hand-drawn, semi-transparent stroke sweeps left to right, holds, then fades. The text stays readable under it."),
+  fx("chapter", {
+    title: z.union([str(), z.record(z.string(), str())]).describe("Chapter title, or one per language like {\"en\": \"Export\", \"hi\": \"एक्सपोर्ट\"} (falls back to en)."),
+  }, "Start a chapter here (mid-step). Shows nothing by itself; for a chapter at a step's start use the step's `chapter` field instead."),
 ]);
+
+const TransitionSchema = z
+  .union([
+    z.enum(["fade", "slide", "none"]),
+    z
+      .object({
+        type: z.enum(["fade", "slide", "none"]),
+        duration: z.number().min(0.1).max(2).optional().describe("Seconds (default 0.4)."),
+      })
+      .strict(),
+  ])
+  .describe("fade (the old page dissolves into the new one) | slide (the old page slides away to the left) | none — or {\"type\": \"fade\", \"duration\": 0.6}. Nothing is cut: timings stay the same.");
 
 export const BeatSchema = z
   .object({
@@ -569,6 +650,16 @@ export const BeatSchema = z
     label: str().optional().describe("Human title of the step."),
     note,
     dwellMs: z.number().int().min(0).max(30_000).optional().describe("Pause after each entry in this step (overrides defaults.dwellMs)."),
+    camera: z
+      .object({
+        follow: z.boolean().optional().describe("Turn the follow camera on (or off) for this step."),
+        scale: z.number().min(1.3).max(2.5).optional().describe("Zoom for this step (default: the script's camera.scale)."),
+      })
+      .strict()
+      .optional()
+      .describe("Follow camera for this step only (overrides the script's `camera`)."),
+    chapter: z.union([str(), z.record(z.string(), str()), z.boolean()]).optional().describe("Start a video chapter where this step begins: its title, one per language, or true (= the step's label). Chapters are written into the MP4 and listed in the result (YouTube format)."),
+    transition: TransitionSchema.optional().describe("How the page change at the start of this step is shown (overrides the script's `transition`; \"none\" turns it off here)."),
     beat: z.array(z.union([ActEntrySchema, FxEntrySchema])).min(1).describe("Ordered list of browser actions (act) and effects (fx)."),
   })
   .strict();
@@ -622,6 +713,35 @@ export const DemoScriptSchema = z
     plan: PlanSchema.optional(),
     intro: CardSchema.optional().describe("Title card joined BEFORE the video (template, title, subtitle, logo, narration)."),
     outro: CardSchema.optional().describe("End card joined AFTER the video (e.g. title + cta)."),
+    cursor: z
+      .object({
+        show: z.boolean().optional().describe("Draw the mouse pointer (default true for browser scripts; false with the flutter plugin). It moves to each element on a smooth curve and arrives just before the click."),
+        size: z.number().min(0.5).max(3).optional().describe("Size multiplier (default 1 = ~30 px tall on a 900 px video)."),
+        clickEffect: z.boolean().optional().describe("Squeeze the pointer and send out a ripple on every click (default true)."),
+        color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe("Pointer fill #RRGGBB (default #FFFFFF with a dark outline; dark colours get a white outline)."),
+      })
+      .strict()
+      .optional()
+      .describe("The mouse pointer drawn into browser recordings (headless browsers show none). Video-source scripts have no pointer data, so nothing is drawn there."),
+    camera: z
+      .object({
+        follow: z.boolean().optional().describe("Zoom toward where the action is while the video keeps playing: the camera eases in as an act (or a spotlight/arrow/label) begins, holds while the work stays there, and eases back out after an idle moment or at the step end (default false)."),
+        scale: z.number().min(1.3).max(2.5).optional().describe("Zoom while framing the action (default 1.8; less when the action needs more room)."),
+        ease: z.number().min(0.3).max(1.5).optional().describe("Seconds per camera move (default 0.8)."),
+        hold: z.number().min(0).max(10).optional().describe("Seconds the camera stays after the last action before easing out (default 1.2)."),
+      })
+      .strict()
+      .optional()
+      .describe("Follow camera for the whole video; steps can override it with their own `camera`."),
+    transition: TransitionSchema.optional().describe("Default transition when a step begins (every step after the first; a step's own `transition` wins)."),
+    chapters: z
+      .object({
+        onScreen: z.boolean().optional().describe("Show a short chapter-title badge (top-left) at each chapter start (default false)."),
+        introTitle: z.union([str(), z.record(z.string(), str())]).optional().describe("Title of the implicit first chapter at 0:00 that covers the title card (or the time before the first chapter). Default \"Intro\"."),
+      })
+      .strict()
+      .optional()
+      .describe("Chapter options. Chapters themselves start at steps with `chapter` (or at fx \"chapter\")."),
     plugins: z
       .object({ flutter: FlutterPluginSchema.optional() })
       .strict()

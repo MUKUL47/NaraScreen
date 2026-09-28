@@ -783,6 +783,8 @@ interface VideoOutcome {
   height?: number;
   narrations: ProduceResult["narrations"];
   cards?: ProduceResult["cards"];
+  chapters?: ProduceResult["chapters"];
+  chapterFiles?: ProduceResult["chapterFiles"];
   timings: ProduceResult["timings"];
   preview: Pick<PreviewResult, "contactSheet" | "frames"> | null;
 }
@@ -819,6 +821,7 @@ async function produceJob(ctx: Ctx, dir: string, script: DemoScript, langs: stri
       ...(r.width && r.height ? { width: r.width, height: r.height } : {}),
       narrations: r.narrations,
       ...(r.cards ? { cards: r.cards } : {}),
+      ...(r.chapters ? { chapters: r.chapters, chapterFiles: r.chapterFiles } : {}),
       timings: r.timings,
       preview,
     };

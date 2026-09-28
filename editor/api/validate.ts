@@ -14,6 +14,7 @@ import { AgentError } from "./errors";
 import { DEFAULT_VOICES, LANG_CODES } from "../src/lib/voices";
 import { probeDuration, probeResolution } from "../electron/ffmpeg";
 import { ARIA_ROLES } from "./page-elements";
+import { checkChaptersAndTransitions } from "./fx-structure";
 import {
   ActEntrySchema,
   BeatSchema,
@@ -407,6 +408,8 @@ function checkSemantics(script: DemoScript, dir: string, warnings: string[]): Sc
       }
     });
   });
+
+  checkChaptersAndTransitions(script, langs, issues, warnings);
 
   // tts voices
   for (const [lang, voice] of Object.entries(script.tts?.voices ?? {})) {

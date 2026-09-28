@@ -28,6 +28,7 @@ export {
   type OutputConfig,
 } from "./schema";
 import type { ActVerb, FxVerb, Rect } from "./schema";
+import type { CursorKind } from "../electron/fx-cursor";
 
 /** One line of the runner's trace.jsonl — every beat slot, in order. */
 export interface TraceEntry {
@@ -46,6 +47,10 @@ export interface TraceEntry {
   /** fx with `anchors` (spotlight/blur) or zoom `targets`: one rect per
    *  anchor/target, index-aligned; rect === rects[0]. */
   rects?: Rect[];
+  /** An act on an element: what the pointer/camera saw — the kind of interaction,
+   *  when it began (the act ends at `end` ?? `t`) and the element's box (video px).
+   *  Absent in traces recorded before 2026-09-28 (no cursor then). */
+  pointer?: { kind: CursorKind; t0: number; rect: Rect };
 }
 
 /** Where a compiled action came from in the demo script. */
@@ -103,6 +108,18 @@ export interface NaraAction {
   spotlightConverge?: number;
   /** Arrow size multiplier (default: from the video size). */
   arrowScale?: number;
+  /** calloutStyle "highlight" (fx highlight; calloutPanels[k].rect = each element): marker colour, look, lines per element */
+  highlightColor?: string;
+  highlightStyle?: "marker" | "underline";
+  highlightLines?: number;
+  // chapter (a chapter starts at `timestamp`; see api/fx-structure.ts)
+  chapterTitle?: string;
+  /** show the on-screen chapter badge (chapters.onScreen) */
+  chapterBadge?: boolean;
+  // transition (the page change is looked for in timestamp … transitionEnd)
+  transitionEnd?: number;
+  transitionStyle?: "fade" | "slide";
+  transitionDuration?: number;
   // blur
   blurRects?: Rect[];
   blurRadius?: number;

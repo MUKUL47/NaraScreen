@@ -32,6 +32,8 @@ import { DEFAULT_VOICES } from "../../src/lib/voices.ts";
 import { ffmpegSync, hasAudioStream, probeDuration, probeResolution } from "../../electron/ffmpeg.ts";
 import { arrowGeometry, arrowLabelBox, arrowShape, pencilLoop, ARROW_DEFAULT_COLOR } from "../../electron/produce.ts";
 import { ensureFlutterBuild, startFlutterFixture } from "../plugins/flutter/fixture/serve.ts";
+import { cropFor, framePad } from "../../electron/fx-camera.ts";
+import { pointerHeight } from "../../electron/fx-cursor.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Rec = Record<string, any>;
@@ -62,6 +64,7 @@ const SCRIPT = {
   cards: path.join(RUN, "cards.demo-script.json"),
   engine: path.join(RUN, "engine.demo-script.json"),
   timing: path.join(RUN, "timing.demo-script.json"),
+  motion: path.join(RUN, "motion.demo-script.json"),
 };
 const JOB = path.join(RUN, "job");
 const VIDEO_JOB = path.join(RUN, "job-video");
@@ -1068,6 +1071,75 @@ describe("narascreen CLI, end to end", () => {
     // No converge: the plain spotlight is on the target from its first frame.
     assert.ok(dim(pixelAt(video, 4.54, ...near)) && dim(pixelAt(video, 4.54, ...far)), "no converge → no animation");
     assert.ok(lit(pixelAt(video, 4.54, ...inside)), "no converge → target lit at once");
+  });
+
+  test("cursor + follow camera: the pointer rests on the clicked button at the click; the camera crops toward it while the video plays", { timeout: 12 * MIN }, async (tc) => {
+    const frame = { width: 1440, height: 900 };
+    const base = {
+      version: 1,
+      scope: "Motion",
+      baseUrl: server.url,
+      viewport: frame,
+      setup: acmeRaw.setup,
+      steps: [
+        { id: "list", beat: [{ act: "goto", path: "/#/tasks" }, { act: "waitFor", role: "heading", name: "Tasks", exact: true }] },
+        { id: "new", beat: [{ act: "click", role: "button", name: "New task" }, { act: "waitFor", role: "dialog", name: "New task" }] },
+      ],
+    };
+    const job = path.join(RUN, "job-motion");
+    const render = async (extra: Rec, name: string, cmd: "make" | "produce") => {
+      writeJson(SCRIPT.motion, { ...base, ...extra });
+      const r = await cli(cmd === "make" ? ["make", SCRIPT.motion, "--out", job] : ["produce", job, "--script", SCRIPT.motion], { timeoutMs: 8 * MIN });
+      const v = (expectOk(r, cmd).videos as Rec[])[0].path as string;
+      const keep = path.join(RUN, `motion-${name}.mp4`);
+      fs.copyFileSync(v, keep);
+      return keep;
+    };
+    const withCursor = await render({}, "cursor", "make"); // the pointer is on by default
+    const plain = await render({ cursor: { show: false } }, "plain", "produce");
+    const camera = await render({ cursor: { show: false }, camera: { follow: true } }, "camera", "produce");
+
+    // The runner recorded where and when the click happened. No inserts or cuts: final time = recording time.
+    const click = readTrace(job).find((e) => e.pointer?.kind === "click");
+    assert.ok(click, "trace.jsonl has the click's pointer (kind, t0, rect)");
+    const [x, y, w, h] = click.pointer.rect as number[];
+    const at = click.pointer.t0 as number;
+    const tip = [x + w / 2, y + h / 2];
+    // A point inside the arrow's white body (tip at the button's centre), and a pure button pixel.
+    const k = pointerHeight(frame) / 16.6;
+    const body: [number, number] = [tip[0] + 3 * k, tip[1] + 7.5 * k];
+    const white = (p: number[]) => p.every((c) => c > 225);
+    assert.ok(!white(pixelAt(plain, at - 0.03, ...body)), `without the cursor the button shows there: ${pixelAt(plain, at - 0.03, ...body)}`);
+    assert.ok(white(pixelAt(withCursor, at - 0.03, ...body)), `the pointer rests on the button just before the click: ${pixelAt(withCursor, at - 0.03, ...body)}`);
+    assert.ok(!white(pixelAt(withCursor, at - 1.5, ...body)), "…and was elsewhere before it moved there");
+    // the click ripple: a ring around the tip right after the click, gone a moment later
+    // (0.15 s after the click its radius is ~0.68 × the pointer's height: sample a spot on it, up-left of the tip)
+    const r45 = (0.68 * pointerHeight(frame)) / Math.SQRT2;
+    const ring = [tip[0] - r45 - 3, tip[1] - r45 - 3, 6, 6];
+    const rippled = regionDiff(withCursor, at + 0.15, plain, at + 0.15, ring);
+    const settled = regionDiff(withCursor, at + 0.8, plain, at + 0.8, ring);
+    tc.diagnostic(`ripple diff ${rippled.toFixed(1)}, later ${settled.toFixed(1)}`);
+    assert.ok(rippled > 2 * settled + 1, `a ripple around the click (${rippled.toFixed(1)} vs ${settled.toFixed(1)} after)`);
+    // Only the pointer differs: far from it the two videos are the same.
+    assert.ok(regionDiff(withCursor, at, plain, at, [100, 400, 300, 300]) < 1.5, "the rest of the frame is untouched");
+
+    // The follow camera: whole frame well before the click; at the click, the frame is the planned crop around
+    // the button (1.8×) scaled up — while the video keeps playing (the dialog opens inside the zoomed view).
+    const crop = cropFor([x - framePad(frame), y - framePad(frame), w + 2 * framePad(frame), h + 2 * framePad(frame)], 1.8, frame)!.rect;
+    const cropped = (video: string, t: number, r: number[] | null) => {
+      const vf = `${r ? `crop=${r[2].toFixed(2)}:${r[3].toFixed(2)}:${r[0].toFixed(2)}:${r[1].toFixed(2)}:exact=1,scale=1440:900:flags=bicubic,` : ""}scale=720:450,format=gray`; // (half size: spawnSync's 1 MB buffer)
+      const res = ffmpegSync(["-v", "error", "-ss", String(t), "-i", video, "-frames:v", "1", "-vf", vf, "-f", "rawvideo", "-"]);
+      assert.ok(res.status === 0 && res.stdout.length === 720 * 450, `could not read ${video} at ${t}s`);
+      return res.stdout;
+    };
+    const diff = (a: Buffer, b: Buffer) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+    const early = diff(cropped(camera, at - 2, null), cropped(plain, at - 2, null));
+    const zoomed = diff(cropped(camera, at + 0.3, null), cropped(plain, at + 0.3, crop));
+    const unzoomed = diff(cropped(camera, at + 0.3, null), cropped(plain, at + 0.3, null));
+    tc.diagnostic(`camera vs plain: ${early.toFixed(2)} before; at the click ${zoomed.toFixed(2)} vs the crop, ${unzoomed.toFixed(2)} vs the whole frame`);
+    assert.ok(early < 1, `whole frame before the action (${early.toFixed(2)})`);
+    assert.ok(zoomed < 3 && unzoomed > 3 * zoomed, `at the click the camera shows the crop around the button (${zoomed.toFixed(2)} vs ${unzoomed.toFixed(2)})`);
+    assert.equal(probeDuration(camera).toFixed(1), probeDuration(plain).toFixed(1), "the camera changes no timing");
   });
 
   test("engine: a first-beat blur hides a 20 px element from frame 0 (blurred, not magenta); a click is stamped at the click; a freeze after a skip shows the result", { timeout: 10 * MIN }, async (tc) => {

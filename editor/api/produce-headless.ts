@@ -30,6 +30,9 @@ import { scriptVoice, synthesizeNarrations } from "./narration";
 import { stage, warn, type Log } from "./output";
 import { DEFAULT_KOKORO_ENDPOINT, QUALITY_CRF, RESOLUTIONS, type DemoScript, type Quality, type ResolutionName } from "./schema";
 import type { NaraAction, TraceEntry } from "./types";
+import type { Chapter } from "../electron/fx-chapters";
+import { titleFor } from "./fx-structure";
+import { motionProject } from "./cursor-trace";
 
 export interface ProduceResult {
   lang: string;
@@ -45,6 +48,10 @@ export interface ProduceResult {
   warnings: string[];
   /** Title/end cards joined around the video (only when the script has them). */
   cards?: CardResult[];
+  /** Chapters of the finished video (only when the script has chapters): seconds from its start, cards included. */
+  chapters?: Chapter[];
+  /** video/chapters_<lang>.txt (YouTube description lines) and .json */
+  chapterFiles?: { youtube: string; json: string };
   /** Seconds spent per stage: narration (speech), cards, render (and its passes). */
   timings: ProduceTimings;
 }
@@ -191,6 +198,8 @@ export async function produceLanguage(
   }
 
   const project = buildProject(script, p.recording, actions, lang, { scriptPath: jobScriptPath(p.root), resolution, quality });
+  // Drawn pointer + follow camera (cursor-trace.ts → electron/fx-motion.ts).
+  Object.assign(project, motionProject(script, trace, recordingSec, warnings));
   const projectPath = path.join(p.root, `demo-project.${lang}.json`);
   const json = JSON.stringify(project, null, 2) + "\n";
   fs.writeFileSync(projectPath, json);
@@ -213,6 +222,8 @@ export async function produceLanguage(
   fs.writeFileSync(logPath, "");
   const videoPath = path.join(p.videoDir, `final_${lang}.mp4`);
   fs.rmSync(videoPath, { force: true }); // never mistake a stale video for this run's
+  for (const ext of ["txt", "json"]) fs.rmSync(path.join(p.videoDir, `chapters_${lang}.${ext}`), { force: true });
+  let chapterOut: { chapters: Chapter[]; files?: { youtube: string; json: string } } | undefined;
   const rendererWarnings: string[] = [];
   // The renderer never throws when an ffmpeg pass fails — it logs and carries
   // on without that pass. A video missing an effect (a secret left unblurred,
@@ -242,6 +253,8 @@ export async function produceLanguage(
       letterbox: resolution !== "native" ? outSize : undefined,
       wrap: { before: cardSet.intro, after: cardSet.outro },
       onTimings: (t) => (passes = t),
+      chapterLeadTitle: titleFor(script.chapters?.introTitle, lang),
+      onChapters: (c) => (chapterOut = c),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -317,6 +330,7 @@ export async function produceLanguage(
     })),
     warnings: [...warnings, ...rendererWarnings],
     ...(cards.length ? { cards } : {}),
+    ...(chapterOut?.chapters.length ? { chapters: chapterOut.chapters, ...(chapterOut.files ? { chapterFiles: chapterOut.files } : {}) } : {}),
     timings,
   };
 }

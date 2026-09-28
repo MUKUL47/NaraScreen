@@ -233,6 +233,7 @@ nothing is cut off. If you cannot view images, at least compare `durationSec` wi
 | You changed… | Do this | Re-records? |
 |---|---|---|
 | narration text, voice, language, speed | `produce <job>` (or `make` again) | no |
+| step `chapter` / `transition`, `chapters`, top-level `transition`, highlight colour/style/lines | `produce <job>` (or `make` again) | no |
 | callout text/style/size, durations, ranges (`until`/`seconds`/`factor`), dim, blur radius, zoom timing, `disabled`, `music`, `output`, `audio`, subtitles | `produce <job>` (or `make` again) | no |
 | any act (goto/click/fill/…), fx order, an `anchor`, `setup`, `defaults` timing, `baseUrl`, `viewport` | `make` again (it re-records automatically) | yes |
 
@@ -435,6 +436,46 @@ language's video. Same script, same card. Editing a card never re-records — on
 
 ---
 
+## Chapters and transitions
+
+```json
+"chapters": { "onScreen": true, "introTitle": "Intro" },
+"transition": "fade",
+"steps": [
+  { "id": "dashboard", "chapter": "Dashboard", "beat": [ … ] },
+  { "id": "tasks", "chapter": { "en": "Tasks", "hi": "टास्क" }, "transition": { "type": "slide", "duration": 0.5 }, "beat": [
+      …,
+      { "fx": "chapter", "title": "Export CSV" },
+      { "act": "click", "role": "button", "name": "Export CSV" }, … ] },
+  { "id": "settings", "chapter": true, "label": "Settings", "beat": [ … ] }
+]
+```
+
+**Chapters.** A step's `chapter` (text, a per-language map, or `true` = the step's `label`) starts a chapter where
+the step begins; `{"fx": "chapter", "title": …}` starts one mid-step (in video-source scripts, at its `at`). Each
+language's chapter times are computed on its own finished video — after skips, speed ramps, frozen narrations/zooms/pauses
+and the title card — so they are exact even though narration lengths differ per language.
+- Written into the MP4 as real chapters (players show them; `ffprobe -show_chapters`).
+- The result lists them per video: `videos[].chapters: [{ title, start, end, timecode }]` (seconds from the very start of
+  the file, cards included; `timecode` is `m:ss`), and `videos[].chapterFiles`: `video/chapters_<lang>.txt` (paste into a
+  YouTube description) and `chapters_<lang>.json`.
+- The list always starts at `0:00`: with a title card, or no chapter on the first step, an extra first chapter
+  (`implicit: true`, titled `chapters.introTitle`, default "Intro") covers that time. For YouTube, whose rules are at least
+  3 chapters and each at least 10 s, a lead chapter shorter than 10 s (a short title card) is folded into the next one in
+  the `.txt`; anything else that breaks the rules comes back as a warning.
+- `chapters.onScreen: true` shows a small chapter-title badge (top-left) for ~2.6 s at each chapter start.
+- Editing chapters (titles, adding one to a step) re-renders without re-recording; adding an fx `chapter` re-records
+  (like any fx entry, it also gets a dwell pause) — prefer the step field.
+
+**Transitions.** `transition` on a step (`"fade"`, `"slide"`, `"none"`, or `{"type": …, "duration": 0.1–2}`, default
+0.4 s) shows the page change at the start of that step: NaraScreen finds the change in the video (shortly after the
+step's first action) and puts the last frame of the old page over it, then dissolves it (`fade`) or slides it away to the
+left (`slide`) over the new page — hiding any loading flash. The top-level `transition` is the default for every step
+after the first. Nothing is cut or added: timings, narration, effects and subtitles stay where they were. A step that
+doesn't change the page gets no transition. Browser recordings only.
+
+---
+
 ## Selectors
 
 A selector finds **one element**. Use exactly one of these keys, best first:
@@ -480,6 +521,8 @@ disappeared before you reached it (act on it sooner or don't target it).
 | `arrow` | An animated arrow points at the element: one smooth, gently curved line that draws itself to the element, a chevron head riding its tip; optional `text` label in a rounded pill at its tail; optional `highlight` pencil loop around the element. White halo + soft shadow, so it reads on light and dark pages. The page stays bright (a lighter touch than spotlight) | yes | `auto` (default), `step-end`, `end`, or seconds |
 | `callout` | Text label: `label` (at the element), `lower-third` (bottom banner), `step-counter` ("Step N: …") | `label`/`step-counter`: yes | `auto` or seconds |
 | `blur` | The element is blurred (hide secrets) | yes | `step-end` (default), `end` (rest of the video), `auto`, or seconds |
+| `highlight` | A highlighter-marker stroke sweeps left → right over the element's text, holds, fades (`style: "underline"`: a hand-drawn line under it) | yes | `auto` (default), `step-end`, `end`, or seconds |
+| `chapter` | Nothing visible: starts a video chapter here (see *Chapters*) | no | — |
 | `pause` | Frame freezes silently | no | `seconds` (default 3) |
 | `speed` | A stretch plays faster (`factor: 3`) or in slow motion (`factor: 0.5`) | no | a range (below) |
 | `skip` | A stretch is cut out — e.g. waiting for a slow page | no | a range (below) |
@@ -543,6 +586,21 @@ to zoom into several elements one after another on the same frozen frame, each w
   scripts give `rect` (and `at`).
 - Point, then talk: put a `narrate` right after it — with the default `auto` duration the arrow stays
   until that narration ends. An arrow and a label/spotlight can be on screen together.
+
+**Highlight:**
+
+```json
+{ "fx": "highlight", "anchor": { "text": "$49 / month" } }
+{ "fx": "highlight", "anchors": [{ "text": "Overdue" }, { "text": "High" }], "color": "#F9A8D4" }
+{ "fx": "highlight", "anchor": { "text": "Weekly summary" }, "style": "underline", "color": "#2563EB" }
+```
+
+- A translucent marker stroke (default `#FDE047`, yellow) with slightly irregular edges sweeps across the element,
+  holds, and fades over its last 0.3 s. The text stays readable under it. `anchors`: one stroke per element, one after another.
+- It covers the element's **box**: anchor the text itself (a `text` selector, a badge, a price), not a full-width
+  heading or row — a block element's box is as wide as its container. Text wrapping over several lines: `"lines": 2`
+  splits the box into that many equal strokes.
+- Like `arrow`, it shares the screen with anything, and `disabled` / `duration` work as for other overlays.
 
 **Callout look:** `fontSize` (12–96) and `placement` (`above` — the default —, `below`, `over`) position the text next to its element.
 The label's box (text + padding, about 1.25 × `fontSize` + 12 px tall) sits 6 px above the element's top edge

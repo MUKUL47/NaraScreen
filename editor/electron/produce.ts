@@ -42,6 +42,11 @@ import {
   pencilLoop,
   roundedRect,
 } from "./fx-geometry";
+import { applyChapters, chapterBadgeEvents, chapterPoints, type Chapter } from "./fx-chapters";
+import { highlightSwipeEvents, isHighlight } from "./fx-highlight";
+import { prepareTransitions } from "./fx-transitions";
+import { planMotion } from "./fx-motion";
+import { buildTimeMap, zoomClipMeta, type LayoutSeg, type SegMeta } from "./fx-timeline";
 
 // The arrow's shapes live in fx-geometry.ts (shared with the desktop preview);
 // re-exported for existing callers and tests.
@@ -1188,12 +1193,15 @@ function executeInsertPass(
   narrationTimestamps: Array<{ start: number; end: number }>;
   insertExpansions: Array<{ at: number; added: number }>;
   subtitleCues: SubtitleCue[];
+  /** What each clip shows, on the final timeline (fx-timeline.ts: cursor + camera). */
+  layout?: LayoutSeg[];
 } {
   const totalDuration = probeDuration(inputPath);
   // Subtitles are NOT burned into the segments: they go on in one pass after
   // spotlight/callout, so dimming never darkens them. Each cue is tied to its
   // segment; its start is known once the segments are normalized.
   const cueOf = new Map<string, Omit<SubtitleCue, "start">>();
+  const metaOf = new Map<string, SegMeta>(); // fx-timeline: what each clip shows
 
   // Sort inserts by their remapped timestamp
   const sorted = insertActions
@@ -1226,6 +1234,7 @@ function executeInsertPass(
     if (mappedTs > cursor) {
       const clipPath = path.join(tempDir, `ins_clip_${String(segIdx).padStart(3, "0")}.mp4`);
       cutClip(inputPath, cursor, mappedTs, clipPath);
+      metaOf.set(clipPath, { kind: "play", src: cursor });
       if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
         runningDuration += segmentDuration(clipPath);
         segments.push(clipPath);
@@ -1270,11 +1279,14 @@ function executeInsertPass(
     //    adds their difference: 0, or the last frame held where the video ends.
     if (action.type === "zoom" || action.type === "pause" || action.freeze === true) {
       insertExpansions.push({ at: mappedTs, added: totalEffectDur });
+      const zm = action.type === "zoom" ? zoomClipMeta(action, mappedTs, res) : [];
+      insertPaths.forEach((p, i) => metaOf.set(p, zm[i] ?? { kind: "freeze", src: mappedTs }));
       cursor = mappedTs;
     } else if (insertPaths.length) {
       // Narrate without freeze — video played during narration, so skip past that section
       const consumed = Math.max(0, Math.min(narrateInsertSeconds(action, narration), totalDuration - mappedTs));
       insertExpansions.push({ at: mappedTs, added: totalEffectDur - consumed });
+      insertPaths.forEach((p) => metaOf.set(p, { kind: "play", src: mappedTs, until: mappedTs + consumed }));
       cursor = mappedTs + consumed;
     } else {
       cursor = mappedTs; // the clip failed (reported above): keep the source instead
@@ -1285,6 +1297,7 @@ function executeInsertPass(
   if (cursor < totalDuration - 0.05) {
     const clipPath = path.join(tempDir, `ins_clip_${String(segIdx).padStart(3, "0")}.mp4`);
     cutClip(inputPath, cursor, totalDuration, clipPath);
+    metaOf.set(clipPath, { kind: "play", src: cursor });
     if (fs.existsSync(clipPath) && fs.statSync(clipPath).size > 0) {
       segments.push(clipPath);
     }
@@ -1309,14 +1322,17 @@ function executeInsertPass(
   // The concat demuxer starts each file where the previous one ended, so
   // the normalized durations give each segment's start on the final timeline.
   const subtitleCues: SubtitleCue[] = [];
+  const layout: LayoutSeg[] = [];
   let at = 0;
   segments.forEach((seg, i) => {
     const cue = cueOf.get(seg);
     if (cue) subtitleCues.push({ ...cue, start: at });
-    at += segmentDuration(normalized[i]);
+    const dur = segmentDuration(normalized[i]);
+    layout.push({ ...(metaOf.get(seg) ?? { kind: "freeze", src: 0 }), start: at, dur });
+    at += dur;
   });
 
-  return { narrationTimestamps, insertExpansions, subtitleCues };
+  return { narrationTimestamps, insertExpansions, subtitleCues, layout };
 }
 
 // Build a remap from post-skip/speed time → final (post-insert) time. An insert
@@ -1362,6 +1378,10 @@ export interface ProduceOptions {
   wrap?: { before?: string; after?: string };
   /** Seconds per pass (skip, speed, mute, blur, inserts, music, final). */
   onTimings?: (timings: Record<string, number>) => void;
+  /** Title of the implicit first chapter at 0:00 (fx-chapters.ts; default "Intro"). */
+  chapterLeadTitle?: string;
+  /** The finished video's chapters and the files written for them (only when the project has chapters). */
+  onChapters?: (result: { chapters: Chapter[]; files?: { youtube: string; json: string } }) => void;
 }
 
 export async function produceTimelineVideo(
@@ -1577,6 +1597,7 @@ export async function produceTimelineVideo(
   // original(post-skip/speed) → final time, accounting for insert stretching.
   let insertRemap: (ts: number) => number = (ts) => ts;
   let subtitleCues: SubtitleCue[] = [];
+  let insertLayout: LayoutSeg[] | undefined; // what each final clip shows (cursor + camera)
 
   if (insertActions.length > 0) {
     // Pre-generate narration audio
@@ -1601,6 +1622,7 @@ export async function produceTimelineVideo(
     narrationTimestamps = result.narrationTimestamps;
     insertRemap = buildInsertRemap(result.insertExpansions);
     subtitleCues = result.subtitleCues;
+    insertLayout = result.layout;
     if (fs.existsSync(out) && fs.statSync(out).size > 0) {
       currentInput = out;
     } else {
@@ -1665,6 +1687,12 @@ export async function produceTimelineVideo(
   const graph: string[] = [];
   let vLabel = "0:v";
   const cmdFile = "spotlight.cmd";
+  // Step transitions (fx-transitions.ts): the old page's last frame over the page change, first in the graph.
+  if (allActions.some((a) => a.type === "transition")) {
+    const tr = timed("transitions", () => prepareTransitions({ actions: allActions, finalAt: overlayRemap, video: currentInput, videoSec: finalDuration, tempDir, inLabel: vLabel, emit }));
+    graph.push(...tr.graph);
+    vLabel = tr.out;
+  }
   if (remappedSpotlights.length > 0) {
     emit(`\n[Overlay: spotlight] ${remappedSpotlights.length} action(s)`);
     const sp = spotlightGraph(remappedSpotlights, res, finalDuration, emit, vLabel, cmdFile);
@@ -1673,10 +1701,36 @@ export async function produceTimelineVideo(
     vLabel = sp.out;
   }
 
-  const calloutLines = remappedCallouts.length
-    ? (emit(`\n[Overlay: callout] ${remappedCallouts.length} action(s)`), calloutEvents(remappedCallouts, res, finalDuration, emit))
-    : [];
-  if (subtitleCues.length > 0 || calloutLines.length > 0) {
+  // Page-space: highlighter strokes (fx-highlight.ts, under the callouts). Screen-space: chapter badges (fx-chapters.ts).
+  const highlightLines = highlightSwipeEvents(remappedCallouts, res, finalDuration, emit);
+  const chapterBadgeLines = chapterBadgeEvents(chapterPoints(allActions, overlayRemap), res, finalDuration);
+  // Visible cursor + follow camera (fx-motion.ts; only when the project asks for them).
+  const motion = planMotion({
+    project,
+    frame: nativeRes,
+    fps: probeFrameRate(currentInput) || fps,
+    duration: finalDuration,
+    map: buildTimeMap({ toFinal: overlayRemap, layout: insertLayout, skips: skipRanges, speeds: postSkipSpeedRanges, trimOffset, frame: nativeRes, fps: probeFrameRate(currentInput) || fps }),
+    overlays: [...remappedSpotlights, ...remappedCallouts],
+    emit,
+  });
+  // The ASS text is split in two. PAGE-space lines sit on the page and move/zoom with the follow
+  // camera (drawn BEFORE it): element callouts, arrows, the highlighter, the cursor. SCREEN-space
+  // lines stay put and sharp (drawn AFTER it): subtitles, lower-thirds, chapter badges. Without a
+  // camera both go into one file, as before. New page/screen overlays: push into the right array.
+  if (remappedCallouts.length) emit(`\n[Overlay: callout] ${remappedCallouts.length} action(s)`);
+  const pageLines = [
+    ...highlightLines,
+    ...calloutEvents(remappedCallouts.filter((a) => !isHighlight(a) && a.calloutStyle !== "lower-third"), res, finalDuration, emit),
+    ...motion.cursorLines,
+  ];
+  const screenLines = [
+    ...calloutEvents(remappedCallouts.filter((a) => !isHighlight(a) && a.calloutStyle === "lower-third"), res, finalDuration, emit),
+    ...chapterBadgeLines,
+  ];
+  const calloutLines = [...pageLines, ...screenLines];
+  const camera = motion.segments.length > 0;
+  if (subtitleCues.length > 0 || calloutLines.length > 0 || camera) {
     emit(`\n[Pass: Subtitles] ${subtitleCues.length} narration(s)${calloutLines.length ? `, ${calloutLines.length} callout line(s)` : ""}`);
     // A lower-third banner shares the bottom band with subtitles: while one is
     // on screen, lift the subtitles just above its box so neither hides the other.
@@ -1692,11 +1746,24 @@ export async function produceTimelineVideo(
       const over = banners.filter((b) => b.start < cue.start + cue.duration && b.end > cue.start);
       if (over.length) cue.marginV = Math.max(SUBTITLE_MARGIN_V, ...over.map((b) => b.lift));
     }
-    writeSubtitleFile(subtitleCues, path.join(tempDir, "subtitles.ass"), res, calloutLines);
     // ffmpeg runs IN tempDir with bare file names: the `ass=` argument can't carry
     // paths with , ' [ ] : or a Windows drive letter without fragile escaping.
-    graph.push(`[${vLabel}]ass=subtitles.ass[subbed]`);
-    vLabel = "subbed";
+    if (camera && pageLines.length) {
+      writeSubtitleFile([], path.join(tempDir, "page.ass"), res, pageLines);
+      graph.push(`[${vLabel}]ass=page.ass[paged]`);
+      vLabel = "paged";
+    }
+    const cam = camera ? motion.camera(vLabel) : null;
+    if (cam) {
+      graph.push(...cam.graph);
+      vLabel = cam.out;
+    }
+    const lines = camera ? screenLines : calloutLines;
+    if (subtitleCues.length > 0 || lines.length > 0) {
+      writeSubtitleFile(subtitleCues, path.join(tempDir, "subtitles.ass"), res, lines);
+      graph.push(`[${vLabel}]ass=subtitles.ass[subbed]`);
+      vLabel = "subbed";
+    }
   }
 
   const outSize = opts.letterbox ?? resolution;
@@ -1763,6 +1830,9 @@ export async function produceTimelineVideo(
       fs.copyFileSync(currentInput, finalPath);
     }
   }
+  // Chapters (fx-chapters.ts): written into the MP4, plus chapters_<version>.txt (YouTube) / .json.
+  const chapterResult = applyChapters({ actions: allActions, finalAt: overlayRemap, finalPath, label: versionLabel, tempDir, introPath: opts.wrap?.before, leadTitle: opts.chapterLeadTitle, emit });
+  if (chapterResult.chapters.length) opts.onChapters?.(chapterResult);
   opts.onTimings?.(timings);
 
   // ─── Cleanup ───

@@ -38,6 +38,7 @@ import {
 } from "./page-elements";
 import { pluginsFor, type NaraPlugin, type PluginActApi, type PluginPageApi } from "./plugins";
 import { startScreencast, type Screencast } from "./screencast";
+import type { CursorKind } from "../electron/fx-cursor";
 import { RANGE_FX } from "./schema";
 import {
   BUILTIN_DEFAULTS,
@@ -270,6 +271,7 @@ export async function run(script: DemoScript, recordingsDir: string, opts: RunOp
         e.t = inside(e.t);
         if (e.start != null) e.start = inside(e.start);
         if (e.end != null) e.end = inside(e.end);
+        if (e.pointer) e.pointer.t0 = inside(e.pointer.t0);
       }
     }
 
@@ -356,9 +358,11 @@ async function runStep(
     let blurStart: number | undefined;
     let at: number | undefined; // an act's interaction (the click itself)
     let end: number | undefined; // when that act had finished
+    let ptr: ActResult["ptr"]; // the interaction, for the drawn pointer / follow camera
     if (isAct(entry)) {
       const res = await runAct(env, entry, where, d);
       rect = res.rect;
+      ptr = res.ptr;
       if (res.focus !== undefined) lastRect = res.focus ?? undefined;
       if (res.changedAt != null) env.lastChange = Math.max(env.lastChange, res.changedAt);
       if (res.at != null) {
@@ -433,9 +437,11 @@ async function runStep(
       ...(end != null && end > t + 0.001 ? { end: round3(end) } : {}),
       ...(rect ? { rect: env.plugins.length ? videoRect(env, rect) : rect } : {}),
       ...(rects ? { rects: env.plugins.length ? rects.map((x) => videoRect(env, x)) : rects } : {}),
+      ...(ptr ? { pointer: { kind: ptr.kind, t0: round3(ptr.t0), rect: env.plugins.length ? videoRect(env, ptr.rect) : ptr.rect } } : {}),
     });
     env.log(`${where.path} ${describeEntry(entry)} · t=${t.toFixed(2)}s`);
-    await sleep(dwell);
+    // A chapter marker shows nothing: no pause for the viewer to follow.
+    if (isAct(entry) || entry.fx !== "chapter") await sleep(dwell);
   }
 }
 
@@ -562,6 +568,9 @@ interface ActResult {
   /** When the act began changing the page (its reveal's scroll, else the
    *  interaction; a navigation: when it committed). Unset: it changes nothing. */
   changedAt?: number;
+  /** For the drawn pointer / follow camera: the kind of interaction, when it
+   *  began (after the reveal) and the element's box then. */
+  ptr?: { kind: CursorKind; t0: number; rect: Rect };
 }
 
 /** Visible box of an element right now, without scrolling (null if not visible). */
@@ -617,17 +626,19 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       // anchorless fx right after it means ("wait for the dialog, spotlight it").
       const loc = await resolveTarget(env, sel!, where, timeout, { waitFor: true });
       await settledBox(loc);
-      return { focus: await currentRect(loc) };
+      const box = await currentRect(loc);
+      return { focus: box, ...(box ? { ptr: { kind: "wait" as const, t0: env.now(), rect: box } } : {}) };
     }
 
     case "press": {
       const key = e.key!;
       if (sel) {
         const loc = await resolveTarget(env, sel, where, timeout);
+        const box = await currentRect(loc);
         const t0 = env.now();
         await attempt(env, where, sel, `press "${key}" on`, () => loc.press(key, { timeout }));
         const at = env.now();
-        return { focus: await currentRect(loc), at, changedAt: t0 };
+        return { focus: await currentRect(loc), at, changedAt: t0, ...(box ? { ptr: { kind: "press" as const, t0, rect: box } } : {}) };
       }
       const t0 = env.now();
       await attempt(env, where, undefined, `press "${key}"`, () => page.keyboard.press(key));
@@ -657,6 +668,7 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   const rect = await reveal(env, loc, sel, where, d, timeout);
   // The page changes from the reveal's scroll (if it scrolled), else from the interaction.
   const t0 = env.movedAt ?? env.now();
+  const ptr = { kind: POINTER_KIND[e.act] ?? "click", t0: env.now(), rect };
 
   switch (e.act) {
     case "click":
@@ -680,7 +692,7 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
       await selectOption(env, loc, sel, e.option!, where, timeout);
       break;
     case "scroll":
-      return { rect, focus: rect, changedAt: t0 };
+      return { rect, focus: rect, changedAt: t0, ptr: { ...ptr, t0 } };
   }
   // Stamped HERE, at the interaction: re-measuring the element below must not
   // make a click look later than it was (it once waited 0.5 s for a button
@@ -688,8 +700,11 @@ async function runAct(env: Env, e: ActEntry, where: ErrorWhere, d: DemoDefaults)
   const at = env.now();
   // The act may have moved the element (layout change, textarea growing, an
   // auto-scroll): fx that inherit it use where it is NOW; if it is gone, where it was.
-  return { rect, focus: (await currentRect(loc)) ?? rect, at, changedAt: t0 };
+  return { rect, focus: (await currentRect(loc)) ?? rect, at, changedAt: t0, ptr };
 }
+
+/** How the pointer reads each act (fx-cursor.ts). */
+const POINTER_KIND: Partial<Record<ActEntry["act"], CursorKind>> = { click: "click", hover: "hover", fill: "type", select: "select", scroll: "scroll" };
 
 function pageApi(env: Env, timeoutMs: number, where?: ErrorWhere): PluginPageApi {
   return {
@@ -763,14 +778,16 @@ async function uploadFiles(env: Env, e: ActEntry, sel: Selector, where: ErrorWhe
     const rect = info.shown && (await loc.isVisible().catch(() => false))
       ? await reveal(env, loc, sel, where, d, timeout)
       : await revealUploadProxy(env, loc, sel, where, d, timeout);
+    const t0 = env.now();
     await attempt(env, where, sel, `choose ${names} in`, () => loc.setInputFiles(files, { timeout }));
-    return { ...(rect ? { rect } : {}), focus: rect };
+    return { ...(rect ? { rect, ptr: { kind: "upload" as const, t0, rect } } : {}), focus: rect };
   }
 
   // Not an input: it must be visible to be clicked (this also gives the usual errors).
   if (!(await loc.isVisible().catch(() => false))) loc = await resolveTarget(env, sel, where, timeout);
   const rect = await reveal(env, loc, sel, where, d, timeout);
   const chooser = env.page.waitForEvent("filechooser", { timeout }).catch((err: unknown) => err as Error);
+  const clickedAt = env.now();
   await attempt(env, where, sel, "click", () => loc.click({ timeout }));
   const fc = await chooser;
   if (fc instanceof Error) {
@@ -782,7 +799,7 @@ async function uploadFiles(env: Env, e: ActEntry, sel: Selector, where: ErrorWhe
   }
   if (files.length > 1 && !fc.isMultiple()) throw await tooMany(false);
   await attempt(env, where, sel, `choose ${names} in`, () => fc.setFiles(files, { timeout }));
-  return { rect, focus: (await currentRect(loc)) ?? rect };
+  return { rect, focus: (await currentRect(loc)) ?? rect, ptr: { kind: "upload", t0: clickedAt, rect } };
 }
 
 /** Box for a hidden file input: its nearest visible <label> or clickable ancestor, revealed on camera. Null if none. */

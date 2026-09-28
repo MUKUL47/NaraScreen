@@ -29,6 +29,7 @@ import {
   type NarrationSource,
 } from "./narration";
 import { RANGE_DEFAULT_UNTIL } from "./schema";
+import { structureActions } from "./fx-structure";
 import {
   BUILTIN_DEFAULTS,
   isAct,
@@ -127,7 +128,7 @@ function indexTrace(trace: TraceEntry[]): Map<string, TraceEntry> {
 }
 
 function isOverlay(fx: FxEntry): boolean {
-  return fx.fx === "spotlight" || fx.fx === "callout" || fx.fx === "blur" || fx.fx === "arrow";
+  return fx.fx === "spotlight" || fx.fx === "callout" || fx.fx === "blur" || fx.fx === "arrow" || fx.fx === "highlight";
 }
 function isRange(fx: FxEntry): fx is FxEntry & { fx: "speed" | "skip" | "mute" } {
   return fx.fx === "speed" || fx.fx === "skip" || fx.fx === "mute";
@@ -281,6 +282,7 @@ function takesSlot(a: NaraAction, b: NaraAction, vp: { width: number; height: nu
   if (a.type !== "callout" || b.type !== "callout") return false;
   const kind = (x: NaraAction) => (x.calloutStyle === "arrow" ? "arrow" : x.calloutStyle ?? "label");
   const [ka, kb] = [kind(a), kind(b)];
+  if (ka === "highlight" || kb === "highlight") return false; // marker strokes share the screen with anything
   if (ka === "arrow" || kb === "arrow") return ka === kb;
   if (ka === kb && (ka === "lower-third" || ka === "step-counter")) return true;
   const [ba, bb] = [calloutBox(a, vp), calloutBox(b, vp)];
@@ -373,6 +375,18 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
       if (fx.highlight && fx.highlightColor) base.arrowHighlightColor = fx.highlightColor;
       return done();
     }
+    case "highlight": {
+      // Rendered as a callout with style "highlight" (electron/fx-highlight.ts): one panel per element.
+      if (!rects.length) throw fail("highlight needs a rect (anchor an element)");
+      base.type = "callout";
+      base.calloutStyle = "highlight";
+      base.calloutPanels = rects.map((rect) => ({ text: "", rect, fontSize: 24 }));
+      base.calloutDuration = overlayDuration(fx).value;
+      if (fx.color) base.highlightColor = fx.color;
+      if (fx.style === "underline") base.highlightStyle = "underline";
+      if (fx.lines && fx.lines > 1) base.highlightLines = fx.lines;
+      return done();
+    }
     case "pause": {
       if (fx.seconds != null) base.resumeAfter = fx.seconds;
       return done();
@@ -438,7 +452,8 @@ export function compile(
 
   script.steps.forEach((beat, s) => {
     beat.beat.forEach((entry, i) => {
-      if (!isFx(entry) || entry.disabled) return; // acts and disabled fx produce no action
+      // acts and disabled fx produce no action; chapters come from structureActions below
+      if (!isFx(entry) || entry.disabled || entry.fx === "chapter") return;
       const path = `steps[${s}].beat[${i}]`;
       const where = { step: beat.id, entry: i, path };
       const ctx = `${path} (${entry.fx}, step "${beat.id}")`;
@@ -479,7 +494,10 @@ export function compile(
 
   const kept = tidyRanges(slots, warnings);
   // NaraScreen expects actions ordered by timestamp (stable: script order on ties).
-  const actions = kept.map((sl) => sl.action).sort((a, b) => a.timestamp - b.timestamp);
+  const actions = kept.map((sl) => sl.action);
+  // Chapter starts and step transitions (api/fx-structure.ts).
+  actions.push(...structureActions(script, trace, lang, endOfRecording));
+  actions.sort((a, b) => a.timestamp - b.timestamp);
   if (script.music) {
     actions.unshift({
       id: `action-${++n}`,
