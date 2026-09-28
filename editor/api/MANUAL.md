@@ -234,7 +234,7 @@ nothing is cut off. If you cannot view images, at least compare `durationSec` wi
 |---|---|---|
 | narration text, voice, language, speed | `produce <job>` (or `make` again) | no |
 | step `chapter` / `transition`, `chapters`, top-level `transition`, highlight colour/style/lines | `produce <job>` (or `make` again) | no |
-| callout text/style/size, durations, ranges (`until`/`seconds`/`factor`), dim, blur radius, zoom timing, `disabled`, `music`, `output`, `audio`, subtitles | `produce <job>` (or `make` again) | no |
+| callout text/style/size, durations, ranges (`until`/`seconds`/`factor`), dim, blur radius, zoom timing, `disabled`, `music`, `output`, `audio`, subtitles, `cursor`, `camera` | `produce <job>` (or `make` again) | no |
 | any act (goto/click/fill/…), fx order, an `anchor`, `setup`, `defaults` timing, `baseUrl`, `viewport` | `make` again (it re-records automatically) | yes |
 
 `produce` re-reads the script file the job was recorded from, so edit that file (or pass `--script`).
@@ -473,6 +473,50 @@ step's first action) and puts the last frame of the old page over it, then disso
 left (`slide`) over the new page — hiding any loading flash. The top-level `transition` is the default for every step
 after the first. Nothing is cut or added: timings, narration, effects and subtitles stay where they were. A step that
 doesn't change the page gets no transition. Browser recordings only.
+
+---
+
+## Cursor and camera
+
+**The mouse pointer** is drawn into every browser recording (a headless browser shows none). Before each
+click, fill, select, hover or upload it glides to the element on a gently curved, eased path (0.35–0.8 s,
+depending on distance), arrives just before the act and rests on the element's centre — exactly where the
+click lands — then squeezes and sends out a ripple. While a field is typed into it waits just below the
+field, out of the text. It moves with zooms, stands still during freezes and never appears on title/end cards.
+
+```json
+"cursor": { "size": 1.2, "clickEffect": true, "color": "#FFFFFF" }
+```
+
+| Field | |
+|---|---|
+| `show` | default `true` for browser scripts (`false` with the flutter plugin; video-source scripts have no pointer data, so nothing is drawn) |
+| `size` | multiplier, 0.5–3 (default 1 ≈ 30 px tall on a 900 px video) |
+| `clickEffect` | squeeze + ripple on clicks (default `true`) |
+| `color` | pointer fill `#RRGGBB` (default white with a dark outline; dark fills get a white outline) |
+
+**The follow camera** zooms toward where the action is **while the video keeps playing** (unlike
+`fx: zoom`, which freezes the frame). The camera eases in as an act — or a spotlight, arrow, label or
+highlight — begins, holds while the work stays in that area (acts close in time and space share one
+framing), and eases back to the whole frame after an idle moment, at the end of the step, before a
+freeze-`zoom`, and at the end of the video. Subtitles, lower-thirds and chapter badges stay put and
+sharp; everything drawn on the page (callouts, arrows, spotlights, blur, the pointer) zooms with it.
+
+```json
+"camera": { "follow": true, "scale": 1.8 }
+```
+
+| Field | |
+|---|---|
+| `follow` | turn it on (default `false`) |
+| `scale` | zoom while framing the action, 1.3–2.5 (default 1.8; less when the action needs more room; skipped when it would be < 1.2×) |
+| `ease` | seconds per camera move, 0.3–1.5 (default 0.8) |
+| `hold` | seconds it stays after the last act before easing out, 0–10 (default 1.2; freezes don't count) |
+
+A step can override it: `{"id": "fill-form", "camera": {"follow": true, "scale": 2}, "beat": […]}` (or
+`"follow": false` to keep one step wide). `waitFor` never moves the camera. Turning either feature on or
+off, or changing their settings, only needs `produce` — no re-record. (A job recorded before the pointer
+was tracked draws none, with a warning: `make --force` re-records it.)
 
 ---
 
@@ -894,6 +938,6 @@ at the same time their events interleave; each message names its language (`[en]
 
 - Recording works for websites only (Chromium); anything else can be edited as an existing video (`source.video`).
   One `baseUrl` per script; absolute URLs in `goto` can leave it.
-- Browser recordings are silent apart from narration and music (page audio is not recorded), and the mouse pointer is not drawn.
+- Browser recordings are silent apart from narration and music (page audio is not recorded). The drawn pointer is a rendering of the recorded interactions: page hover styles appear at the moment of the act, not as it arrives.
 - Output size = `viewport`, 30 fps MP4.
 - Narration languages are those listed in the voice catalog.
