@@ -65,7 +65,7 @@ Screen recording in the desktop app works on Linux (X11), macOS and Windows. `np
 | **Edit an existing video** | Add all of the above to a recording you already have | ✓ (Import) | ✓ (`source.video`) |
 | **Flutter apps** | Record a Flutter web build as an Android phone | – | ✓ |
 
-**Voices:** English (20), British English (8), Chinese (8), Japanese (5), Hindi (4), Spanish (3), Brazilian Portuguese (3), Italian (2), French (1). List them with `bin/narascreen voices`.
+**Voices:** English (20), British English (8), Chinese (8), Japanese (5), Hindi (4: `hf_alpha`, `hf_beta`, `hm_omega`, `hm_psi`), Spanish (3), Brazilian Portuguese (3), Italian (2), French (1). List them with `bin/narascreen voices`.
 
 ---
 

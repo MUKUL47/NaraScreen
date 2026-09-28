@@ -786,8 +786,17 @@ interface SubtitleCue {
 
 const SUBTITLE_MARGIN_V = 50;
 
+/**
+ * Scripts whose letters join into shaped clusters (Devanagari and the other Indic
+ * scripts, Arabic, Hebrew, Thai, Lao, Myanmar, Khmer, Sinhala, Tibetan). libass
+ * shapes each glyph on its own when letter spacing is non-zero, which tears the
+ * vowel signs off their consonants (dotted circles), so these lines get \fsp0.
+ */
+const SHAPED_SCRIPT = /[\u0590-\u08FF\u0900-\u0DFF\u0E00-\u0EFF\u0F00-\u0FFF\u1000-\u109F\u1780-\u17FF]/;
+
 /** Karaoke dialogue lines for one narration, starting at `offset` seconds. */
 function subtitleDialogues(text: string, duration: number, offset: number, style: string): string[] {
+  const noSpacing = SHAPED_SCRIPT.test(text) ? "{\\fsp0}" : "";
   const sentences = text.match(/[^.!?\n]+[.!?\n]*/g) || [text];
   const entries: string[] = [];
   for (const sentence of sentences) {
@@ -824,7 +833,7 @@ function subtitleDialogues(text: string, duration: number, offset: number, style
       const cs = Math.max(1, Math.round(wordDur * 100));
       return `{\\kf${cs}}${w} `;
     }).join("").trim();
-    dialogues.push(`Dialogue: 0,${startTs},${endTs},${style},,0000,0000,0000,karaoke,${karokeParts}`);
+    dialogues.push(`Dialogue: 0,${startTs},${endTs},${style},,0000,0000,0000,karaoke,${noSpacing}${karokeParts}`);
     currentTime += entryDuration;
   }
   return dialogues;

@@ -601,6 +601,7 @@ Rules the renderer enforces:
 - Voices: `GET /v1/voices` or `narascreen voices`. Set per language in `tts.voices`
   (`{"en": "af_heart", "hi": "hf_alpha"}`) or per entry with `"voice"`. Voice ids start with the
   language's letter (`a…`/`b…` English, `h…` Hindi, …); a mismatched voice mispronounces everything.
+  Hindi has four: `hf_alpha` (default), `hf_beta` (female), `hm_omega`, `hm_psi` (male).
 - `tts.speed` (0.5–2, default 1) changes the speaking rate for the whole video.
 - **Your own recording instead of a generated voice:** `"audio": "voiceover/intro.mp3"` (or one file per
   language, `{"en": "…", "hi": "…"}`) on a `narrate` or `zoom` (or a zoom target). Keep `narrate` text as
