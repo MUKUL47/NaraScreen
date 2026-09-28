@@ -1,0 +1,329 @@
+{
+  "version": 1,
+  "scope": "NaraScreen: every effect, quickly",
+  "baseUrl": "http://127.0.0.1:4780",
+  "viewport": {
+    "width": 1600,
+    "height": 900
+  },
+  "setup": [
+    {
+      "act": "goto",
+      "path": "/#/login"
+    },
+    {
+      "act": "fill",
+      "label": "Email",
+      "value": "alex.morgan@example.com"
+    },
+    {
+      "act": "fill",
+      "label": "Password",
+      "value": "${env:ACME_PASSWORD}"
+    },
+    {
+      "act": "click",
+      "role": "button",
+      "name": "Sign in"
+    },
+    {
+      "act": "waitFor",
+      "role": "heading",
+      "name": "Dashboard"
+    }
+  ],
+  "defaults": {
+    "dwellMs": 400,
+    "typeDelayMs": 45
+  },
+  "languages": [
+    "en"
+  ],
+  "tts": {
+    "voices": {
+      "en": "af_heart"
+    }
+  },
+  "music": {
+    "path": "music/happy-beats.mp3",
+    "volume": 0.07,
+    "duckTo": 0.025
+  },
+  "output": {
+    "resolution": "1080p",
+    "quality": "high"
+  },
+  "cursor": {
+    "show": true
+  },
+  "transition": "fade",
+  "chapters": {
+    "onScreen": true,
+    "introTitle": "Intro"
+  },
+  "plan": {
+    "audience": "People deciding whether NaraScreen fits their product demos",
+    "takeaway": "Every effect a good demo needs comes from one line of JSON",
+    "hook": "Every effect in this video is one line of JSON",
+    "tone": "quick, confident",
+    "targetSec": 80
+  },
+  "intro": {
+    "template": "bold",
+    "title": "NaraScreen",
+    "subtitle": "Every effect, in one minute",
+    "accent": "#7C3AED",
+    "narrate": "Every effect in this video is one line of JSON."
+  },
+  "outro": {
+    "template": "clean",
+    "title": "One line of JSON.",
+    "subtitle": "Recorded, narrated and rendered on your machine.",
+    "cta": "narascreen.mukuldutt.com",
+    "accent": "#7C3AED",
+    "narrate": "One line of JSON each. All rendered on your machine."
+  },
+  "steps": [
+    {
+      "id": "focus",
+      "label": "Focus",
+      "chapter": "Focus the eye",
+      "beat": [
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Dashboard"
+        },
+        {
+          "fx": "callout",
+          "style": "lower-third",
+          "text": "Title cards · chapters · music",
+          "duration": 2.5
+        },
+        {
+          "fx": "spotlight",
+          "anchor": {
+            "role": "article",
+            "name": "Overdue"
+          },
+          "padding": 10,
+          "feather": 24,
+          "converge": 0.6
+        },
+        {
+          "fx": "narrate",
+          "narrate": "A spotlight glides in and dims everything else."
+        },
+        {
+          "fx": "highlight",
+          "anchor": {
+            "text": "Needs attention"
+          }
+        },
+        {
+          "fx": "narrate",
+          "narrate": "A marker swipes across the words that matter."
+        },
+        {
+          "fx": "zoom",
+          "anchor": {
+            "role": "region",
+            "name": "Weekly progress"
+          },
+          "narrate": "Zoom freezes the frame and holds while you talk."
+        }
+      ]
+    },
+    {
+      "id": "work",
+      "label": "Work",
+      "chapter": "Show the work",
+      "transition": "slide",
+      "camera": {
+        "follow": true
+      },
+      "beat": [
+        {
+          "act": "click",
+          "role": "link",
+          "name": "Tasks",
+          "within": {
+            "role": "navigation",
+            "name": "Main"
+          }
+        },
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Tasks"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "A real cursor shows every click, and the camera follows the action.",
+          "freeze": false
+        },
+        {
+          "act": "click",
+          "role": "button",
+          "name": "New task"
+        },
+        {
+          "act": "waitFor",
+          "role": "dialog",
+          "name": "New task"
+        },
+        {
+          "fx": "callout",
+          "style": "step-counter",
+          "step": 1,
+          "text": "Name the task",
+          "anchor": {
+            "label": "Title"
+          },
+          "placement": "below",
+          "duration": 3
+        },
+        {
+          "fx": "speed",
+          "factor": 3,
+          "until": "next-act"
+        },
+        {
+          "act": "fill",
+          "label": "Title",
+          "value": "Record the launch demo"
+        },
+        {
+          "fx": "speed",
+          "factor": 3,
+          "until": "next-act"
+        },
+        {
+          "act": "fill",
+          "label": "Description",
+          "value": "Narrated, captioned and rendered straight from the script."
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Typing plays three times faster.",
+          "freeze": false
+        },
+        {
+          "act": "click",
+          "role": "button",
+          "name": "Create task"
+        },
+        {
+          "act": "waitFor",
+          "text": "Task created"
+        },
+        {
+          "fx": "pause",
+          "seconds": 1
+        },
+        {
+          "fx": "arrow",
+          "anchor": {
+            "text": "Yesterday",
+            "within": {
+              "role": "row",
+              "name": "Fix typo on pricing page"
+            }
+          },
+          "text": "Overdue",
+          "highlight": true,
+          "duration": 4
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Arrows draw themselves, and can circle the target."
+        }
+      ]
+    },
+    {
+      "id": "wait",
+      "label": "Waits",
+      "beat": [
+        {
+          "act": "click",
+          "role": "button",
+          "name": "Export CSV"
+        },
+        {
+          "fx": "skip",
+          "until": "next-act"
+        },
+        {
+          "act": "waitFor",
+          "text": "Export ready"
+        },
+        {
+          "act": "wait",
+          "ms": 700
+        },
+        {
+          "fx": "narrate",
+          "narrate": "The export spinner is cut out. Only the result stays."
+        }
+      ]
+    },
+    {
+      "id": "safe",
+      "label": "Safe",
+      "chapter": "Keep secrets safe",
+      "transition": "fade",
+      "beat": [
+        {
+          "act": "click",
+          "role": "link",
+          "name": "Settings",
+          "within": {
+            "role": "navigation",
+            "name": "Main"
+          }
+        },
+        {
+          "fx": "blur",
+          "anchor": {
+            "role": "textbox",
+            "name": "API key"
+          },
+          "duration": "step-end"
+        },
+        {
+          "act": "waitFor",
+          "role": "heading",
+          "name": "Settings"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "The API key is blurred from its first frame."
+        },
+        {
+          "act": "click",
+          "role": "switch",
+          "name": "Weekly summary"
+        },
+        {
+          "fx": "callout",
+          "text": "Weekly summary: on",
+          "anchor": {
+            "role": "switch",
+            "name": "Weekly summary"
+          },
+          "placement": "above",
+          "duration": 2.5
+        },
+        {
+          "act": "click",
+          "role": "button",
+          "name": "Save changes"
+        },
+        {
+          "fx": "narrate",
+          "narrate": "Labels point at anything on the page."
+        }
+      ]
+    }
+  ]
+}

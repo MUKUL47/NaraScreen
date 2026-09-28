@@ -4,9 +4,11 @@
 
 Free. Local. Open source. No cloud, no accounts, no watermarks.
 
-[![NaraScreen showcase: a 71-second video made from one JSON script](docs/media/showcase-poster.jpg)](https://mukul47.github.io/NaraScreen/media/narascreen-showcase.mp4)
+[![NaraScreen: every effect in one minute, made from one JSON script](docs/media/every-effect-poster.jpg)](https://mukul47.github.io/NaraScreen/media/narascreen-every-effect.mp4)
 
-▶ [Watch the showcase](https://mukul47.github.io/NaraScreen/media/narascreen-showcase.mp4). Every second of it came from [one JSON script](docs/media/showcase.demo-script.json): a real browser recording, voices in English, Hindi and Japanese, spotlights, zoom, arrows, blur and title cards, all rendered on one laptop.
+▶ [Watch every effect in 60 seconds](https://mukul47.github.io/NaraScreen/media/narascreen-every-effect.mp4) · [same video without subtitles](https://mukul47.github.io/NaraScreen/media/narascreen-every-effect-nosubs.mp4). One [JSON script](docs/media/every-effect.demo-script.json) drives a real browser: the drawn pointer, the follow camera, fade and slide transitions, chapters (0:00 Intro · 0:04 Focus the eye · 0:20 Show the work · 0:42 Keep secrets safe), the highlighter, spotlight, zoom, arrow, callouts, fast-forward, skip, blur, title cards and music. The subtitle-free cut is the same job produced again with `"subtitles": false`, no re-recording.
+
+🌐 **Multi-language and agent example:** [the original showcase](https://mukul47.github.io/NaraScreen/media/narascreen-showcase.mp4) ([script](docs/media/showcase.demo-script.json)): voices in English, Hindi and Japanese, and how an AI agent writes the script for you.
 
 📖 **Step-by-step desktop tutorial:** [mukul47.github.io/NaraScreen/tutorial](https://mukul47.github.io/NaraScreen/tutorial/) · [project site](https://mukul47.github.io/NaraScreen/)
 
@@ -58,6 +60,11 @@ Screen recording in the desktop app works on Linux (X11), macOS and Windows. `np
 | **Arrow** | A curved arrow draws itself to the element, with a label. Scripts add `color` and a pencil-loop `highlight` | ✓ | ✓ |
 | **Callout** | Label, step counter ("Step 2: …") or lower-third banner | ✓ | ✓ |
 | **Blur** | Hide secrets: API keys, emails, anything private | ✓ | ✓ |
+| **Highlighter** | A marker stroke sweeps over text, holds, fades; or a hand-drawn underline | – | ✓ |
+| **Mouse pointer** | A drawn cursor glides to each element and ripples on clicks (on by default) | – | ✓ |
+| **Follow camera** | Zooms toward the action while the video keeps playing, then eases back out | – | ✓ |
+| **Transitions** | Fade or slide between pages, hiding loading flashes | – | ✓ |
+| **Chapters** | Real MP4 chapters, a YouTube chapter list, optional on-screen chapter badges | – | ✓ |
 | **Speed · Skip · Mute** | Fast-forward typing, cut waits, silence audio | ✓ | ✓ |
 | **Music** | Background track, automatically lowered under the voice | ✓ | ✓ |
 | **Title & end cards** | Animated intro and outro with logo and call to action | – | ✓ |
@@ -148,7 +155,7 @@ You only ever do two things: **write one JSON file** (the demo script) and **cal
 | 5 | Dry run | `check s.json` | Runs the browser steps without recording; failures come with `candidates` and a screenshot |
 | 6 | Make | `make s.json --out <job>` | Records, narrates, renders, previews |
 | 7 | Look | open `preview.contactSheet` | A JPEG grid of frames. Check it before you deliver |
-| 8 | Iterate | edit the script, `make` again | Text-only edits (narration, captions, voices, durations) reuse the recording |
+| 8 | Iterate | edit the script, `make` again | Text-only edits (narration, captions, voices, durations, subtitles, cursor, camera, transitions, step chapters) reuse the recording |
 
 ### Responses
 
@@ -174,11 +181,23 @@ Branch on `ok` and `error.code`; do what `error.hint` says; `next` lists the obv
 { "fx": "arrow", "anchor": { "role": "button", "name": "Export" }, "text": "Click here", "highlight": true, "color": "#F97316" }
 { "fx": "callout", "style": "lower-third", "text": "Step one: plan" }
 { "fx": "blur", "anchor": { "label": "API key" }, "duration": "step-end" }
+{ "fx": "highlight", "anchor": { "text": "$49 / month" }, "style": "marker", "color": "#FDE047" }
+{ "fx": "chapter", "title": "Export" }
 { "fx": "speed", "factor": 3, "until": "next-act" }
 { "fx": "skip", "until": "next-act" }
 ```
 
-Top level: `baseUrl`, `viewport`, `setup` (sign-in, not recorded), `languages`, `tts.voices`, `music`, `output` (`resolution`, `quality`), `intro` / `outro` cards, and `plan` (audience, takeaway, targetSec; `validate` warns when the script drifts from it).
+Top level: `baseUrl`, `viewport`, `setup` (sign-in, not recorded), `languages`, `tts.voices`, `music`, `output` (`resolution`, `quality`), `intro` / `outro` cards, and `plan` (audience, takeaway, targetSec; `validate` warns when the script drifts from it). Also:
+
+```json
+"cursor":      { "show": true, "size": 1.2, "clickEffect": true, "color": "#FFFFFF" },
+"camera":      { "follow": true, "scale": 1.8, "ease": 0.8, "hold": 1.2 },
+"transition":  "fade",
+"chapters":    { "onScreen": true, "introTitle": "Intro" },
+"subtitles":   false
+```
+
+Per step: `"chapter": "Export"` (or `{ "en": …, "hi": … }`, or `true` = the step's `label`), `"transition": { "type": "slide", "duration": 0.5 }`, `"camera": { "follow": false }`. Chapters come back in the result as `videos[].chapters: [{ title, start, end, timecode }]`, are written into the MP4, and `videos[].chapterFiles.youtube` is a ready-to-paste YouTube chapter list. Changing any of these re-renders without re-recording.
 
 ### Rules that save time
 

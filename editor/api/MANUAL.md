@@ -2,7 +2,7 @@
 
 NaraScreen turns a short JSON description of a product walkthrough into a finished, narrated MP4:
 it drives a real browser, records the screen, generates the voiceover, and adds zooms, spotlights,
-blurs and captions. Everything runs locally.
+blurs, captions, a drawn mouse pointer, a follow camera, chapters and page transitions. Everything runs locally.
 
 **You (the agent) only ever do two things:**
 
@@ -38,7 +38,8 @@ never edit files inside a job folder. Everything you need is on this page.
 1. **Inspect, don't guess.** Get selectors from `inspect`. Guessed selectors are the #1 cause of failures.
 2. **Cheap before expensive.** `validate` (instant) → `check` (seconds, no recording) → `make` (minutes).
 3. **Read every response.** Branch on `ok` and `error.code`; do what `error.hint` says; `next` lists the obvious next commands.
-4. **Text edits are cheap.** Changing narration, voices, captions or durations re-renders without re-recording.
+4. **Text edits are cheap.** Changing narration, voices, captions, durations, subtitles, cursor, camera,
+   transitions or step chapters re-renders without re-recording.
 5. **Look before you deliver.** Open the preview contact sheet (it's a JPEG) and check the frames match what you intended.
 
 ---
@@ -212,6 +213,9 @@ narrations, their spoken durations, and where the time went:
 { "job": "/…/jobs/my-demo", "recorded": true,
   "videos": [{ "lang": "en", "path": "/…/video/final_en.mp4", "durationSec": 74.2,
                "narrations": [{ "step": "intro", "entry": 1, "text": "…", "voice": "af_heart", "durationSec": 4.1 }],
+               "chapters": [{ "title": "Intro", "start": 0, "end": 4.2, "timecode": "0:00", "implicit": true },
+                            { "title": "Dashboard", "start": 4.2, "end": 74.2, "timecode": "0:04" }],
+               "chapterFiles": { "youtube": "/…/video/chapters_en.txt", "json": "/…/video/chapters_en.json" },
                "timings": { "narrationSec": 3.2, "renderSec": 41.5, "totalSec": 45.1,
                             "passes": { "skip": 2.1, "inserts": 12.4, "final": 26.8 } },
                "preview": { "contactSheet": "/…/preview/en/contact.jpg", "frames": [{ "t": 3.1, "path": "…" }] } }] }
@@ -219,8 +223,9 @@ narrations, their spoken durations, and where the time went:
 
 `timings` (seconds): `narrationSec` speech synthesis, `cardsSec` title/end cards (when the script has
 them), `renderSec` the renderer, split into its `passes` (skip, speed, mute, blur, inserts, music, and
-`final` — the one encode that draws spotlights, arrows, callouts and subtitles, scales, and joins the
-cards). The same line ends each language's log (`logs/produce-<lang>.log`).
+`final` — the one encode that draws transitions, spotlights, arrows, callouts, highlights, the pointer, the
+follow camera and subtitles, scales, and joins the cards). The same line ends each language's log
+(`logs/produce-<lang>.log`). `chapters` / `chapterFiles` appear when the script has chapters (see *Chapters and transitions*).
 
 ### 8. Review
 
@@ -233,9 +238,9 @@ nothing is cut off. If you cannot view images, at least compare `durationSec` wi
 | You changed… | Do this | Re-records? |
 |---|---|---|
 | narration text, voice, language, speed | `produce <job>` (or `make` again) | no |
-| step `chapter` / `transition`, `chapters`, top-level `transition`, highlight colour/style/lines | `produce <job>` (or `make` again) | no |
-| callout text/style/size, durations, ranges (`until`/`seconds`/`factor`), dim, blur radius, zoom timing, `disabled`, `music`, `output`, `audio`, subtitles, `cursor`, `camera` | `produce <job>` (or `make` again) | no |
-| any act (goto/click/fill/…), fx order, an `anchor`, `setup`, `defaults` timing, `baseUrl`, `viewport` | `make` again (it re-records automatically) | yes |
+| step `chapter` / `transition` / `camera`, top-level `chapters` / `transition` / `cursor` / `camera` / `subtitles`, highlight colour/style/lines | `produce <job>` (or `make` again) | no |
+| callout text/style/size, durations, ranges (`until`/`seconds`/`factor`), dim, blur radius, zoom timing, `disabled`, `music`, `output`, `audio`, a narrate's `subtitles`/`subtitleSize` | `produce <job>` (or `make` again) | no |
+| any act (goto/click/fill/…), adding/removing/reordering fx (an fx `chapter` or `highlight` too), an `anchor`, `setup`, `defaults` timing, `baseUrl`, `viewport` | `make` again (it re-records automatically) | yes |
 
 `produce` re-reads the script file the job was recorded from, so edit that file (or pass `--script`).
 If you changed something that needs a new recording, `produce` refuses with `SCRIPT_STRUCTURE_CHANGED`
@@ -456,13 +461,14 @@ the step begins; `{"fx": "chapter", "title": …}` starts one mid-step (in video
 language's chapter times are computed on its own finished video — after skips, speed ramps, frozen narrations/zooms/pauses
 and the title card — so they are exact even though narration lengths differ per language.
 - Written into the MP4 as real chapters (players show them; `ffprobe -show_chapters`).
-- The result lists them per video: `videos[].chapters: [{ title, start, end, timecode }]` (seconds from the very start of
-  the file, cards included; `timecode` is `m:ss`), and `videos[].chapterFiles`: `video/chapters_<lang>.txt` (paste into a
-  YouTube description) and `chapters_<lang>.json`.
+- The result lists them per video: `videos[].chapters: [{ title, start, end, timecode, implicit? }]` (seconds from the very
+  start of the file, cards included; `timecode` is `m:ss`, `h:mm:ss` from an hour on), and `videos[].chapterFiles`:
+  `{ youtube, json }` = `video/chapters_<lang>.txt` (paste into a YouTube description) and `video/chapters_<lang>.json`.
 - The list always starts at `0:00`: with a title card, or no chapter on the first step, an extra first chapter
   (`implicit: true`, titled `chapters.introTitle`, default "Intro") covers that time. For YouTube, whose rules are at least
   3 chapters and each at least 10 s, a lead chapter shorter than 10 s (a short title card) is folded into the next one in
-  the `.txt`; anything else that breaks the rules comes back as a warning.
+  the `.txt`; anything else that breaks the rules comes back as a warning. A first chapter less than 1 s in moves to 0:00;
+  chapters less than 0.5 s apart merge (the later title wins); the last one runs to the end, end card included.
 - `chapters.onScreen: true` shows a small chapter-title badge (top-left) for ~2.6 s at each chapter start.
 - Editing chapters (titles, adding one to a step) re-renders without re-recording; adding an fx `chapter` re-records
   (like any fx entry, it also gets a dwell pause) — prefer the step field.
@@ -709,8 +715,12 @@ Rules the renderer enforces:
   language, `{"en": "…", "hi": "…"}`) on a `narrate` or `zoom` (or a zoom target). Keep `narrate` text as
   well if you want subtitles. Paths are relative to the script file.
 - **Subtitles** are burned in with word highlighting by default — white text on a soft dark box, sized to
-  the video (they read the same at 480p and 4K); `"subtitles": false` turns them off, `"subtitleSize": 36`
-  changes their size.
+  the video (they read the same at 480p and 4K); `"subtitles": false` on a `narrate` turns them off there,
+  `"subtitleSize": 36` changes their size.
+- **No subtitles at all:** top-level `"subtitles": false` turns them off for every narration, zoom narrations
+  included (a narrate's own `"subtitles": true` still wins). It never re-records, so a subtitle-free cut of a
+  finished job is: set it (in the job's script, or in a copy passed with `--script`), then `produce <job>`.
+  Copy the first video away first — produce overwrites `video/final_<lang>.mp4`.
 
 ### Music and output
 

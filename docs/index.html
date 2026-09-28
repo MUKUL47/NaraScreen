@@ -12,9 +12,9 @@
 <meta property="og:url" content="https://narascreen.mukuldutt.com/">
 <meta property="og:title" content="NaraScreen">
 <meta property="og:description" content="Narrated product demo videos, recorded by you or scripted by an AI agent. Free, local, open source.">
-<meta property="og:image" content="https://narascreen.mukuldutt.com/media/showcase-poster.jpg">
+<meta property="og:image" content="https://narascreen.mukuldutt.com/media/every-effect-poster.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://narascreen.mukuldutt.com/media/showcase-poster.jpg">
+<meta name="twitter:image" content="https://narascreen.mukuldutt.com/media/every-effect-poster.jpg">
 <link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
@@ -37,14 +37,27 @@
       <div class="cta">
         <a class="btn primary" href="tutorial/">Start the desktop tutorial →</a>
         <a class="btn" href="https://github.com/MUKUL47/NaraScreen#for-ai-agents-llm-guide">LLM guide</a>
-        <a class="btn" href="media/showcase.demo-script.json">See the showcase script</a>
+        <a class="btn" href="media/every-effect.demo-script.json">See the script behind the video</a>
       </div>
     </div>
 
     <div class="video">
-      <video src="media/narascreen-showcase.mp4" poster="media/showcase-poster.jpg" controls preload="metadata" playsinline></video>
+      <video id="hero-video" src="media/narascreen-every-effect.mp4" poster="media/every-effect-poster.jpg" controls preload="metadata" playsinline></video>
     </div>
-    <p class="caption">Every second of this video came from <a href="media/showcase.demo-script.json">one JSON script</a>: a real browser recording, Kokoro voices in English, Hindi and Japanese, and every effect drawn by NaraScreen.</p>
+    <div class="player-bar">
+      <div class="seg" role="group" aria-label="Subtitles">
+        <span class="seg-label">Subtitles</span>
+        <button type="button" data-src="media/narascreen-every-effect.mp4" aria-pressed="true">On</button>
+        <button type="button" data-src="media/narascreen-every-effect-nosubs.mp4" aria-pressed="false">Off</button>
+      </div>
+      <ol class="chapters" aria-label="Chapters">
+        <li><button type="button" data-t="0"><span class="tc">0:00</span>Intro</button></li>
+        <li><button type="button" data-t="4"><span class="tc">0:04</span>Focus the eye</button></li>
+        <li><button type="button" data-t="20"><span class="tc">0:20</span>Show the work</button></li>
+        <li><button type="button" data-t="42"><span class="tc">0:42</span>Keep secrets safe</button></li>
+      </ol>
+    </div>
+    <p class="caption">Every effect in one minute, from <a href="media/every-effect.demo-script.json">one JSON script</a>: a real browser recording with the drawn pointer, the follow camera, fade and slide transitions, chapters, the highlighter, spotlight, zoom, arrows, blur and title cards. The chapters are written into the MP4 (<a href="media/every-effect-chapters.txt">YouTube list</a>); the subtitle-free cut is the same job rendered again with <code>"subtitles": false</code>. Multi-language? See <a href="media/narascreen-showcase.mp4">the original showcase</a> in English, Hindi and Japanese (<a href="media/showcase.demo-script.json">script</a>).</p>
   </div>
 
   <section id="two-ways">
@@ -88,12 +101,30 @@ narascreen make     demo.json   # the video</code></pre>
           <tr><td>Arrow</td><td>A curved arrow draws itself to the element, with an optional label</td><td class="yes">✓</td><td class="yes">✓ + colour, pencil-loop highlight</td></tr>
           <tr><td>Callout</td><td>Label, step counter, or lower-third banner</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><td>Blur</td><td>Hide secrets (API keys, emails)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Highlighter</td><td>A marker stroke sweeps over text, holds and fades; or a hand-drawn underline</td><td class="no">–</td><td class="yes">✓</td></tr>
+          <tr><td>Mouse pointer</td><td>A drawn cursor glides to each element and ripples on clicks (on by default)</td><td class="no">–</td><td class="yes">✓</td></tr>
+          <tr><td>Follow camera</td><td>Zooms toward the action while the video keeps playing, then eases out</td><td class="no">–</td><td class="yes">✓</td></tr>
+          <tr><td>Transitions</td><td>Fade or slide between pages, hiding loading flashes</td><td class="no">–</td><td class="yes">✓</td></tr>
+          <tr><td>Chapters</td><td>Real MP4 chapters, a YouTube chapter list, optional on-screen badges</td><td class="no">–</td><td class="yes">✓</td></tr>
           <tr><td>Speed / Skip / Mute</td><td>Fast-forward slow parts, cut waits, silence audio</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><td>Music</td><td>Background music, automatically lowered under the voice</td><td class="yes">✓</td><td class="yes">✓</td></tr>
           <tr><td>Title &amp; end cards</td><td>Animated intro and outro with logo and call to action</td><td class="no">–</td><td class="yes">✓</td></tr>
           <tr><td>Languages</td><td>9 languages, 54 voices (Kokoro); one video per language</td><td class="yes">✓</td><td class="yes">✓ all languages in one run</td></tr>
         </tbody>
       </table></div>
+      <p class="muted" style="margin-top:18px">The script-only features are a few lines of JSON:</p>
+<pre><code>"cursor":     { "size": 1.2, "clickEffect": true },
+"camera":     { "follow": true, "scale": 1.8 },
+"transition": "fade",
+"chapters":   { "onScreen": true },
+"subtitles":  false,
+"steps": [
+  { "id": "export", "chapter": "Export", "transition": "slide", "beat": [
+    { "act": "click", "role": "button", "name": "Export CSV" },
+    { "fx": "highlight", "anchor": { "text": "Export ready" } }
+  ] }
+]</code></pre>
+      <p class="muted">Changing any of them re-renders the video without re-recording the browser.</p>
     </div>
   </section>
 
@@ -119,5 +150,42 @@ curl http://127.0.0.1:4790/v1/schema # JSON Schema of the demo script</code></pr
 </main>
 
 <footer><div class="wrap">NaraScreen · MIT licensed · <a href="https://github.com/MUKUL47/NaraScreen">github.com/MUKUL47/NaraScreen</a></div></footer>
+<script>
+(function () {
+  var v = document.getElementById("hero-video");
+  if (!v) return;
+  var subs = document.querySelectorAll(".seg button");
+  var chaps = document.querySelectorAll(".chapters button");
+  subs.forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (b.getAttribute("aria-pressed") === "true") return;
+      var t = v.currentTime, playing = !v.paused && !v.ended;
+      v.src = b.dataset.src;
+      v.addEventListener("loadedmetadata", function once() {
+        v.removeEventListener("loadedmetadata", once);
+        v.currentTime = t;
+        if (playing) v.play();
+      });
+      subs.forEach(function (o) { o.setAttribute("aria-pressed", String(o === b)); });
+    });
+  });
+  function seek(t) {
+    if (v.readyState >= 1) { v.currentTime = t; v.play(); return; }
+    v.addEventListener("loadedmetadata", function once() {
+      v.removeEventListener("loadedmetadata", once);
+      v.currentTime = t; v.play();
+    });
+    v.load();
+  }
+  chaps.forEach(function (b) {
+    b.addEventListener("click", function () { seek(parseFloat(b.dataset.t)); });
+  });
+  v.addEventListener("timeupdate", function () {
+    var cur = null;
+    chaps.forEach(function (b) { if (v.currentTime + 0.05 >= parseFloat(b.dataset.t)) cur = b; });
+    chaps.forEach(function (b) { if (b === cur) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current"); });
+  });
+})();
+</script>
 </body>
 </html>

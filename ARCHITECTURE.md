@@ -141,6 +141,11 @@ Every project is a folder. The default parent is `~/NaraScreen/`, and the defaul
 | `spotlight` | overlay | `spotlightRects[]`, `dimOpacity`, `spotlightDuration` (3 s) | Darkens the whole frame, then overlays the undimmed regions. **Overlapping spotlights are a hard error**; use several regions on one spotlight instead |
 | `callout` | overlay | `calloutPanels[]` or `calloutText`, `calloutStyle` (label / step-counter / lower-third) | Draws the text with `drawtext` |
 | `music` | audio | `musicPath`, `musicVolume`, `musicDuckTo` | Only the **first** music action is used. It loops under the whole video and is lowered (ducked) during narration |
+| `callout` style `highlight` | overlay | `calloutPanels[].rect`, `highlightStyle`, `highlightColor`, `highlightLines` | fx `highlight` from scripts ([fx-highlight.ts](editor/electron/fx-highlight.ts)): a marker (or underline) stroke drawn as per-frame page-space ASS vector events. Stored as a callout so the desktop editor can still open it |
+| `transition` | structure | `transitionEnd`, `transitionStyle` (fade / slide), `transitionDuration` | Scripts only ([fx-transitions.ts](editor/electron/fx-transitions.ts)). Finds the page change inside the window and lays the old page's last frame over it, fading or sliding it away. Nothing is cut |
+| `chapter` | structure | `chapterTitle`, `chapterBadge` | Scripts only ([fx-chapters.ts](editor/electron/fx-chapters.ts)). Placed on the final timeline, remuxed into the MP4 after the final encode, plus `chapters_<label>.txt` / `.json`; optional screen-space badge |
+
+Two optional **project-level** fields are also scripts-only: `cursor` (the planned pointer path) and `camera` (step windows + follow settings + act targets), written by [api/cursor-trace.ts](editor/api/cursor-trace.ts) and read by [fx-motion.ts](editor/electron/fx-motion.ts). The desktop app writes neither, so its renders are unchanged.
 
 **Editor vs. producer mismatches:**
 - **Unrendered fields.** The Spotlight and Blur editors offer a narration field and a "freeze" toggle, but produce only treats `zoom`, `pause` and `narrate` as inserts, so neither setting appears in the output. Produce also never reads `playFor`, `musicEndTimestamp`, or the music action's own timestamp.
@@ -164,7 +169,8 @@ Each pass reads the previous pass's output from `video/temp[-<version>]/pass_N.m
 | 4b | **Blur** | Before the inserts, on the post-skip/speed timeline (duration in recording seconds), so freeze frames and zoom frames are cut from already-blurred video |
 | 5 | **Inserts** | Zoom, pause and narrate at remapped timestamps. TTS runs here if no audio file exists yet. Records how much time each insert adds (for remapping) and collects one subtitle cue per narration |
 | 5b | **Music** | Mixed in with `amix` (video copied). The music is ducked during the narration ranges recorded by the insert pass. Before the final pass, so cards stay music-free |
-| 6 | **Final** | ONE encode (`-preset fast`, `medium` when cards are joined; CRF from `crf`) of a single filter graph: **spotlights** (remapped through skip, speed *and* inserts; every pixel filter gated with `enable=` to its own window, so frames without a spotlight pass straight through; soft/converging ones share one mask chain) → **page-space ASS** (callouts, arrows, highlighter, the drawn cursor: [fx-cursor.ts](editor/electron/fx-cursor.ts)) → **follow camera** (one `perspective` filter, [fx-camera.ts](editor/electron/fx-camera.ts); only when the project has `camera`) → **screen-space ASS** (subtitles, lower-thirds, chapter badges; without a camera both ASS sets share one file) → **scale/pad** to `resolution`/`letterbox` → **cards** (`wrap`, joined by `concat`). Skipped (the recording is copied) only when there is nothing at all to do |
+| 6 | **Final** | ONE encode (`-preset fast`, `medium` when cards are joined; CRF from `crf`) of a single filter graph: **transitions** (the old page's last frame over each page change, a `movie=` source inside the graph: [fx-transitions.ts](editor/electron/fx-transitions.ts)) → **spotlights** (remapped through skip, speed *and* inserts; every pixel filter gated with `enable=` to its own window, so frames without a spotlight pass straight through; soft/converging ones share one mask chain) → **page-space ASS** (callouts, arrows, the highlighter: [fx-highlight.ts](editor/electron/fx-highlight.ts), the drawn cursor: [fx-cursor.ts](editor/electron/fx-cursor.ts)) → **follow camera** (one `perspective` filter, [fx-camera.ts](editor/electron/fx-camera.ts); only when the project has `camera`) → **screen-space ASS** (subtitles, lower-thirds, chapter badges; without a camera both ASS sets share one file) → **scale/pad** to `resolution`/`letterbox` → **cards** (`wrap`, joined by `concat`). Skipped (the recording is copied) only when there is nothing at all to do |
+| 7 | **Chapters** | Only when the project has `chapter` actions: a stream-copy remux adds them to the MP4 (ffmetadata, `-map_chapters`; the final graph is untouched) and writes `chapters_<label>.txt` (YouTube) and `.json` ([fx-chapters.ts](editor/electron/fx-chapters.ts)) |
 
 Output: `video/final_v{N+1}.mp4`, or `final_<version>.mp4` if a version label is passed.
 
@@ -175,6 +181,23 @@ Every segment is normalized to 44.1 kHz stereo AAC before joining, because strea
 - Every pass that changes duration (skip, speed, inserts) exposes a function that maps a timestamp from the old timeline to the new one, and later passes compose these functions.
 - Spotlight and callout run *after* the inserts, remapped through `insertExpansions` / `buildInsertRemap`, so they don't drift earlier with every freeze. Blur runs *before* the inserts (pass 4b) so freeze and zoom frames are cut from already-blurred video.
 - Subtitles are collected during the insert pass and burned in one final pass, on top of spotlight dimming.
+- The cursor and the follow camera follow the recording continuously, so they need the inverse map too: [fx-timeline.ts](editor/electron/fx-timeline.ts) builds, from the skip/speed ranges and the insert pass's segments, `toFinal(r)` (recording → final seconds) and `at(T)` (final seconds → the recording moment on screen, whether it is frozen, and a freeze-zoom's transform).
+
+### Effect modules (`electron/fx-*.ts`)
+
+Each is pure planning plus, at most, one filter or a list of ASS events; `produce.ts` only calls them.
+
+| Module | Role |
+|---|---|
+| [fx-geometry.ts](editor/electron/fx-geometry.ts) | Arrow, label and pencil-loop shapes (shared with the desktop canvas preview) |
+| [fx-ass.ts](editor/electron/fx-ass.ts) | Small ASS helpers (time, escaping, colours) for fx-highlight / fx-chapters |
+| [fx-timeline.ts](editor/electron/fx-timeline.ts) | Recording ↔ final time map (see above) |
+| [fx-cursor.ts](editor/electron/fx-cursor.ts) | Pointer path from the recorded interactions (eased, bowed moves arriving just before each act; click squeeze + ripple; rests below a field while typing) → per-frame page-space ASS |
+| [fx-camera.ts](editor/electron/fx-camera.ts) | Follow camera: groups targets close in time and space into holds joined by eased moves, back to the full frame at step ends, before freeze-zooms and at the end; drawn with one `perspective` filter gated by `enable` |
+| [fx-motion.ts](editor/electron/fx-motion.ts) | Glue for the two above: reads `project.cursor` / `project.camera`, returns the cursor's ASS lines and the camera filter |
+| [fx-highlight.ts](editor/electron/fx-highlight.ts) | Highlighter marker / underline strokes |
+| [fx-transitions.ts](editor/electron/fx-transitions.ts) | Finds each page change in the pixels and covers it with a fading or sliding still |
+| [fx-chapters.ts](editor/electron/fx-chapters.ts) | Chapter list rules (0:00 start, implicit lead chapter, merges, YouTube fold/warnings), badges, MP4 remux, `.txt` / `.json` |
 
 ---
 
@@ -246,6 +269,7 @@ agent ◄─ one JSON envelope per command (CLI stdout / HTTP), progress events 
 | [cards.ts](editor/api/cards.ts) | Title/end cards (`intro`/`outro`): a built-in HTML template drawn by Chromium frame by frame with its CSS animations paused at each frame time (deterministic), narration through the normal TTS path. Rendered first at the final size; the renderer's final pass joins them (`wrap`) in the same encode. Called from `produce-headless.ts` only when the script has cards; not in the structure hash, so card edits never re-record. |
 | [produce-parallel.ts](editor/api/produce-parallel.ts), [produce-child.ts](editor/api/produce-child.ts) | Languages render at the same time: the renderer's ffmpeg calls are synchronous, so each language runs `produceLanguage` in its own Node process (tsx loader, own process group so a cancel stops its ffmpeg), up to `NARASCREEN_PARALLEL_LANGS` (default 2). The child prints one JSON line (result or error); progress goes straight to stderr. |
 | [plugins/](editor/api/plugins/index.ts) | Recording plugins, opted into per script under `plugins`. The core only calls hooks (context options, `ready` before each act, `afterFocus`, plugin acts, browser→video box scaling, compile-time restyling); scripts without `plugins` never reach them and keep their structure hash. [flutter/](editor/api/plugins/flutter/index.ts): a Flutter web build recorded as an Android phone (device emulation, auto-enabled accessibility tree via the centre-tap on Flutter's placeholder, taps, `swipe`, overlays scaled by the pixel ratio; `health.ts`: console/page-error/rejection/pending-request collection, `FLUTTER_APP_NOT_READY` / `FLUTTER_SEMANTICS_UNAVAILABLE` explanations of step failures, the `allowedHosts` request guard, and the `FLUTTER_NOT_WEB_BUILD` preflight); its fixture app (with `?stuck=1` / `?api=` test switches) lives in `plugins/flutter/fixture/` (built on demand by the e2e test when the Flutter SDK is installed). |
+| [fx-structure.ts](editor/api/fx-structure.ts), [cursor-trace.ts](editor/api/cursor-trace.ts) | Pure compile helpers. `fx-structure`: step/fx `chapter` and step/top-level `transition` → `chapter` / `transition` actions (per language). `cursor-trace`: the runner's per-act `pointer` stamps → `project.cursor` (the planned path, when shown) and `project.camera`. Neither is in the structure hash, so they never re-record (an fx `chapter` entry still does, like any fx entry). |
 | [narration.ts](editor/api/narration.ts), [compiler.ts](editor/api/compiler.ts), [produce-headless.ts](editor/api/produce-headless.ts), [preview.ts](editor/api/preview.ts) | Produce side: TTS (fails loudly, retried, cached), timeline model (auto durations, ranges, stop rules), render + output presets, contact sheets. |
 | [cli.ts](editor/api/cli.ts), [commands.ts](editor/api/commands.ts), [doctor.ts](editor/api/doctor.ts), [init.ts](editor/api/init.ts), [bin/narascreen](editor/bin/narascreen) | CLI. `commands.ts` is the single command catalog (help, parsing, server mapping, docs). |
 | [server.ts](editor/api/server.ts), [docs.ts](editor/api/docs.ts) | `narascreen serve`: runs spawn the CLI with `--events json`; SSE/NDJSON events, long-poll, uploads, workspace confinement, token/Origin checks, limits; `/docs`, `/docs.md`, `/llms.txt`. |
@@ -265,7 +289,9 @@ Kokoro on :8880, ffmpeg with drawtext/ass, Playwright Chromium).
 inserts (so frozen and zoomed frames stay blurred) with its duration in recording seconds; subtitles are burned
 in one final pass above spotlights and lower-thirds; speed ramps now actually shorten the video; slow motion
 < 0.5× works with audio; music works on silent recordings; narrated zooms get subtitles; small-region blur,
-`%` in callouts, and special characters in paths are handled.
+`%` in callouts, and special characters in paths are handled. Scripts-only additions that the desktop app never
+triggers: transitions, the highlighter, chapters, the drawn cursor and the follow camera (see *Effect modules*), and
+the top-level `subtitles: false` switch (compiled into each narrate/zoom's `showSubtitles`).
 
 ## Side experiments and unwired code
 
