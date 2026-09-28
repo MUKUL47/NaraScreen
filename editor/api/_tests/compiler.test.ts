@@ -50,6 +50,23 @@ const byName = (actions: NaraAction[], name: string) => {
   return a!;
 };
 
+test("top-level subtitles:false turns off narration and zoom subtitles; a narrate's own value wins", () => {
+  const script = { ...baseScript([{ id: "s", beat: [
+    { fx: "narrate", narrate: "a" },
+    { fx: "narrate", narrate: "b", subtitles: true },
+    { fx: "zoom", rect: [10, 10, 200, 100], narrate: "c" },
+  ] }]), subtitles: false };
+  const trace: TraceEntry[] = [
+    { beat: "s", i: 0, kind: "fx", fx: "narrate", t: 1 },
+    { beat: "s", i: 1, kind: "fx", fx: "narrate", t: 2 },
+    { beat: "s", i: 2, kind: "fx", fx: "zoom", t: 3, rect: [10, 10, 200, 100] },
+  ];
+  const [a, b, z] = compile(script, trace);
+  assert.equal(a.showSubtitles, false);
+  assert.equal(b.showSubtitles, true);
+  assert.equal(z.showSubtitles, false);
+});
+
 test("zoom: emits zoomRect at the slot's timestamp with default duration/hold", () => {
   const script = baseScript([
     {

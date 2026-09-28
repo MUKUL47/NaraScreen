@@ -323,6 +323,8 @@ export interface DemoScript {
   camera?: CameraConfig;
   /** Default transition for every step after the first (a step's own `transition` wins). */
   transition?: StepTransition;
+  /** Burn in subtitles for every narration (default true); a narrate's own `subtitles` wins. */
+  subtitles?: boolean;
   /** Chapter options (on-screen badges, the lead chapter's title). */
   chapters?: ChaptersConfig;
   steps: Beat[];
@@ -734,6 +736,7 @@ export const DemoScriptSchema = z
       .optional()
       .describe("Follow camera for the whole video; steps can override it with their own `camera`."),
     transition: TransitionSchema.optional().describe("Default transition when a step begins (every step after the first; a step's own `transition` wins)."),
+    subtitles: z.boolean().optional().describe("Burn in subtitles for every narration, zoom narration included (default true). false makes a subtitle-free cut; a narrate's own `subtitles` still wins."),
     chapters: z
       .object({
         onScreen: z.boolean().optional().describe("Show a short chapter-title badge (top-left) at each chapter start (default false)."),

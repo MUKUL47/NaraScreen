@@ -119,6 +119,8 @@ interface EmitCtx {
   key: string;
   speakers: Map<string, Speaker>;
   clips?: Map<string, NarrationClip>;
+  /** Script-wide subtitles switch (top-level `subtitles`, default true). */
+  subtitles: boolean;
 }
 
 function indexTrace(trace: TraceEntry[]): Map<string, TraceEntry> {
@@ -306,6 +308,7 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
 
   switch (fx.fx) {
     case "zoom": {
+      if (!c.subtitles) base.showSubtitles = false;
       base.zoomDuration = fx.zoomDuration ?? c.d.zoomDuration;
       base.zoomHold = fx.zoomHold ?? c.d.zoomHold;
       if (fx.targets?.length) {
@@ -398,7 +401,7 @@ function emitAction(fx: FxEntry, id: string, tr: TraceEntry, c: EmitCtx): { acti
       // Freeze the frame while speaking unless told otherwise; the producer
       // fits the freeze to the clip.
       base.freeze = fx.freeze ?? true;
-      base.showSubtitles = fx.subtitles ?? true;
+      base.showSubtitles = fx.subtitles ?? c.subtitles;
       if (fx.subtitleSize != null) base.subtitleSize = fx.subtitleSize;
       return done();
     }
@@ -476,7 +479,7 @@ export function compile(
         }
       }
       const key = `${beat.id}:${i}`;
-      const out = emitAction(entry, `action-${++n}`, tr, { d, lang, viewport: script.viewport, ctx, where, key, speakers, clips });
+      const out = emitAction(entry, `action-${++n}`, tr, { d, lang, viewport: script.viewport, ctx, where, key, speakers, clips, subtitles: script.subtitles ?? true });
       out.action.name = `${beat.id} #${i} ${entry.fx}`;
       // Lets the desktop editor open the script entry behind a timeline clip.
       out.action.source = { step: beat.id, entry: i };
