@@ -18,7 +18,7 @@ NaraScreen uses Kokoro for text-to-speech. Two modes:
 
 **Option A — Docker (recommended):**
 ```bash
-docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu
+../scripts/voice-engine.sh   # GPU if one works, else CPU (or: docker run -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu)
 ```
 
 **Option B — Direct Python:**

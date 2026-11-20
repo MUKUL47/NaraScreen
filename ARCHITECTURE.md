@@ -26,7 +26,9 @@ A second layer lives in [editor/api/](editor/api/): a **headless, agent-facing i
 ui-demo-pipeline/
 ├── README.md                  user-facing intro (partly stale, see "Doc drift")
 ├── ARCHITECTURE.md            this file
-├── docker-compose.yml         Kokoro TTS server only (kokoro-fastapi-cpu on :8880)
+├── docker-compose.yml         Kokoro TTS server, CPU (kokoro-fastapi-cpu on :8880)
+├── docker-compose.rocm.yml    … on an AMD GPU; docker-compose.cuda.yml on NVIDIA
+├── scripts/voice-engine.sh    starts the GPU engine if it works, else the CPU one
 ├── package.json               metadata only: no scripts, no dependencies
 ├── scripts/kokoro-worker.py   persistent stdin/stdout Kokoro worker; nothing calls it
 └── editor/                    the app itself; run everything from here
@@ -322,7 +324,7 @@ npm run dist         # build + electron-builder (bundles kokoro-venv/ if present
 
 Requirements:
 - FFmpeg on `PATH` with `drawtext` (libfreetype) support, needed for callouts in dev.
-- Kokoro reachable on :8880 (`docker compose up -d` from the repo root), or `KOKORO_PYTHON=/abs/path/to/python`.
+- Kokoro reachable on :8880 (`scripts/voice-engine.sh` from the repo root), or `KOKORO_PYTHON=/abs/path/to/python`.
 
 **Current state (2026-09-25):**
 - `electron/tsconfig.json` type-checks cleanly.

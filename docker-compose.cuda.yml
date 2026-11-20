@@ -1,0 +1,17 @@
+# Kokoro on an NVIDIA GPU. Normally started by scripts/voice-engine.sh, which
+# falls back to the CPU engine (docker-compose.yml) if the GPU doesn't work.
+# Needs the NVIDIA Container Toolkit.
+services:
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-gpu:latest
+    container_name: narascreen-kokoro
+    ports:
+      - "8880:8880"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

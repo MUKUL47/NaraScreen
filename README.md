@@ -33,7 +33,8 @@ Both use the same renderer, effects and voices. A job made by a script is also a
 
 ```bash
 # 1. The voice engine (Kokoro TTS), once
-docker compose up -d                  # http://localhost:8880; the first run downloads ~500 MB
+scripts/voice-engine.sh               # http://localhost:8880: on your GPU (NVIDIA or AMD) if one works, else the CPU
+                                      # (status: scripts/voice-engine.sh status; CPU only: … up --cpu)
 
 # 2. Install
 cd editor && npm install

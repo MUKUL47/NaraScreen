@@ -1,0 +1,26 @@
+# Kokoro on an AMD GPU (ROCm). Normally started by scripts/voice-engine.sh, which
+# finds the right GPU, fills in the variables below, and falls back to the CPU
+# engine (docker-compose.yml) if the GPU doesn't work.
+#
+# Same API and port (8880) as the CPU image, so NaraScreen needs no changes.
+services:
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-rocm:latest
+    container_name: narascreen-kokoro
+    ports:
+      - "8880:8880"
+    restart: unless-stopped
+    # Only the chosen GPU is passed in (an integrated GPU would also show up otherwise).
+    devices:
+      - /dev/kfd
+      - ${KOKORO_GPU_CARD:-/dev/dri/card1}
+      - ${KOKORO_GPU_RENDER:-/dev/dri/renderD128}
+    group_add:
+      - video
+      - "${KOKORO_RENDER_GID:-992}" # host's render group id
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      # Cards ROCm doesn't ship kernels for run as their family's base chip,
+      # e.g. RX 6700 XT (gfx1031) as gfx1030 = "10.3.0". Empty = no override.
+      HSA_OVERRIDE_GFX_VERSION: "${KOKORO_GFX_OVERRIDE:-}"
