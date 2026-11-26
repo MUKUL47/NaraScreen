@@ -227,6 +227,24 @@ The script is plain JSON, so you can edit it yourself at any time and `make` aga
 
 ---
 
+## Stick-figure explainers
+
+For videos about people rather than software (workplace training, road safety, how-tos), NaraScreen ships a stick-figure path in [`explainers/`](explainers/README.md). There is nothing to record. You or your agent write **one JSON** with characters, props, a set, timed voice lines and speech bubbles. It renders to MP4 locally with the [figures](https://github.com/cherifya/figures) engine, NaraScreen's own Chromium and FFmpeg. Nothing new is installed.
+
+```bash
+node explainers/tools/lint.mjs scene.json                      # vocabulary, overlaps, floating feet
+node explainers/tools/render.mjs scene.json out/ --stills 2 5   # look before rendering
+node explainers/tools/make.mjs scene.json out/scene.mp4         # voices (Kokoro by default) + render
+```
+
+- **Add-ons** add props, poses and sets (`road-safety`, `workplace`, or your own module).
+- **Voice engines** are plug-ins chosen with one JSON key.
+- You can **finish the result** with title cards, chapters, music and callouts through a `source.video` script.
+
+Start with the agent guide, [explainers/README.md](explainers/README.md), or the short [explainers/llms.txt](explainers/llms.txt).
+
+---
+
 ## Everything stays on your machine
 
 The browser (Playwright/Chromium), the voices ([Kokoro](https://github.com/remsky/Kokoro-FastAPI), in Docker) and the rendering ([FFmpeg](https://ffmpeg.org/)) all run locally. `narascreen serve` binds to `127.0.0.1` unless you choose otherwise, and can require a token (`--token`).

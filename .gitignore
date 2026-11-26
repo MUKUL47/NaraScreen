@@ -23,6 +23,7 @@ __pycache__/
 editor/indicf5-prototype/
 
 # ─── Generated media & output ───────────────────────────────────
+explainers/.voice-cache/
 demo-output/
 output/
 narascreen-out/

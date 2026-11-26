@@ -1,0 +1,23 @@
+{
+  "title": "workplace add-on: office set and safety props",
+  "w": 1600, "h": 900, "ground": 780, "groundLine": false, "labelFs": 26,
+  "duration": 4,
+  "addons": ["workplace"],
+  "set": { "name": "office", "s": 2.5, "lines": ["Safety first:", "1. Keep exits clear", "2. Report spills"] },
+  "actors": [
+    { "label": "MANAGER", "s": 2.5, "look": ["tie", "name-badge"], "keys": [
+      { "t": 0, "x": "@whiteboard", "y": "@whiteboard", "face": -1, "pose": "pointing", "expr": "happy" } ]},
+    { "label": "WORKER", "s": 2.5, "labelDy": -10, "look": ["vest-orange", "hard-hat"], "keys": [
+      { "t": 0, "x": "@desk", "y": "@desk", "face": -1, "pose": "holding", "item": "card", "expr": "neutral" } ]},
+    { "label": "SHOP", "s": 2.5, "labelDy": -10, "look": ["apron", "work-cap"], "keys": [
+      { "t": 0, "x": 1540, "y": "@desk", "face": -1, "pose": "holding", "item": "shopping-bag", "expr": "happy" } ]},
+    { "label": "CLERK", "s": 2.5, "look": ["glasses"], "keys": [
+      { "t": 0, "x": "@chair", "y": 705, "face": 1, "pose": "sit_write" } ]}
+  ],
+  "fx": [
+    { "type": "exit-sign", "x": "@door", "y": "@door-420", "s": 2.5, "arrow": -1 },
+    { "type": "wet-floor-sign", "x": 560, "y": "@door", "s": 2.5 },
+    { "type": "cone", "x": 790, "y": "@door", "s": 2.5 },
+    { "type": "extinguisher", "x": 270, "y": "@door", "s": 2.5 }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+ "_about": "sha256 of FIGURES.svg(structuredClone(example), t) from the UNPATCHED vendored figures.js (commit f3c70cf, sha256 3ad2abef...6653a), captured 2026-11-26 before the add-on patch. addons.test.mjs checks the patched engine still matches byte for byte. Key: <example>@<scene time>.",
+ "hello@0": {
+  "sha256": "239ffbf8b741c03049a14347b12075216212b7d7c70438c9ced2a39f064df1e9",
+  "length": 5056
+ },
+ "hello@2.5": {
+  "sha256": "4f443a63a1b7832511b0ec4f6e0c72907bf4181a1496860aaa8e871e46ccb949",
+  "length": 6695
+ },
+ "hello@5": {
+  "sha256": "cfbfcbf84cc7049ea734077cfa5d1a89d46ac212bdfbdf9844deab06f2fbc756",
+  "length": 7043
+ },
+ "hello@8": {
+  "sha256": "5344a77d22857f8b338fa0db88b42b75dcb87c192f1300303dc4275608845a43",
+  "length": 7097
+ },
+ "hello@11": {
+  "sha256": "399d93b01835b2a95f7489ff589c8d72f3fc5049069084be03cafffca1181203",
+  "length": 8521
+ },
+ "court@7": {
+  "sha256": "90731c755cb9703adc5f4c4435b76b092928f44ec1819cb730e6189c11fe4a51",
+  "length": 7770
+ },
+ "court@9.5": {
+  "sha256": "aa57f4a0f7ce5548c9471807ba36dc547fa4d216ee4bd7894e81efbcb75bdba3",
+  "length": 11747
+ },
+ "court@12": {
+  "sha256": "13f8e188c03a1c0eb5d53ffb8b6c4fe906eaa593eaef7af5b4395f1728351819",
+  "length": 18867
+ },
+ "court@15": {
+  "sha256": "04eadfde78d849f52d5f2891225026bba49a7de304ca99d290831cce914cbe3a",
+  "length": 10674
+ },
+ "mirror@0": {
+  "sha256": "e08d4823a8a289c7578050413a62ecc09f75d1189a342c804ad4e9182c96729c",
+  "length": 2779
+ },
+ "mirror@2.5": {
+  "sha256": "cdc5275049d41870cb96a51cfec6280a4b8486e793959a4338aaf308fc7c4898",
+  "length": 6363
+ },
+ "mirror@5": {
+  "sha256": "59fc2cb95ef647fe60233bf1a79c8bd58afb3909f97663bf56a0c62257902af4",
+  "length": 7885
+ },
+ "mirror@8": {
+  "sha256": "5108cf2ae168190c7bb07b31ef43639cca5bd02ca9ccebcb2383163be4da81bf",
+  "length": 9857
+ },
+ "mirror@10.5": {
+  "sha256": "71bf7e0ae86925486df7b676ed808070bec4f7f952036014ea8715460f7df68e",
+  "length": 7047
+ }
+}

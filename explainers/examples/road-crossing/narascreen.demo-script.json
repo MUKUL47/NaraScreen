@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "scope": "road-crossing",
+  "source": { "video": "out/scene.mp4" },
+  "intro": {
+    "template": "clean",
+    "title": "Crossing the road safely",
+    "subtitle": "Wait, stop, look, cross",
+    "accent": "#a8322d",
+    "duration": 3
+  },
+  "outro": {
+    "template": "bold",
+    "title": "Stop at the line. Wait for WALK.",
+    "subtitle": "Drivers and walkers keep each other safe.",
+    "accent": "#a8322d",
+    "duration": 3.5
+  },
+  "chapters": { "onScreen": true },
+  "steps": [
+    { "id": "wait", "beat": [
+      { "fx": "chapter", "title": "Wait", "at": 0 },
+      { "fx": "callout", "style": "lower-third", "text": "Wait for the WALK sign", "at": 3.6, "duration": 4.2 }
+    ]},
+    { "id": "stop", "beat": [
+      { "fx": "chapter", "title": "Stop", "at": 8.0 },
+      { "fx": "arrow", "rect": [726, 862, 36, 80], "text": "Stop line", "from": "bottom-left", "at": 12.4, "duration": 3.4 },
+      { "fx": "callout", "style": "lower-third", "text": "Stop at the line", "at": 12.6, "duration": 4.0 }
+    ]},
+    { "id": "cross", "beat": [
+      { "fx": "chapter", "title": "Cross", "at": 18.0 },
+      { "fx": "callout", "style": "lower-third", "text": "Look left, right, left, then cross", "at": 17.4, "duration": 3.0 }
+    ]}
+  ]
+}

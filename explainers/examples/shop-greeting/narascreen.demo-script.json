@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "scope": "shop-greeting",
+  "source": { "video": "out/scene.mp4" },
+  "intro": {
+    "template": "clean",
+    "title": "Greeting customers",
+    "subtitle": "Welcome, help, thank",
+    "accent": "#3d7a4a",
+    "duration": 3
+  },
+  "outro": {
+    "template": "bold",
+    "title": "Every customer, every time",
+    "subtitle": "Greet them. Walk them to it. Thank them.",
+    "accent": "#3d7a4a",
+    "duration": 3.5
+  },
+  "chapters": { "onScreen": true },
+  "steps": [
+    { "id": "welcome", "chapter": "Welcome", "beat": [
+      { "fx": "callout", "style": "lower-third", "text": "Greet within 10 seconds", "at": 3.6, "duration": 3.2 },
+      { "fx": "callout", "style": "step-counter", "step": 1, "text": "Greet them", "placement": "below",
+        "rect": [1270, 540, 161, 231], "at": 4.2, "duration": 4.5 }
+    ]},
+    { "id": "help", "chapter": "Help", "beat": [
+      { "fx": "callout", "style": "lower-third", "text": "Walk them to the item", "at": 6.9, "duration": 7.5 },
+      { "fx": "callout", "style": "step-counter", "step": 2, "text": "Lead the way", "placement": "above",
+        "rect": [348, 464, 427, 488], "at": 13.0, "duration": 4.0 }
+    ]},
+    { "id": "thank", "chapter": "Thank", "beat": [
+      { "fx": "callout", "style": "step-counter", "step": 3, "text": "Thank them", "placement": "below",
+        "rect": [1273, 540, 163, 234], "at": 23.8, "duration": 4.0 }
+    ]}
+  ]
+}

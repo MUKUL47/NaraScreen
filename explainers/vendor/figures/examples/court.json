@@ -1,0 +1,241 @@
+{
+ "w": 900,
+ "h": 788,
+ "ground": 640,
+ "fx": [
+  {
+   "type": "chateau",
+   "x": 450,
+   "y": 330,
+   "s": 1.15,
+   "t0": 7.0
+  },
+  {
+   "type": "garden",
+   "x": 450,
+   "y": 735,
+   "s": 1.25,
+   "n": 5,
+   "t0": 7.0
+  },
+  {
+   "type": "firework",
+   "t0": 9.3,
+   "t1": 12.4,
+   "bursts": [
+    [
+     260,
+     170,
+     0
+    ],
+    [
+     600,
+     130,
+     0.45
+    ],
+    [
+     430,
+     230,
+     1.0
+    ],
+    [
+     720,
+     210,
+     1.5
+    ],
+    [
+     200,
+     120,
+     2.0
+    ]
+   ],
+   "r": 72
+  },
+  {
+   "type": "text",
+   "text": "THREE WEEKS LATER",
+   "x": 450,
+   "y": 120,
+   "fs": 36,
+   "color": "#a8322d",
+   "t0": 12.4,
+   "t1": 14.2
+  },
+  {
+   "type": "night",
+   "t0": 12.3,
+   "t1": 17,
+   "a": 0.28
+  },
+  {
+   "type": "bars",
+   "x": 548,
+   "y": 640,
+   "w": 230,
+   "h": 330,
+   "t0": 14.8,
+   "front": true,
+   "k": [
+    {
+     "t": 14.8,
+     "drop": 0
+    },
+    {
+     "t": 15.4,
+     "drop": 1
+    }
+   ]
+  }
+ ],
+ "actors": [
+  {
+   "label": "LOUIS XIV",
+   "s": 2.108,
+   "look": [
+    "crown",
+    "wig",
+    "robe"
+   ],
+   "keys": [
+    {
+     "t": 7.4,
+     "x": -80,
+     "y": 528.4,
+     "pose": "standing",
+     "expr": "neutral",
+     "face": 1
+    },
+    {
+     "t": 8.9,
+     "x": 245,
+     "move": "walk",
+     "pose": "standing",
+     "expr": "neutral"
+    },
+    {
+     "t": 9.5,
+     "x": 245,
+     "pose": "standing",
+     "expr": "surprised"
+    },
+    {
+     "t": 10.9,
+     "pose": "standing",
+     "expr": "surprised"
+    },
+    {
+     "t": 11.5,
+     "pose": "arms_crossed",
+     "expr": "angry"
+    },
+    {
+     "t": 13.0,
+     "pose": "arms_crossed",
+     "expr": "angry"
+    },
+    {
+     "t": 13.5,
+     "pose": "point_fwd",
+     "expr": "angry"
+    }
+   ]
+  },
+  {
+   "label": "FOUQUET",
+   "s": 2.108,
+   "look": [
+    "wig"
+   ],
+   "keys": [
+    {
+     "t": 7.4,
+     "x": 560,
+     "y": 528.4,
+     "pose": "present",
+     "expr": "happy",
+     "face": -1
+    },
+    {
+     "t": 9.4,
+     "pose": "present",
+     "expr": "happy",
+     "face": -1
+    },
+    {
+     "t": 9.9,
+     "pose": "cheer",
+     "expr": "laughing",
+     "face": -1
+    },
+    {
+     "t": 11.9,
+     "pose": "cheer",
+     "expr": "laughing",
+     "face": -1
+    },
+    {
+     "t": 12.5,
+     "pose": "standing",
+     "expr": "surprised",
+     "face": -1
+    },
+    {
+     "t": 13.6,
+     "pose": "standing",
+     "expr": "surprised",
+     "face": 1
+    },
+    {
+     "t": 14.3,
+     "pose": "slump",
+     "expr": "sad",
+     "face": 1
+    }
+   ]
+  },
+  {
+   "label": "D'ARTAGNAN",
+   "s": 2.108,
+   "look": [
+    "musket",
+    "sword"
+   ],
+   "keys": [
+    {
+     "t": 12.4,
+     "x": 990,
+     "y": 528.4,
+     "pose": "standing",
+     "expr": "determined",
+     "face": -1
+    },
+    {
+     "t": 13.7,
+     "x": 700,
+     "move": "walk",
+     "pose": "standing",
+     "expr": "determined",
+     "face": -1
+    },
+    {
+     "t": 14.1,
+     "x": 690,
+     "pose": "grab",
+     "expr": "determined",
+     "face": -1
+    },
+    {
+     "t": 14.7,
+     "x": 770,
+     "pose": "point_fwd",
+     "expr": "determined",
+     "face": -1
+    }
+   ]
+  }
+ ],
+ "labelFs": 28,
+ "title": "The party that ended a career (France, 1661)",
+ "start": 7.0,
+ "duration": 9.8
+}

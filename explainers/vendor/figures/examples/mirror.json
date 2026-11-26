@@ -1,0 +1,276 @@
+{
+ "w": 900,
+ "h": 400,
+ "ground": 355,
+ "fx": [
+  {
+   "type": "sun",
+   "x": 95,
+   "y": 78,
+   "t0": 0.2
+  },
+  {
+   "type": "beam",
+   "t0": 0.5,
+   "x1": 120,
+   "y1": 100,
+   "x2": 300,
+   "y2": 232,
+   "w1": 10,
+   "w2": 24
+  },
+  {
+   "type": "beam",
+   "t0": 2.7,
+   "x1": 300,
+   "y1": 232,
+   "w1": 22,
+   "w2": 36,
+   "k": [
+    {
+     "t": 2.7,
+     "x2": 312,
+     "y2": 232
+    },
+    {
+     "t": 3.4,
+     "x2": 700,
+     "y2": 208
+    },
+    {
+     "t": 5.7,
+     "x2": 700,
+     "y2": 208
+    },
+    {
+     "t": 6.4,
+     "x2": 512,
+     "y2": 208
+    },
+    {
+     "t": 8.8,
+     "x2": 512,
+     "y2": 208
+    },
+    {
+     "t": 9.5,
+     "x2": 700,
+     "y2": 208
+    }
+   ]
+  },
+  {
+   "type": "mirrorstand",
+   "x": 300,
+   "y": 355,
+   "t0": 0.3,
+   "k": [
+    {
+     "t": 2.7,
+     "rot": -18
+    },
+    {
+     "t": 3.3,
+     "rot": 14
+    },
+    {
+     "t": 5.7,
+     "rot": 14
+    },
+    {
+     "t": 6.2,
+     "rot": 4
+    },
+    {
+     "t": 8.8,
+     "rot": 4
+    },
+    {
+     "t": 9.4,
+     "rot": 14
+    }
+   ]
+  },
+  {
+   "type": "sparkle",
+   "x": 700,
+   "y": 198,
+   "t0": 3.6,
+   "t1": 6.0,
+   "r": 50
+  },
+  {
+   "type": "sparkle",
+   "x": 700,
+   "y": 198,
+   "t0": 9.6,
+   "r": 50
+  },
+  {
+   "type": "tint",
+   "t0": 6.3,
+   "t1": 9.1,
+   "a": 0.32
+  },
+  {
+   "type": "snow",
+   "t0": 6.5,
+   "t1": 9.0
+  },
+  {
+   "type": "thought",
+   "x": 742,
+   "y": 121,
+   "t0": 6.9,
+   "t1": 8.8,
+   "text": "Who asked you?",
+   "w": 190,
+   "h": 46,
+   "fs": 19
+  }
+ ],
+ "actors": [
+  {
+   "label": "BOSS",
+   "s": 1.299,
+   "look": [
+    "tie"
+   ],
+   "keys": [
+    {
+     "t": 0,
+     "x": 700,
+     "y": 286.1,
+     "pose": "standing",
+     "expr": "neutral",
+     "face": -1
+    },
+    {
+     "t": 3.4,
+     "pose": "standing",
+     "expr": "neutral",
+     "face": -1
+    },
+    {
+     "t": 3.9,
+     "pose": "cheer",
+     "expr": "laughing",
+     "glow": 0.9,
+     "face": -1
+    },
+    {
+     "t": 5.9,
+     "pose": "cheer",
+     "expr": "laughing",
+     "glow": 0.9,
+     "face": -1
+    },
+    {
+     "t": 6.5,
+     "pose": "arms_crossed",
+     "expr": "angry",
+     "glow": 0,
+     "face": -1
+    },
+    {
+     "t": 9.3,
+     "pose": "arms_crossed",
+     "expr": "angry",
+     "glow": 0,
+     "face": -1
+    },
+    {
+     "t": 9.8,
+     "pose": "cheer",
+     "expr": "happy",
+     "glow": 0.9,
+     "face": -1
+    }
+   ]
+  },
+  {
+   "label": "YOU",
+   "s": 1.299,
+   "keys": [
+    {
+     "t": 0,
+     "x": 228,
+     "y": 286.1,
+     "pose": "reaching",
+     "expr": "neutral",
+     "face": 1,
+     "op": 0
+    },
+    {
+     "t": 0.6,
+     "op": 1,
+     "pose": "reaching",
+     "expr": "neutral"
+    },
+    {
+     "t": 2.7,
+     "pose": "reaching",
+     "expr": "neutral"
+    },
+    {
+     "t": 3.3,
+     "pose": "reaching",
+     "expr": "happy"
+    },
+    {
+     "t": 5.4,
+     "x": 228,
+     "pose": "reaching",
+     "expr": "happy"
+    },
+    {
+     "t": 6.4,
+     "x": 512,
+     "move": "run",
+     "pose": "standing",
+     "expr": "happy"
+    },
+    {
+     "t": 6.8,
+     "x": 512,
+     "pose": "cheer",
+     "expr": "laughing",
+     "glow": 1
+    },
+    {
+     "t": 8.6,
+     "x": 512,
+     "pose": "cheer",
+     "expr": "laughing",
+     "glow": 1
+    },
+    {
+     "t": 9.0,
+     "x": 512,
+     "pose": "standing",
+     "expr": "worried",
+     "glow": 0,
+     "face": -1
+    },
+    {
+     "t": 9.75,
+     "x": 228,
+     "move": "run",
+     "pose": "standing",
+     "expr": "worried",
+     "face": -1
+    },
+    {
+     "t": 9.9,
+     "x": 228,
+     "pose": "reaching",
+     "expr": "happy",
+     "face": 1
+    }
+   ]
+  }
+ ],
+ "labelFs": 20,
+ "title": "The mirror: hold the light on the boss, never step into it",
+ "duration": 11.25
+}

@@ -1,0 +1,38 @@
+# NaraScreen stick-figure explainers
+
+> Animated stick-figure explainer videos (training, road safety, how-tos) from one JSON file holding the scene, add-ons, set, places, voice and lines. Rendered locally with the vendored figures engine, NaraScreen's Playwright Chromium and ffmpeg. You can optionally finish the video in NaraScreen via `source.video`. Use it for stories about people and behaviour. To show software, record the website with NaraScreen instead.
+
+The loop is:
+1. plan the beats;
+2. write the JSON;
+3. lint;
+4. render stills and look at them;
+5. run make.mjs for voices and the render;
+6. optionally, the NaraScreen finishing script, using `render.mjs --map --at <t>` for rect pixels.
+
+Links are relative to this folder (`explainers/`). Commands run from the repo root.
+
+## Guide
+- [README.md](README.md): the full agent guide, covering the model, the loop, commands, scene-to-video pixel mapping, voices, staging tips and limits.
+
+## Vocabulary and contracts
+- [vendor/figures/spec.md](vendor/figures/spec.md): the scene format, poses, expressions, looks, items and fx types.
+- [vendor/figures/acting.md](vendor/figures/acting.md): beat recipes (entrance, greeting, handshake, reveal, argument, triumph).
+- [addons/README.md](addons/README.md): the add-on contract (poses, exprs, items, looks, fx, sets, places, the helper object).
+- [voices/README.md](voices/README.md): the voice-engine contract (`synthesize`, `check`, `voices`); kokoro is the default, and openai-compatible is also built in.
+
+## Commands
+- `node explainers/tools/lint.mjs scene.json [--strict]`
+- `node explainers/tools/render.mjs scene.json out/stills/ --stills 2 5 9`
+- `node explainers/tools/render.mjs scene.json --map [--at 9]`
+- `node explainers/tools/make.mjs scene.json out/scene.mp4 [--lang hi] [--no-voice]`
+- `node explainers/tools/render.mjs scene.json out/scene.mp4`: silent, with no voices.
+
+## Examples
+- [preview/road-rules.json](preview/road-rules.json): 38 s, built-ins only, with a hand-built car and driver.
+- [examples/road-crossing/](examples/road-crossing/): road-safety add-on, plus a NaraScreen finishing script.
+- [examples/shop-greeting/](examples/shop-greeting/): workplace add-on, plus a NaraScreen finishing script.
+
+## Optional
+- [vendor/figures/VENDORED.md](vendor/figures/VENDORED.md): the pinned engine and its one local patch.
+- ../editor/api/MANUAL.md, section "Editing an existing video": NaraScreen `source.video` scripts.
