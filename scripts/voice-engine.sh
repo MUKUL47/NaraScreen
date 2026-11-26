@@ -6,6 +6,12 @@
 #   scripts/voice-engine.sh status     # which engine is running, on what
 #   scripts/voice-engine.sh down       # stop it
 #
+#   scripts/voice-engine.sh up chatterbox   # also start Chatterbox (en/hi, :8890), stopping Maya first
+#   scripts/voice-engine.sh up maya2        # also start Maya-2 (en + 11 Indian languages, :8891), stopping Chatterbox first
+#   scripts/voice-engine.sh down chatterbox|maya2
+#   Kokoro keeps running either way: Kokoro plus ONE of the two fits on a 12 GB GPU, not all three.
+#   Their servers live in explainers/voices/servers/ (see its README.md); AMD GPUs only for now.
+#
 # GPU order: NVIDIA (if nvidia-smi works), then the largest AMD GPU with >= 6 GB of
 # its own memory (integrated GPUs are skipped). The GPU engine only counts as working
 # if the model loaded on the GPU AND a test sentence comes back as audio; anything
@@ -133,9 +139,91 @@ cmd_status() {
   echo "$image on $where — $state ($URL)"
 }
 
+# --- Chatterbox / Maya-2 (explainers/voices/servers/) ----------------------
+SERVERS="$ROOT/explainers/voices/servers"
+SRV_READY_TIMEOUT="${TTS_READY_TIMEOUT:-300}"   # seconds after the container starts
+srv_port() { case "$1" in chatterbox) echo 8890 ;; maya2) echo 8891 ;; esac; }
+srv_other() { case "$1" in chatterbox) echo maya2 ;; maya2) echo chatterbox ;; esac; }
+srv_url() { echo "http://127.0.0.1:$(srv_port "$1")"; }
+srv_running() {  # prints the running container's name; tts-<engine> = started by the old tts-eval scripts
+  local n
+  for n in "narascreen-$1" "tts-$1"; do
+    [[ -n "$(docker ps -q -f "name=^${n}$" -f status=running)" ]] && { echo "$n"; return 0; }
+  done
+  return 1
+}
+srv_stop() {
+  local n stopped=""
+  for n in "narascreen-$1" "tts-$1"; do
+    docker inspect "$n" >/dev/null 2>&1 || continue
+    docker stop "$n" >/dev/null 2>&1; docker rm -f "$n" >/dev/null 2>&1
+    stopped=1
+  done
+  [[ -n "$stopped" ]] && log "stopped $1"
+  return 0
+}
+srv_gpu() {  # the render node passed into the container
+  docker inspect -f '{{range .HostConfig.Devices}}{{.PathOnHost}} {{end}}' "$1" 2>/dev/null | grep -o '/dev/dri/renderD[0-9]*'
+}
+
+srv_up() {
+  local e=$1 other name t0=$SECONDS
+  other=$(srv_other "$e")
+  if srv_running "$other" >/dev/null; then
+    log "stopping $other first: Kokoro plus only one of chatterbox/maya2 fits on the GPU"
+  fi
+  srv_stop "$other"
+  srv_stop "$e"
+  log "starting $e…"
+  "$SERVERS/$e/serve.sh" >/dev/null || { log "$e failed to start"; return 1; }
+  name="narascreen-$e"
+  local deadline=$((SECONDS + SRV_READY_TIMEOUT))
+  while ((SECONDS < deadline)); do
+    if curl -sf -o /dev/null "$(srv_url "$e")/health"; then
+      log "ready: $e at $(srv_url "$e") on $(srv_gpu "$name") after $((SECONDS - t0)) s"
+      return 0
+    fi
+    if [[ -z "$(docker ps -q -f "name=^${name}$" -f status=running)" ]]; then
+      log "$e stopped while starting:"
+      docker logs --tail 15 "$name" 2>&1 | sed 's/^/    /' >&2
+      return 1
+    fi
+    sleep 2
+  done
+  log "$e not ready after ${SRV_READY_TIMEOUT}s; see: docker logs $name"
+  return 1
+}
+
+srv_status() {
+  local e=$1 name state
+  name=$(srv_running "$e") || { echo "not running"; return 0; }
+  curl -sf -o /dev/null "$(srv_url "$e")/health" && state=ready || state="loading or not responding"
+  echo "$name on GPU $(srv_gpu "$name") — $state ($(srv_url "$e"))"
+}
+
+cmd_status_all() {
+  local rc=0 k
+  k=$(cmd_status) || rc=1
+  printf '%-11s %s\n' "kokoro:" "$k" "chatterbox:" "$(srv_status chatterbox)" "maya2:" "$(srv_status maya2)"
+  return $rc
+}
+
+usage() { echo "usage: $0 [up [--cpu] | up chatterbox|maya2 | status | down [chatterbox|maya2]]" >&2; exit 2; }
+
 case "${1:-up}" in
-  up)     shift || true; cmd_up "$@" ;;
-  down)   stop_all; log "stopped" ;;
-  status) cmd_status ;;
-  *)      echo "usage: $0 [up [--cpu] | status | down]" >&2; exit 2 ;;
+  up)
+    shift || true
+    case "${1:-}" in
+      chatterbox|maya2) srv_up "$1" ;;
+      ""|--cpu)         cmd_up "$@" ;;
+      *)                usage ;;
+    esac ;;
+  down)
+    case "${2:-}" in
+      chatterbox|maya2) srv_stop "$2" ;;
+      "")               stop_all; log "stopped" ;;
+      *)                usage ;;
+    esac ;;
+  status) cmd_status_all ;;
+  *)      usage ;;
 esac

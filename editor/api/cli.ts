@@ -1385,17 +1385,18 @@ function decideRecording(dir: string, loaded: LoadedScript, force: boolean): { r
   try {
     assertSameStructure(job, loaded.script);
   } catch (e) {
-    const d = (e instanceof AgentError ? e.details : undefined) as
-      | { changedSteps: string[]; addedSteps: string[]; removedSteps: string[] }
-      | undefined;
-    const parts = [
-      d?.changedSteps.length ? `changed: ${d.changedSteps.join(", ")}` : "",
-      d?.addedSteps.length ? `added: ${d.addedSteps.join(", ")}` : "",
-      d?.removedSteps.length ? `removed: ${d.removedSteps.join(", ")}` : "",
-    ].filter(Boolean);
+    // A video-source job's error carries { source } instead of step lists.
     if (loaded.script.source) {
       return { record: true, warning: "The source video changed since it was imported — re-importing it." };
     }
+    const d = (e instanceof AgentError ? e.details : undefined) as
+      | { changedSteps?: string[]; addedSteps?: string[]; removedSteps?: string[] }
+      | undefined;
+    const parts = [
+      d?.changedSteps?.length ? `changed: ${d.changedSteps.join(", ")}` : "",
+      d?.addedSteps?.length ? `added: ${d.addedSteps.join(", ")}` : "",
+      d?.removedSteps?.length ? `removed: ${d.removedSteps.join(", ")}` : "",
+    ].filter(Boolean);
     const what = parts.length ? `steps ${parts.join("; ")}` : "setup, defaults, baseUrl, viewport or session";
     return {
       record: true,

@@ -1,0 +1,3 @@
+# Per-machine: the data directory setting and the default data directory (venv, weights, caches)
+.env.local
+.data/

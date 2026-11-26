@@ -1,0 +1,70 @@
+diff --git a/maya3/engine.py b/maya3/engine.py
+index ccb12af..6a74d71 100644
+--- a/maya3/engine.py
++++ b/maya3/engine.py
+@@ -29,6 +29,7 @@ from typing import Callable, Optional
+ 
+ import numpy as np
+ import torch
++_DT = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[__import__("os").environ.get("MAYA3_DTYPE", "bf16")]  # local patch: RDNA2 bf16 GEMM crashes
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ for p in (ROOT, ROOT / "scripts"):
+@@ -71,7 +72,7 @@ class EngineConfig:
+     chunk_s: float = 20.0                # long text is split into pieces of about this many seconds
+     use_graphs: bool = True
+     fuse_proj: bool = False              # backbone: one GEMM for q|k|v and one for gate|up per layer
+-    fuse_rope: bool = True               # backbone: fused q/k RMSNorm + RoPE + KV-cache write (Triton; implies fuse_proj)
++    fuse_rope: bool = os.environ.get("MAYA3_FUSE_ROPE", "1") == "1"  # local patch; orig True               # backbone: fused q/k RMSNorm + RoPE + KV-cache write (Triton; implies fuse_proj)
+     fused_norm: bool = False             # backbone: F.rms_norm instead of the HF RMSNorm module
+     fused_depth: bool = True             # depth: Triton add+LayerNorm and one-kernel top-k sampler
+     compile_depth: bool = False          # Inductor-fuse the depth frame body before capture (measured: no gain; off)
+@@ -155,7 +156,7 @@ class Engine:
+         torch.backends.cuda.matmul.allow_tf32 = False
+         t0 = time.perf_counter()
+         mcfg = {"model": {"backbone": str(backbone_dir), "attn": "sdpa"}, "data": {"max_tokens": 8192}}
+-        self.model, self.provenance = load_model_for_eval(str(ckpt), device=device, dtype=torch.bfloat16, cfg=mcfg,
++        self.model, self.provenance = load_model_for_eval(str(ckpt), device=device, dtype=_DT, cfg=mcfg,
+                                                           config=str(model_config or ROOT / "configs/s3_fresh_v1.yaml"),
+                                                           amortize_frac=1.0, require_anchor=True, verbose=False)
+         self.model.depth.float()
+@@ -189,7 +190,7 @@ class Engine:
+         rows = rows + tuple(b for b in ROW_BUCKETS if b > rows[-1])[:1]
+         self.buckets, self.row_buckets, self.max_rows = buckets, rows, rows[-1]
+         ctx = tuple(c for c in (256, 512, 768, 1024, 1536, 2048, 3072) if c < cfg.capacity) + (cfg.capacity,)
+-        dt = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[cfg.depth_dtype]
++        dt = {"bf16": _DT, "fp16": torch.float16, "fp32": torch.float32}[cfg.depth_dtype]
+         self.backbone = StaticBackbone(self.model.backbone, n, capacity=cfg.capacity, batch_buckets=rows, ctx_buckets=ctx,
+                                        attention="triton", use_graphs=cfg.use_graphs,
+                                        fuse_proj=cfg.fuse_proj, fused_norm=cfg.fused_norm, fuse_rope=cfg.fuse_rope)
+@@ -207,7 +208,7 @@ class Engine:
+             torch.cuda.empty_cache()
+         m = n + 1
+         D = self.model.backbone.d_model
+-        self.h = torch.zeros(m, D, device=dev, dtype=torch.bfloat16)
++        self.h = torch.zeros(m, D, device=dev, dtype=_DT)
+         self.feedback = torch.zeros_like(self.h)
+         self.frames_t = torch.zeros(m, device=dev, dtype=torch.long)
+         self.min_t = torch.zeros(m, device=dev, dtype=torch.long)
+@@ -274,8 +275,8 @@ class Engine:
+             if voice.ts:
+                 # embed a dummy request to get the prefix embeddings exactly as the full prompt composes them
+                 ex = builder.example(self.packer, voice, "a", voice.ref_lang or "en")
+-                prompt, n = self.S.prompt_from_example(ex, self.model, self.device, torch.bfloat16, 32)
+-                emb = prompt[:, :voice.ts].to(torch.bfloat16)
++                prompt, n = self.S.prompt_from_example(ex, self.model, self.device, _DT, 32)
++                emb = prompt[:, :voice.ts].to(_DT)
+                 h, cache = self.model.backbone(emb, use_cache=True)
+                 voice.kv = [(l.keys[:, :, :voice.ts].clone(), l.values[:, :, :voice.ts].clone()) for l in cache.layers]
+                 voice.emb = emb.clone()
+@@ -400,8 +401,8 @@ class Engine:
+         text = req.pieces[req.k]
+         builder = voice.builder or self.builder
+         ex = builder.example(self.packer, voice, text, req.lang)
+-        prompt, n = S.prompt_from_example(ex, self.model, self.device, torch.bfloat16, 32)
+-        prompt = prompt.to(torch.bfloat16)
++        prompt, n = S.prompt_from_example(ex, self.model, self.device, _DT, 32)
++        prompt = prompt.to(_DT)
+         ef, er = S.expected_frames(self.prior, req.lang, len(text))
+         loose = min(cfg.hard_cap, int(2.0 * (ef + er) + 40))
+         cap = loose

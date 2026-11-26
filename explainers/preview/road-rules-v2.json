@@ -1,0 +1,614 @@
+{
+ "title": "Road safety: 6 simple rules (v2)",
+ "w": 1600,
+ "h": 900,
+ "ground": 760,
+ "labelFs": 28,
+ "groundLine": false,
+ "duration": 55.0,
+ "addons": [
+  "road-safety"
+ ],
+ "set": {
+  "name": "road",
+  "s": 2.6,
+  "band": [
+   820,
+   1170
+  ],
+  "stopLine": 770,
+  "lightPost": 1380,
+  "cuts": [
+   [
+    28.0,
+    "street"
+   ],
+   [
+    50.0,
+    "road"
+   ]
+  ]
+ },
+ "fx": [
+  {
+   "type": "traffic-light",
+   "x": "@light-post",
+   "y": "@light-post",
+   "s": 2.6,
+   "pole": 180,
+   "k": [
+    {
+     "t": 0,
+     "state": "green"
+    },
+    {
+     "t": 11.0,
+     "state": "green"
+    },
+    {
+     "t": 11.04,
+     "state": "amber"
+    },
+    {
+     "t": 12.6,
+     "state": "amber"
+    },
+    {
+     "t": 12.64,
+     "state": "red"
+    },
+    {
+     "t": 47.0,
+     "state": "red"
+    },
+    {
+     "t": 47.04,
+     "state": "green"
+    }
+   ]
+  },
+  {
+   "type": "ped-signal",
+   "x": "@light-post",
+   "y": "@light-post",
+   "s": 2.6,
+   "k": [
+    {
+     "t": 0,
+     "state": "dont"
+    },
+    {
+     "t": 17.56,
+     "state": "dont"
+    },
+    {
+     "t": 17.6,
+     "state": "walk"
+    },
+    {
+     "t": 46.0,
+     "state": "walk",
+     "flash": 0
+    },
+    {
+     "t": 46.04,
+     "state": "walk",
+     "flash": 1
+    },
+    {
+     "t": 46.96,
+     "state": "walk",
+     "flash": 1
+    },
+    {
+     "t": 47.0,
+     "state": "dont",
+     "flash": 0
+    }
+   ]
+  },
+  {
+   "type": "car",
+   "color": "#3f7cac",
+   "s": 2.6,
+   "y": "@car-stop",
+   "front": true,
+   "t0": 27.998,
+   "t1": 50.0,
+   "fade": 0.001,
+   "k": [
+    {
+     "t": 28.0,
+     "x": -1000.2
+    },
+    {
+     "t": 31.2,
+     "x": "@car-stop"
+    },
+    {
+     "t": 47.8,
+     "x": "@car-stop"
+    },
+    {
+     "t": 50.0,
+     "x": 2200
+    }
+   ]
+  },
+  {
+   "type": "text",
+   "text": "ROAD SAFETY",
+   "x": 800,
+   "y": 130,
+   "fs": 64,
+   "color": "#a8322d",
+   "t0": 0,
+   "t1": 4.8
+  },
+  {
+   "type": "text",
+   "text": "6 simple rules",
+   "x": 800,
+   "y": 195,
+   "fs": 38,
+   "color": "#333333",
+   "t0": 0.3,
+   "t1": 4.8
+  },
+  {
+   "type": "text",
+   "text": "1. STOP at the kerb",
+   "x": 800,
+   "y": 130,
+   "fs": 54,
+   "color": "#a8322d",
+   "t0": 5.4,
+   "t1": 11.0
+  },
+  {
+   "type": "text",
+   "text": "2. LOOK left, right, left",
+   "x": 800,
+   "y": 130,
+   "fs": 54,
+   "color": "#a8322d",
+   "t0": 11.2,
+   "t1": 17.4
+  },
+  {
+   "type": "text",
+   "text": "3. CROSS only on WALK",
+   "x": 800,
+   "y": 130,
+   "fs": 54,
+   "color": "#3d7a4a",
+   "t0": 17.6,
+   "t1": 27.8
+  },
+  {
+   "type": "text",
+   "text": "Now Ravi drives",
+   "x": 800,
+   "y": 130,
+   "fs": 58,
+   "color": "#a8322d",
+   "t0": 28.0,
+   "t1": 30.5
+  },
+  {
+   "type": "text",
+   "text": "4. STOP at the line on RED",
+   "x": 800,
+   "y": 130,
+   "fs": 54,
+   "color": "#a8322d",
+   "t0": 30.7,
+   "t1": 36.0
+  },
+  {
+   "type": "text",
+   "text": "5. Seatbelt ON, every trip",
+   "x": 800,
+   "y": 130,
+   "fs": 54,
+   "color": "#a8322d",
+   "t0": 36.2,
+   "t1": 41.7
+  },
+  {
+   "type": "text",
+   "text": "6. Phone DOWN while driving",
+   "x": 800,
+   "y": 130,
+   "fs": 54,
+   "color": "#a8322d",
+   "t0": 41.9,
+   "t1": 46.9
+  },
+  {
+   "type": "text",
+   "text": "Green means GO, calmly",
+   "x": 800,
+   "y": 130,
+   "fs": 54,
+   "color": "#3d7a4a",
+   "t0": 47.1,
+   "t1": 49.8
+  },
+  {
+   "type": "text",
+   "text": "Stay alert. Stay safe.",
+   "x": 800,
+   "y": 130,
+   "fs": 60,
+   "color": "#a8322d",
+   "t0": 50.0,
+   "t1": 55.0
+  },
+  {
+   "type": "text",
+   "text": "Stop. Look. Buckle up.",
+   "x": 800,
+   "y": 200,
+   "fs": 38,
+   "color": "#333333",
+   "t0": 50.3,
+   "t1": 55.0
+  },
+  {
+   "type": "check",
+   "x": "@stop-line+60",
+   "y": 540,
+   "s": 1.6,
+   "t0": 33.0,
+   "t1": 35.9
+  },
+  {
+   "type": "check",
+   "x": "@driver-seat",
+   "y": 330,
+   "s": 1.6,
+   "t0": 40.0,
+   "t1": 41.7
+  },
+  {
+   "type": "sparkle",
+   "x": 800,
+   "y": 180,
+   "r": 160,
+   "n": 8,
+   "t0": 50.2,
+   "t1": 55.0
+  }
+ ],
+ "actors": [
+  {
+   "label": "RAVI",
+   "s": 2.6,
+   "look": [
+    "hair"
+   ],
+   "keys": [
+    {
+     "t": 0,
+     "x": -120,
+     "y": "@near-kerb",
+     "pose": "standing",
+     "expr": "neutral",
+     "face": 1
+    },
+    {
+     "t": 0.6
+    },
+    {
+     "t": 5.6,
+     "x": "@near-kerb",
+     "move": "walk"
+    },
+    {
+     "t": 5.9,
+     "expr": "determined"
+    },
+    {
+     "t": 7.8,
+     "pose": "hands_hips"
+    },
+    {
+     "t": 9.8,
+     "pose": "standing"
+    },
+    {
+     "t": 12.4,
+     "face": -1,
+     "expr": "neutral"
+    },
+    {
+     "t": 13.3,
+     "face": 1
+    },
+    {
+     "t": 14.2,
+     "face": -1
+    },
+    {
+     "t": 15.1,
+     "face": 1,
+     "expr": "happy"
+    },
+    {
+     "t": 17.9,
+     "pose": "pointing"
+    },
+    {
+     "t": 19.4,
+     "pose": "standing",
+     "expr": "determined"
+    },
+    {
+     "t": 22.6,
+     "x": "@near-kerb"
+    },
+    {
+     "t": 26.2,
+     "x": "@far-kerb",
+     "move": "walk"
+    },
+    {
+     "t": 26.5,
+     "pose": "thumbs_up",
+     "expr": "happy"
+    },
+    {
+     "t": 27.98,
+     "op": 1
+    },
+    {
+     "t": 28.0,
+     "op": 0
+    },
+    {
+     "t": 49.9,
+     "x": "@near-kerb",
+     "face": 1,
+     "pose": "standing"
+    },
+    {
+     "t": 49.98,
+     "op": 0
+    },
+    {
+     "t": 50.0,
+     "op": 1
+    },
+    {
+     "t": 50.5,
+     "pose": "waving",
+     "expr": "happy",
+     "wiggle": {
+      "p": 0.4,
+      "a": 6
+     }
+    },
+    {
+     "t": 53.6,
+     "pose": "standing",
+     "wiggle": null
+    }
+   ]
+  },
+  {
+   "label": "RAVI",
+   "s": 2.6,
+   "keys": [
+    {
+     "t": 0,
+     "x": -963.8000000000001,
+     "y": "@driver-seat",
+     "pose": "driving",
+     "expr": "neutral",
+     "face": 1
+    },
+    {
+     "t": 28.0,
+     "x": -963.8000000000001
+    },
+    {
+     "t": 31.2,
+     "x": "@driver-seat"
+    },
+    {
+     "t": 31.6,
+     "expr": "determined"
+    },
+    {
+     "t": 39.7,
+     "pose": "driving_thumbs",
+     "expr": "happy"
+    },
+    {
+     "t": 41.6,
+     "pose": "driving"
+    },
+    {
+     "t": 45.1,
+     "expr": "determined"
+    },
+    {
+     "t": 46.9,
+     "pose": "driving_wave",
+     "expr": "happy",
+     "wiggle": {
+      "p": 0.4,
+      "a": 6
+     }
+    },
+    {
+     "t": 47.7,
+     "pose": "driving",
+     "wiggle": null
+    },
+    {
+     "t": 47.8,
+     "x": "@driver-seat"
+    },
+    {
+     "t": 50.0,
+     "x": 2236.4
+    }
+   ]
+  }
+ ],
+ "voice": {
+  "engine": "kokoro",
+  "lang": "en",
+  "speed": 1.1,
+  "voices": {
+   "narrator": {
+    "en": "af_heart",
+    "hi": "hf_alpha"
+   },
+   "RAVI": {
+    "en": "am_michael",
+    "hi": "hm_omega"
+   }
+  }
+ },
+ "lines": [
+  {
+   "t": 0.3,
+   "who": "narrator",
+   "text": {
+    "en": "Road safety. Six simple rules.",
+    "hi": "सड़क सुरक्षा। छह आसान नियम।"
+   }
+  },
+  {
+   "t": 2.9,
+   "who": "narrator",
+   "text": {
+    "en": "Ravi is walking to the crossing.",
+    "hi": "रवि सड़क पार करने जा रहा है।"
+   }
+  },
+  {
+   "t": 5.6,
+   "who": "narrator",
+   "text": {
+    "en": "Rule one: stop at the kerb.",
+    "hi": "पहला नियम: किनारे पर रुकें।"
+   }
+  },
+  {
+   "t": 8.0,
+   "who": "RAVI",
+   "text": {
+    "en": "I'll wait here.",
+    "hi": "मैं यहीं रुकूँगा।"
+   }
+  },
+  {
+   "t": 11.4,
+   "who": "narrator",
+   "text": {
+    "en": "Rule two: look left, right, then left again.",
+    "hi": "दूसरा नियम: बाएँ, दाएँ, फिर बाएँ देखें।"
+   }
+  },
+  {
+   "t": 15.5,
+   "who": "RAVI",
+   "text": {
+    "en": "All clear now.",
+    "hi": "अब रास्ता साफ़ है।"
+   }
+  },
+  {
+   "t": 17.6,
+   "who": "narrator",
+   "text": {
+    "en": "Rule three: cross only on walk.",
+    "hi": "तीसरा नियम: वॉक दिखे, तभी पार करें।"
+   }
+  },
+  {
+   "t": 20.8,
+   "who": "RAVI",
+   "text": {
+    "en": "Walk sign. Let's go!",
+    "hi": "वॉक का निशान। चलो!"
+   }
+  },
+  {
+   "t": 28.2,
+   "who": "narrator",
+   "text": {
+    "en": "Now Ravi is driving.",
+    "hi": "अब रवि गाड़ी चला रहा है।"
+   }
+  },
+  {
+   "t": 30.7,
+   "who": "narrator",
+   "text": {
+    "en": "Rule four: on red, stop at the line.",
+    "hi": "चौथा नियम: लाल बत्ती पर लाइन पर रुकें।"
+   }
+  },
+  {
+   "t": 34.0,
+   "who": "RAVI",
+   "text": {
+    "en": "Red light. I stop.",
+    "hi": "लाल बत्ती। मैं रुकता हूँ।"
+   }
+  },
+  {
+   "t": 36.2,
+   "who": "narrator",
+   "text": {
+    "en": "Rule five: seatbelt on, every trip.",
+    "hi": "पाँचवाँ नियम: हर सफ़र में सीट बेल्ट लगाएँ।"
+   }
+  },
+  {
+   "t": 39.8,
+   "who": "RAVI",
+   "text": {
+    "en": "Belt on. Click!",
+    "hi": "बेल्ट लगा ली। क्लिक!"
+   }
+  },
+  {
+   "t": 41.9,
+   "who": "narrator",
+   "text": {
+    "en": "Rule six: phone down while driving.",
+    "hi": "छठा नियम: गाड़ी चलाते समय फ़ोन नहीं।"
+   }
+  },
+  {
+   "t": 45.3,
+   "who": "RAVI",
+   "text": {
+    "en": "Calls can wait.",
+    "hi": "कॉल रुक सकती है।"
+   }
+  },
+  {
+   "t": 47.1,
+   "who": "narrator",
+   "text": {
+    "en": "Green means go. Drive calmly.",
+    "hi": "हरी बत्ती पर आराम से चलें।"
+   }
+  },
+  {
+   "t": 50.0,
+   "who": "narrator",
+   "text": {
+    "en": "Stop, look, buckle up. Stay alert, stay safe.",
+    "hi": "रुकें, देखें, बेल्ट लगाएँ। सतर्क रहें, सुरक्षित रहें।"
+   }
+  }
+ ]
+}

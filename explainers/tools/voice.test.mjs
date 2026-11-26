@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -208,6 +209,19 @@ test('make: errors are one line with a hint and exit 1', () => {
   assert.match(errLines[0], /^make\.mjs: lines\[1\] \(ANA, t=1.8\) overlaps lines\[2\].*\(hint: measured 0.7 s/);
 });
 
+test('make --engine overrides voice.engine for one run', () => {
+  const s = setup();
+  const r = make([s.scene, join(s.dir, 'x.mp4'), '--engine', 'nope'], { EXPLAINERS_VOICE_CACHE: s.cache });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^make\.mjs: voice engine "nope" not found.*built-in engines are kokoro, chatterbox, maya2/m);
+  s.spec.lines = [{ t: 0.5, who: 'ANA', text: { en: 'Hello.', gu: 'કેમ છો?' } }];
+  writeFileSync(s.scene, JSON.stringify(s.spec));
+  const k = make([s.scene, join(s.dir, 'y.mp4'), '--engine', 'kokoro', '--lang', 'gu'], { EXPLAINERS_VOICE_CACHE: s.cache });
+  assert.equal(k.status, 1);
+  assert.match(k.stderr, /voice engine "kokoro" cannot speak Gujarati/);
+  assert.equal(calls(s.counter), 0);
+});
+
 test('make --stills: Gujarati and Marathi bubbles render with --no-voice', () => {
   const s = setup();
   s.spec.w = 900; s.spec.h = 400; s.spec.ground = 355; s.spec.labelFs = 18;
@@ -227,6 +241,105 @@ test('make --stills: Gujarati and Marathi bubbles render with --no-voice', () =>
     assert.deepEqual(readdirSync(dir), ['still-1.00.png']);
     if (process.env.KEEP_STILLS) execFileSync('cp', [join(dir, 'still-1.00.png'), join(process.env.KEEP_STILLS, `indic-${lang}.png`)]);
   }
+});
+
+// ---------- named HTTP engines (chatterbox, maya2) against a local fake server ----------
+// The fake answers /health, /v1/voices and /v1/audio/speech (a short WAV with placeholder sizes) and
+// records every speech request body.
+function wavBytes(sec = 0.4, rate = 24000) {
+  const n = Math.round(sec * rate), b = Buffer.alloc(44 + n * 2);
+  b.write('RIFF', 0); b.writeUInt32LE(0xffffffff, 4); b.write('WAVE', 8); b.write('fmt ', 12);
+  b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(rate, 24);
+  b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(0xffffffff, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(8000 * Math.sin(2 * Math.PI * 220 * i / rate)), 44 + i * 2);
+  return b;
+}
+async function fakeTts(voices) {
+  const bodies = [];
+  const srv = createServer((req, res) => {
+    let data = '';
+    req.on('data', (d) => { data += d; });
+    req.on('end', () => {
+      if (req.url === '/health') return res.end('{"status":"ok"}');
+      if (req.url === '/v1/voices') return res.end(JSON.stringify({ voices }));
+      if (req.url === '/v1/audio/speech' && req.method === 'POST') { bodies.push(JSON.parse(data)); res.setHeader('content-type', 'audio/wav'); return res.end(wavBytes()); }
+      res.statusCode = 404; res.end();
+    });
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  return { bodies, endpoint: `${base}/v1/audio/speech`, close: () => new Promise((r) => srv.close(r)) };
+}
+function httpScene(engine, endpoint, voices) {
+  const s = setup();
+  s.spec.voice = { engine, lang: 'en', speed: 1.1, voices, options: { endpoint } };
+  s.spec.lines = [
+    { t: 0.3, who: 'narrator', text: { en: 'Stop.', hi: 'रुकें।', mr: 'थांबा.', gu: 'થોભો.' } },
+    { t: 1.5, who: 'ANA', text: { en: 'Okay.', hi: 'ठीक है।', mr: 'ठीक आहे.', gu: 'ઠીક છે.' } },
+  ];
+  return s;
+}
+
+test('chatterbox sends language and model "chatterbox", resolves aliases, drops speed', async () => {
+  const f = await fakeTts(['default', 'en_f1', 'hi_f1']);
+  try {
+    const s = httpScene('chatterbox', f.endpoint, { narrator: 'female', ANA: 'male' });
+    const { lines } = await synth(s, { lang: 'hi' });
+    assert.ok(Math.abs(lines[0].durationSec - 0.4) < 1e-3, 'placeholder WAV sizes fixed');
+    assert.deepEqual(f.bodies.map((b) => [b.model, b.language, b.voice, b.input, 'speed' in b]),
+      [['chatterbox', 'hi', 'hi_f1', 'रुकें।', false], ['chatterbox', 'hi', 'default', 'ठीक है।', false]]);
+    // scenes override any default through voice.options
+    const t = httpScene('chatterbox', f.endpoint, { narrator: 'en_f1', ANA: 'en_f1' });
+    t.spec.voice.options = { endpoint: f.endpoint, model: 'cb-x', extra: { seed: 7 } };
+    await synth(t, { lang: 'en' });
+    assert.deepEqual([f.bodies.at(-1).model, f.bodies.at(-1).seed, f.bodies.at(-1).language], ['cb-x', 7, 'en']);
+    // an unknown voice is refused (the server would silently swap in a default one)
+    const u = httpScene('chatterbox', f.endpoint, { narrator: 'alloy', ANA: 'male' });
+    await rejectsVoice(synth(u, { lang: 'en' }), /check failed: chatterbox has no voice alloy/);
+  } finally { await f.close(); }
+});
+
+test('maya2 sends language and model "maya3", no speed, case-insensitive voices', async () => {
+  const f = await fakeTts([{ id: 'Vaidehi', mode: 'named' }, { id: 'Siddhant', mode: 'named' }, { id: 'Kayal', mode: 'named' }]);
+  try {
+    const s = httpScene('maya2', f.endpoint, { narrator: 'female', ANA: { mr: 'siddhant', gu: 'Siddhant' } });
+    await synth(s, { lang: 'mr' });
+    await synth(s, { lang: 'gu' });
+    assert.deepEqual(f.bodies.map((b) => [b.model, b.language, b.voice, 'speed' in b]), [
+      ['maya3', 'mr', 'Vaidehi', false], ['maya3', 'mr', 'siddhant', false],
+      ['maya3', 'gu', 'Vaidehi', false], ['maya3', 'gu', 'Siddhant', false],
+    ]);
+    assert.equal(f.bodies[2].input, 'થોભો.');
+  } finally { await f.close(); }
+});
+
+test('a named engine refuses a language it cannot speak before any request', async () => {
+  const f = await fakeTts(['default', 'en_f1', 'hi_f1']);
+  try {
+    const s = httpScene('chatterbox', f.endpoint, { narrator: 'female', ANA: 'male' });
+    await rejectsVoice(synth(s, { lang: 'gu' }), /voice engine "chatterbox" cannot speak Gujarati \("gu"\); it speaks en, hi.*"maya2"/);
+    await rejectsVoice(synth(s, { lang: 'mr' }), /cannot speak Marathi \("mr"\)/);
+    assert.equal(f.bodies.length, 0);
+    const m = await resolveEngine('maya2');
+    assert.deepEqual(m.languages({}), ['en', 'hi', 'mr', 'gu', 'ta', 'te', 'bn', 'kn', 'ml', 'pa', 'or', 'as']);
+    assert.ok(m.voices('gu').includes('Vaidehi') && !m.voices('gu').includes('Ishwari'));
+  } finally { await f.close(); }
+});
+
+test('check() names the start command when the server is down', async () => {
+  const f = await fakeTts([]);
+  const endpoint = f.endpoint;
+  await f.close(); // nothing listens on that port now
+  const host = new URL(endpoint).host;
+  const c = await (await resolveEngine('chatterbox')).check({ endpoint }, { voices: [{ voice: 'female', lang: 'hi' }] });
+  assert.equal(c.ok, false);
+  assert.equal(c.detail, `chatterbox server not reachable at ${host} (hint: run scripts/voice-engine.sh up chatterbox from the NaraScreen repo root; it stops maya2 first, since only one of chatterbox/maya2 fits on the GPU at a time)`);
+  const m = await (await resolveEngine('maya2')).check({ endpoint }, { voices: [] });
+  assert.match(m.detail, new RegExp(`^maya2 server not reachable at ${host} \\(hint: run scripts/voice-engine.sh up maya2 from the NaraScreen repo root.*stops chatterbox first.*one of chatterbox/maya2 fits on the GPU`));
+  // and the run stops there, before synthesis, with the hint in its one-line error
+  const s = httpScene('maya2', endpoint, { narrator: 'female', ANA: 'male' });
+  await rejectsVoice(synth(s, { lang: 'mr' }), /check failed: maya2 server not reachable.*voice-engine\.sh up maya2/);
+  assert.match((await (await resolveEngine('maya2')).check({ endpoint, startHint: 'start it your way' })).detail, /\(hint: start it your way\)$/);
 });
 
 const kokoroUp = await fetch('http://localhost:8880/v1/audio/voices', { signal: AbortSignal.timeout(1000) }).then((r) => r.ok).catch(() => false);

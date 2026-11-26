@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // One JSON in, a voiced MP4 out: a figures scene plus its "voice" and "lines".
 //
-//   node make.mjs <scene.json> <out.mp4> [--lang hi] [--no-voice] [--pad 0.4] [--cache <dir>]
+//   node make.mjs <scene.json> <out.mp4> [--lang hi] [--engine maya2] [--no-voice] [--pad 0.4] [--cache <dir>]
 //                 [--size 1920x1080] [--fps 30] [--bg #FFFFFF] [--workers 4]
 //   node make.mjs <scene.json> <outdir/> --stills 4.2 9.0 [--lang hi] [--no-voice] ...
 //
@@ -14,6 +14,7 @@
 //
 // --no-voice: no engine call and no audio stream; bubbles still appear, timed by the cached
 //   measurement when there is one, else by an estimate from the text length.
+// --engine: use this engine instead of voice.engine (a bare name or a path relative to the scene).
 // --stills: same bubbles, PNG stills through render.mjs --stills (no audio).
 // Errors are one line on stderr ("make.mjs: <problem> (hint: ...)") with exit code 1.
 import { spawn } from 'node:child_process';
@@ -32,17 +33,18 @@ const fail = (m, h) => { throw new VoiceError(m, h); };
 const log = (s) => process.stderr.write(s + '\n');
 
 function parseArgs(argv) {
-  const o = { pos: [], lang: null, noVoice: false, pad: 0.4, cache: process.env.EXPLAINERS_VOICE_CACHE || DEFAULT_CACHE, pass: [], stills: null, fps: 30 };
+  const o = { pos: [], lang: null, engine: null, noVoice: false, pad: 0.4, cache: process.env.EXPLAINERS_VOICE_CACHE || DEFAULT_CACHE, pass: [], stills: null, fps: 30 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], val = () => argv[++i] ?? fail(`${a} needs a value`);
     if (a === '--lang') o.lang = val();
+    else if (a === '--engine') o.engine = val();
     else if (a === '--no-voice') o.noVoice = true;
     else if (a === '--pad') o.pad = Number(val());
     else if (a === '--cache') o.cache = resolve(val());
     else if (['--size', '--bg', '--workers'].includes(a)) o.pass.push(a, val());
     else if (a === '--fps') { o.fps = Number(val()); o.pass.push(a, String(o.fps)); }
     else if (a === '--stills') { o.stills = []; while (i + 1 < argv.length && /^-?\d*\.?\d+$/.test(argv[i + 1])) o.stills.push(argv[++i]); }
-    else if (a.startsWith('--')) fail(`unknown option ${a}`, 'options: --lang, --no-voice, --pad, --cache, --stills, --size, --fps, --bg, --workers');
+    else if (a.startsWith('--')) fail(`unknown option ${a}`, 'options: --lang, --engine, --no-voice, --pad, --cache, --stills, --size, --fps, --bg, --workers');
     else o.pos.push(a);
   }
   if (o.pos.length < 2) fail('usage: make.mjs <scene.json> <out.mp4> [--lang hi] [--no-voice]', 'or <scene.json> <outdir/> --stills t...');
@@ -74,6 +76,7 @@ async function main() {
   if (!(spec.duration > 0)) fail('scene has no positive "duration" (seconds)');
 
   const plan = planLines(spec, { lang: o.lang, noVoice: o.noVoice });
+  if (o.engine) plan.engineRef = o.engine;
   plan.warnings.forEach((w) => log(`make.mjs: warning: ${w}`));
   let lines;
   if (o.noVoice || o.stills) {

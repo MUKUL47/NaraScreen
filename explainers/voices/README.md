@@ -7,6 +7,7 @@ The engine that speaks is a plug-in: a small ES module chosen by `voice.engine`.
 ```bash
 node explainers/tools/make.mjs scene.json out.mp4                 # voice.lang (default en)
 node explainers/tools/make.mjs scene.json out-hi.mp4 --lang hi    # Hindi text and voices
+node explainers/tools/make.mjs scene.json out-mr.mp4 --lang mr --engine maya2   # another engine for this run
 node explainers/tools/make.mjs scene.json out.mp4 --no-voice      # silent, no audio stream; bubbles still drawn
 node explainers/tools/make.mjs scene.json stills/ --stills 4 9.5  # PNG stills with the bubbles, no audio
 ```
@@ -28,7 +29,7 @@ Other options: `--pad 0.4` (bubble time after the audio), `--cache <dir>` (or `E
 ]
 ```
 
-- `voice.engine` defaults to `kokoro`. A bare name loads `explainers/voices/<name>.mjs`. Anything else is a path relative to the scene file.
+- `voice.engine` defaults to `kokoro`; `make.mjs --engine <name>` overrides it for one run. A bare name loads `explainers/voices/<name>.mjs`. Anything else is a path relative to the scene file.
 - `voice.lang` is the default language (default `en`). `--lang` overrides it.
 - `voice.voices` maps each `who` to a voice name, or to a `{ lang: voice }` map.
 - `voice.speed` is the default speed (default 1). `voice.options` is passed to the engine unchanged.
@@ -124,19 +125,57 @@ This engine works with any `/v1/audio/speech` server.
 - `options.apiKeyEnv` is the *name* of an environment variable that holds a bearer token. Never put the token in the scene.
 - `options.languages` lists the languages the server speaks. When it is unset, any language is accepted.
 - `options.voicesUrl` is optional: a list endpoint that `check()` uses to verify voice names.
+- `options.sendLang: true` adds `"language": <the line's lang>` to each request.
+- `options.sendSpeed: false` leaves `speed` out of the request, for servers that reject it.
+- `options.extra` is an object merged into every request body, e.g. `{ "seed": 7 }`. It is not part of the cache key, so clear the cache (or change the text) after changing it.
+
+### `chatterbox` and `maya2`
+
+Two named engines built on `openai-compatible`, for two self-hosted GPU servers whose setup is in [`servers/`](servers/README.md) (GPU and VRAM needs, the data directory `$NARASCREEN_TTS_HOME`, first-run downloads, licences). Each fills in the defaults below, and `voice.options` can override any of them (`endpoint`, `model`, `languages`, `sendLang`, `sendSpeed`, `extra`, `aliases`, `voicesUrl`, `healthUrl`, `startHint`).
+
+| | `chatterbox` | `maya2` |
+|---|---|---|
+| Model | Chatterbox Multilingual V3 (MIT) | Maya-2-Native (Apache-2.0) |
+| Endpoint | `http://127.0.0.1:8890/v1/audio/speech` | `http://127.0.0.1:8891/v1/audio/speech` |
+| `model` sent | `chatterbox` | `maya3` |
+| Languages | `en`, `hi` | `en`, `hi`, `mr`, `gu`, `ta`, `te`, `bn`, `kn`, `ml`, `pa`, `or`, `as` |
+| Voices | `en_f1`, `hi_f1` (female), `default` (the built-in voice, lower pitched) | 20 named voices, case-insensitive (below) |
+| `"female"` / `"male"` | `en_f1` or `hi_f1` / `default` | `Vaidehi` (`Kayal` for ta) / `Siddhant` (`Sreekar` for te) |
+| Speed | ~1× real time, ~4 GB VRAM | ~0.85× real time, ~8.3 GB VRAM |
+| Start (repo root) | `scripts/voice-engine.sh up chatterbox` (stops maya2 first) | `scripts/voice-engine.sh up maya2` (stops chatterbox first), ready after ~80 s |
+| Stop | `scripts/voice-engine.sh down chatterbox` | `scripts/voice-engine.sh down maya2` |
+| Licence | MIT; inaudible Perth watermark; project retired | Apache-2.0; its Mimi codec is CC-BY-4.0 (credit Kyutai) |
+
+- **One at a time on the GPU.** Kokoro plus Chatterbox, or Kokoro plus Maya, fit in 12 GB; all three don't. `up chatterbox` and `up maya2` swap the two and never touch Kokoro. `scripts/voice-engine.sh status` shows all three.
+- Both send `"language"` with every request (`sendLang: true`) and leave out `speed` (Chatterbox ignores it and Maya accepts only 1.0), so `voice.speed` and a line's `speed` have no effect. The audio is as long as the engine speaks it.
+- **Chatterbox and Marathi.** Its server would speak `mr` through the Hindi model with a Hindi accent, so `mr` is not listed, and it can't read the Gujarati, Tamil or Bengali scripts. Use `maya2` for those.
+- **Aliases.** `"voices": { "narrator": "female", "RAVI": "male" }` works on both engines and is resolved per language. `options.aliases` adds or replaces one: `{ "male": { "default": "Anirban" } }`.
+- **`check()`** asks `GET /health`, then `GET /v1/voices`. A server that is down stops the run before any synthesis, for example:
+
+  ```
+  make.mjs: voice engine "chatterbox" check failed: chatterbox server not reachable at 127.0.0.1:8890 (hint: run scripts/voice-engine.sh up chatterbox from the NaraScreen repo root; it stops maya2 first, since only one of chatterbox/maya2 fits on the GPU at a time) ...
+  ```
+
+  A server that is still loading (HTTP 503) says so. An unknown voice is refused, because the Chatterbox server would otherwise swap in a default voice silently. Cached lines need no server at all.
+- **Maya voices** (from the model's `voices/voices.json`; "all" = bn, en, gu, hi, kn, ml, mr, or, pa, ta, te):
+  - female, all languages: `Ahana` (young, bright), `Vaidehi` (adult, calm), `Malini` (mature narrator), `Charvi` (young, upbeat), `Jahnavi` (adult, warm; no pa);
+  - male, all languages: `Anirban` (adult narrator), `Nakul` (young), `Vasant` (mature narrator; no pa), `Siddhant` (adult, clear), `Satvik` (young, warm);
+  - trained on fewer languages: `Abhay` m, `Nivedita` f, `Shaunak` m, `Akshat` m, `Tanushree` f (en, hi); `Ishwari` f, `Ritvik` m, `Vrinda` f (hi); `Sreekar` m (en, hi, te); `Kayal` f (en, ta).
+  - Assamese (`as`) is cross-lingual for every voice. `engine.voices(lang)` lists the voices trained on a language.
 
 ## Indian languages
 
-The language codes are `en`, `hi` (Hindi), `mr` (Marathi), `gu` (Gujarati), `ta` (Tamil), `te` (Telugu), `bn` (Bengali), `kn` (Kannada), `ml` (Malayalam), `pa` (Punjabi) and `or` (Odia). Text maps and `--lang` accept all of them.
+Twelve language codes are accepted: `en`, `hi` (Hindi), `mr` (Marathi), `gu` (Gujarati), `ta` (Tamil), `te` (Telugu), `bn` (Bengali), `kn` (Kannada), `ml` (Malayalam), `pa` (Punjabi), `or` (Odia) and `as` (Assamese). Text maps and `--lang` accept all of them.
 
-**Speech.** Kokoro speaks only English and Hindi. A scene asking it for `mr`, `gu` or any other Indic language fails before anything is synthesised:
+**Speech.** `maya2` speaks all 12. Kokoro and Chatterbox speak only `en` and `hi`. A scene asking Kokoro for `mr`, `gu` or any other Indic language fails before anything is synthesised:
 
 ```
-make.mjs: voice engine "kokoro" cannot speak Gujarati ("gu"); it speaks en, hi (hint: set voice.engine to an engine that supports "gu": ...)
+make.mjs: voice engine "kokoro" cannot speak Gujarati ("gu"); it speaks en, hi (hint: set voice.engine to an engine that supports "gu": "maya2" speaks en and 11 Indian languages; ...)
 ```
 
 For the other languages, use one of these:
-- point `openai-compatible` at an Indic TTS server, and list its `options.languages`;
+- `"engine": "maya2"` (or `--engine maya2`);
+- point `openai-compatible` at another Indic TTS server, and list its `options.languages`;
 - write a small custom engine module, as in the example above.
 
 **Bubbles only.** `--no-voice` needs no engine, so `--no-voice --lang gu` gives Gujarati bubbles today, timed by an estimate.

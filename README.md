@@ -238,7 +238,8 @@ node explainers/tools/make.mjs scene.json out/scene.mp4         # voices (Kokoro
 ```
 
 - **Add-ons** add props, poses and sets (`road-safety`, `workplace`, or your own module).
-- **Voice engines** are plug-ins chosen with one JSON key.
+- **Voice engines** are plug-ins chosen with one JSON key (or `make.mjs --engine`): Kokoro by default (fast, English and Hindi), Chatterbox (the most natural English and Hindi) and Maya-2 (English plus 11 Indian languages: `hi`, `mr`, `gu`, `ta`, `te`, `bn`, `kn`, `ml`, `pa`, `or`, `as`), or any OpenAI-style TTS server. `"female"` and `"male"` work as voice names on Chatterbox and Maya.
+- **Chatterbox and Maya** run on an AMD GPU next to Kokoro, one at a time: `scripts/voice-engine.sh up chatterbox` or `up maya2` (each stops the other), `status` shows all three. Their setup, the data directory for the ~25 GB of weights and env (`$NARASCREEN_TTS_HOME`, outside git) and their licences are in [explainers/voices/servers/](explainers/voices/servers/README.md).
 - You can **finish the result** with title cards, chapters, music and callouts through a `source.video` script.
 
 Start with the agent guide, [explainers/README.md](explainers/README.md), or the short [explainers/llms.txt](explainers/llms.txt).
@@ -256,6 +257,8 @@ The browser (Playwright/Chromium), the voices ([Kokoro](https://github.com/remsk
 ```
 ui-demo-pipeline/
 ├── docker-compose.yml        # Kokoro voice engine (port 8880)
+├── scripts/voice-engine.sh   # starts Kokoro (GPU first, CPU fallback), or the Chatterbox / Maya-2 servers
+├── explainers/               # stick-figure explainers; voices/servers/ = the Chatterbox and Maya-2 servers
 ├── ARCHITECTURE.md           # how the pieces fit, pass by pass
 ├── docs/                     # GitHub Pages site (mukul47.github.io/NaraScreen): landing page, tutorial, media
 └── editor/
@@ -275,6 +278,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the production pipeline in detail.
 - **[Electron](https://github.com/electron/electron)** and **[React](https://github.com/facebook/react)**: the desktop app
 - **[FFmpeg](https://github.com/FFmpeg/FFmpeg)** and **[libass](https://github.com/libass/libass)**: every cut, zoom, overlay, subtitle and mix
 - **[Kokoro FastAPI](https://github.com/remsky/Kokoro-FastAPI)**: local text-to-speech by [@remsky](https://github.com/remsky)
+- Optional explainer voices: **[Chatterbox](https://github.com/resemble-ai/chatterbox)** by Resemble AI (MIT) and **[Maya-2-Native](https://github.com/MayaResearch/maya2-native)** by Maya Research (Apache-2.0), which uses the **[Mimi](https://huggingface.co/kyutai/mimi)** codec by Kyutai (CC-BY-4.0). Neither is bundled; see [explainers/voices/servers/](explainers/voices/servers/README.md)
 - **[Playwright](https://github.com/microsoft/playwright)**: the scripted browser
 - **[Zod](https://github.com/colinhacks/zod)**: the demo-script schema
 - **[Vite](https://github.com/vitejs/vite)**, **[Zustand](https://github.com/pmndrs/zustand)**, **[Tailwind CSS](https://github.com/tailwindlabs/tailwindcss)**, **[Lucide](https://github.com/lucide-icons/lucide)**, **[TypeScript](https://github.com/microsoft/TypeScript)**

@@ -1,0 +1,4 @@
+#!/bin/sh
+# C compiler shim for Triton's launcher stubs: zig's bundled clang (pip package `ziglang`, in the
+# servers' venv), so the ubuntu container needs no gcc. Passed to the container as $CC.
+exec "${NARASCREEN_TTS_HOME:?}/.venv/bin/python" -m ziglang cc "$@"

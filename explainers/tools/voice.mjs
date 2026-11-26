@@ -16,7 +16,7 @@ export const DEFAULT_CACHE = resolve(HERE, '../.voice-cache');
 // English plus the Indian languages the user cares about. Codes are ISO 639-1.
 export const LANGS = Object.freeze({
   en: 'English', hi: 'Hindi', mr: 'Marathi', gu: 'Gujarati', ta: 'Tamil', te: 'Telugu',
-  bn: 'Bengali', kn: 'Kannada', ml: 'Malayalam', pa: 'Punjabi', or: 'Odia',
+  bn: 'Bengali', kn: 'Kannada', ml: 'Malayalam', pa: 'Punjabi', or: 'Odia', as: 'Assamese',
 });
 
 export class VoiceError extends Error {
@@ -41,7 +41,7 @@ export async function resolveEngine(ref = 'kokoro', scenePath) {
   const file = engineFile(ref, scenePath);
   if (!existsSync(file)) {
     fail(`voice engine "${ref}" not found (looked for ${file})`,
-      BARE.test(ref) ? 'built-in engines are kokoro and openai-compatible; a custom engine is a path like "./my-engine.mjs"' : 'paths are relative to the scene file');
+      BARE.test(ref) ? 'built-in engines are kokoro, chatterbox, maya2 and openai-compatible; a custom engine is a path like "./my-engine.mjs"' : 'paths are relative to the scene file');
   }
   let mod;
   try { mod = await import(pathToFileURL(file).href); }
@@ -129,7 +129,7 @@ export function checkLanguages(plan, engine) {
   for (const l of new Set(plan.lines.map((x) => x.lang))) {
     if (!langs.includes(l)) {
       fail(`voice engine "${engine.name}" cannot speak ${LANGS[l] || l} ("${l}"); it speaks ${langs.join(', ')}`,
-        `set voice.engine to an engine that supports "${l}": "openai-compatible" pointed at an Indic TTS server, or a custom engine module path; or render with --no-voice for bubbles only`);
+        `set voice.engine to an engine that supports "${l}": "maya2" speaks en and 11 Indian languages; or "openai-compatible" pointed at another TTS server, or a custom engine module path; or render with --no-voice for bubbles only`);
     }
   }
 }

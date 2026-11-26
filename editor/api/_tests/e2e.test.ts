@@ -59,6 +59,7 @@ const SCRIPT = {
   upload: path.join(RUN, "upload.demo-script.json"),
   arrow: path.join(RUN, "arrow.demo-script.json"),
   converge: path.join(RUN, "converge.demo-script.json"),
+  sourceSwap: path.join(RUN, "source-swap.demo-script.json"),
   highlight: path.join(RUN, "highlight.demo-script.json"),
   flutter: path.join(RUN, "flutter.demo-script.json"),
   cards: path.join(RUN, "cards.demo-script.json"),
@@ -1071,6 +1072,30 @@ describe("narascreen CLI, end to end", () => {
     // No converge: the plain spotlight is on the target from its first frame.
     assert.ok(dim(pixelAt(video, 4.54, ...near)) && dim(pixelAt(video, 4.54, ...far)), "no converge → no animation");
     assert.ok(lit(pixelAt(video, 4.54, ...inside)), "no converge → target lit at once");
+  });
+
+  test("make again after the source video was replaced: re-imports it with a warning (no crash)", { timeout: 10 * MIN }, async () => {
+    // Regression: decideRecording read changedSteps.length on the source-video error, whose
+    // details have no step lists, and crashed with INTERNAL instead of re-importing.
+    const src = path.join(RUN, "source-swap.mp4");
+    const job = path.join(RUN, "job-source-swap");
+    const color = (c: string, d: number) => {
+      const gen = ffmpegSync(["-y", "-f", "lavfi", "-i", `color=c=${c}:s=640x360:r=30:d=${d}`, "-pix_fmt", "yuv420p", src]);
+      assert.equal(gen.status, 0, "ffmpeg could not generate the source video");
+    };
+    color("0x808080", 3);
+    writeJson(SCRIPT.sourceSwap, {
+      version: 1,
+      scope: "Source swap",
+      source: { video: src },
+      steps: [{ id: "only", beat: [{ fx: "pause", at: 1, seconds: 0.5 }] }],
+    });
+    expectOk(await cli(["make", SCRIPT.sourceSwap, "--out", job], { timeoutMs: 8 * MIN }), "make");
+    color("0xffffff", 4); // a different file at the same path
+    const again = await cli(["make", SCRIPT.sourceSwap, "--out", job], { timeoutMs: 8 * MIN });
+    const res = expectOk(again, "make");
+    const warnings = JSON.stringify((again.json as Rec)?.warnings ?? res);
+    assert.match(warnings, /source video changed/i, `expected the re-import warning\n${describeRun(again)}`);
   });
 
   test("cursor + follow camera: the pointer rests on the clicked button at the click; the camera crops toward it while the video plays", { timeout: 12 * MIN }, async (tc) => {
